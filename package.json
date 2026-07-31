@@ -24,6 +24,7 @@
     "seed:supabase": "node --env-file=.env --import tsx packages/core-supabase/src/seed/refdata.ts && node --env-file=.env --import tsx packages/core-supabase/src/seed/dev-demo.ts",
     "capture:turboly": "npm run capture -w @spk/turboly-capture",
     "login:turboly": "npm run login -w @spk/turboly-capture",
+    "push:once": "node --import tsx apps/worker/src/push-once.ts",
     "dev:mongo": "node scripts/dev-mongo.mjs",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
