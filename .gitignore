@@ -24,3 +24,5 @@ coverage/
 
 # local direct mongodb data (dev-mongo.mjs)
 .mongo-data/
+.vercel
+.env*
