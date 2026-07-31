@@ -1,0 +1,39 @@
+{
+  "name": "nawilis-spk-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Nawilis SPK intake -> MongoDB -> Turboly Service Order (fully automated)",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "tools/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build -w @spk/core",
+    "db:check": "node --env-file=.env --import tsx scripts/db-check.ts",
+    "seed:refdata": "node --env-file=.env --import tsx packages/core/src/seed/refdata.ts",
+    "seed:demo": "node --env-file=.env --import tsx packages/core/src/seed/dev-demo.ts",
+    "seed:turboly": "node --env-file=.env --import tsx packages/core/src/seed/turboly-import.ts",
+    "dev:web": "npm run dev -w @spk/web",
+    "dev:web-supabase": "npm run dev -w @spk/web-supabase",
+    "dev:worker": "npm run dev -w @spk/worker",
+    "db:check-supabase": "node --env-file=.env --import tsx scripts/supabase-check.ts",
+    "seed:supabase": "node --env-file=.env --import tsx packages/core-supabase/src/seed/refdata.ts && node --env-file=.env --import tsx packages/core-supabase/src/seed/dev-demo.ts",
+    "capture:turboly": "npm run capture -w @spk/turboly-capture",
+    "login:turboly": "npm run login -w @spk/turboly-capture",
+    "dev:mongo": "node scripts/dev-mongo.mjs",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "test": "npm run build -w @spk/core && tsx tests/e2e.mts",
+    "typecheck": "tsc -b packages/core apps/worker && tsc -p apps/web/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^11.2.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.111.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@spk/turboly-capture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "capture": "tsx src/capture.ts",
+    "login": "tsx src/login.ts",
+    "codegen": "playwright codegen https://sandbox.turboly.com/service_orders"
+  },
+  "dependencies": {
+    "@spk/core": "*",
+    "playwright": "^1.49.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

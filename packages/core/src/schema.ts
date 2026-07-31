@@ -1,0 +1,84 @@
+import { z } from 'zod';
+
+/**
+ * Wire schemas for the ingest API. These validate the SHAPE of what the device
+ * sends. Semantic/business validation is validation.ts (Layers 1 & 2).
+ */
+
+export const JobLineInput = z.object({
+  serviceCode: z.string().min(1),
+  ordered: z.boolean().default(true),
+  qty: z.number().int().positive().default(1),
+  keterangan: z.string().nullable().default(null),
+  quotedPrice: z.number().nonnegative().nullable().default(null),
+});
+
+export const ConditionCheckInput = z.object({
+  item: z.string().min(1),
+  marks: z.array(z.string()).default([]),
+});
+
+export const SpkIntakeInput = z.object({
+  /** Client-generated idempotency key for the capture transition. */
+  uploadId: z.string().min(8),
+  docType: z.enum(['SPK_NAWILIS', 'QS_INSPECTION']).default('SPK_NAWILIS'),
+  branchCode: z.string().min(1),
+  captureMode: z.enum(['typed', 'photo', 'hybrid']).default('typed'),
+  operatorUserId: z.string().min(1),
+  operatorPinVerified: z.boolean().default(false),
+  deviceBindingVerified: z.boolean().default(false),
+
+  spkNumber: z.string().nullable().default(null),
+  qrPayload: z.string().nullable().default(null),
+
+  arrivalTime: z.string().datetime().optional(),
+  capturedAt: z.string().datetime(),
+
+  customer: z.object({
+    nama: z.string().min(1),
+    wa: z.string().nullable().default(null),
+    alamat: z.string().nullable().default(null),
+    kontakLain: z.string().nullable().default(null),
+    turbolyCustomerId: z.string().nullable().default(null),
+  }),
+
+  vehicle: z.object({
+    noPolisi: z.string().min(1),
+    merk: z.string().nullable().default(null),
+    tipe: z.string().nullable().default(null),
+    tahun: z.number().int().nullable().default(null),
+    warna: z.string().nullable().default(null),
+    km: z.string(), // raw as written; parsed server-side
+  }),
+
+  complaint: z.string().nullable().default(null),
+  jobLines: z.array(JobLineInput).min(1),
+  conditionChecks: z.array(ConditionCheckInput).default([]),
+  rekomendasiService: z.string().nullable().default(null),
+  estimasiMinutes: z.number().int().nullable().default(null),
+
+  serviceAdvisorName: z.string().nullable().default(null), // "Yang menerima"
+  salespersonName: z.string().nullable().default(null),
+
+  /**
+   * Verbatim raw form fields for the Nawilis-schema export (oil/tyre brands,
+   * per-service ket, previous-oil info, nama_cs, kontak_lainnya, etc.).
+   * Stored as-is; the export maps known keys and passes the rest through.
+   */
+  raw: z.record(z.string(), z.unknown()).optional(),
+
+  signatures: z
+    .object({
+      menyerahkanPresent: z.boolean().default(false),
+      menyerahkanInkDensity: z.number().nullable().default(null),
+      menerimaPresent: z.boolean().default(false),
+      menerimaNamaJelas: z.string().nullable().default(null),
+    })
+    .default({}),
+
+  attachments: z
+    .array(z.object({ ref: z.string(), kind: z.enum(['original', 'signature', 'damage']) }))
+    .default([]),
+});
+
+export type SpkIntakeInputT = z.infer<typeof SpkIntakeInput>;

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# secrets
+.env
+.env.local
+.env.*.local
+
+# turboly automation state (contains session cookies — NEVER commit)
+.turboly-state/
+storageState*.json
+
+# captured selector recordings before review
+tools/turboly-capture/recordings/
+
+# logs & runtime
+*.log
+.DS_Store
+coverage/
+
+# local direct mongodb data (dev-mongo.mjs)
+.mongo-data/

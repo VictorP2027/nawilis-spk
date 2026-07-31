@@ -1,0 +1,44 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    # Replica set is required for MongoDB change streams (the push poller's
+    # latency optimisation). A single-node RS is fine for dev.
+    healthcheck:
+      test: |
+        mongosh --quiet --eval "try { rs.status().ok } catch(e) { rs.initiate().ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # S3-compatible object storage for dev (originals, signature crops, damage crops).
+  minio:
+    image: minio/minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+volumes:
+  mongo_data:
+  redis_data:
+  minio_data:

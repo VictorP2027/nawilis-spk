@@ -1,0 +1,22 @@
+{
+  "name": "@spk/core-supabase",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "seed:refdata": "tsx src/seed/refdata.ts",
+    "seed:demo": "tsx src/seed/dev-demo.ts"
+  },
+  "dependencies": {
+    "@spk/core": "*",
+    "@supabase/supabase-js": "^2.111.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

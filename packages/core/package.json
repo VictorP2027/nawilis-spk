@@ -1,0 +1,31 @@
+{
+  "name": "@spk/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./turboly": { "types": "./dist/turboly/index.d.ts", "default": "./dist/turboly/index.js" }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "seed:refdata": "tsx src/seed/refdata.ts",
+    "seed:demo": "tsx src/seed/dev-demo.ts",
+    "seed:turboly": "tsx src/seed/turboly-import.ts",
+    "ensure:indexes": "tsx src/seed/ensure-indexes.ts"
+  },
+  "dependencies": {
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.1",
+    "mongodb": "^6.12.0",
+    "playwright": "^1.49.1",
+    "ulid": "^2.3.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

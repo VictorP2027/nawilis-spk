@@ -1,0 +1,292 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../lib/refdata.client';
+import { submitOrQueue } from '../../lib/outbox';
+
+/** Pixel-faithful, fillable replica of the Nawilis SPK (Surat Perintah Kerja). */
+function uuid(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string }
+
+export default function Sheet() {
+  const [serial, setSerial] = useState('');
+  const [tanggal, setTanggal] = useState('');
+  const [nama, setNama] = useState('');
+  const [alamat, setAlamat] = useState('');
+  const [wa, setWa] = useState('');
+  const [merk, setMerk] = useState('');
+  const [tipe, setTipe] = useState('');
+  const [noPol, setNoPol] = useState('');
+  const [tahun, setTahun] = useState('');
+  const [warna, setWarna] = useState('');
+  const [km, setKm] = useState('');
+  const [keluhan, setKeluhan] = useState('');
+  const [estimasi, setEstimasi] = useState('');
+  const [rekom, setRekom] = useState('');
+  const [kontakLain, setKontakLain] = useState('');
+  const [menyerahkan, setMenyerahkan] = useState('');
+  const [menerima, setMenerima] = useState('');
+  const [branch, setBranch] = useState('');
+  const [extra1, setExtra1] = useState('');
+  const [extra2, setExtra2] = useState('');
+
+  const [pk, setPk] = useState<Record<string, PkRow>>(() =>
+    Object.fromEntries(SERVICES.map((s) => [s.code, { order: false, qty: 1, keterangan: '', mk: '', waktu: '' }])),
+  );
+  // Raw detail fields that map 1:1 to the Nawilis export columns.
+  const [merekOli, setMerekOli] = useState('');
+  const [tipeOli, setTipeOli] = useState('');
+  const [merekBan, setMerekBan] = useState('');
+  const [tipeBan, setTipeBan] = useState('');
+  const [namaCs, setNamaCs] = useState('');
+  const [prevMerekOli, setPrevMerekOli] = useState('');
+  const [prevTipeOli, setPrevTipeOli] = useState('');
+  const [prevBengkel, setPrevBengkel] = useState('');
+  const [prevKmOli, setPrevKmOli] = useState('');
+  const [cond, setCond] = useState<Record<string, string>>(() =>
+    Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])),
+  );
+  const [dmg, setDmg] = useState<Set<string>>(new Set());
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const setRow = (code: string, patch: Partial<PkRow>) => setPk((p) => ({ ...p, [code]: { ...p[code]!, ...patch } }));
+  const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
+
+  const orderedCount = useMemo(() => Object.values(pk).filter((r) => r.order).length, [pk]);
+
+  async function submit() {
+    setSubmitting(true);
+    setResult(null);
+    const uploadId = uuid();
+    const jobLines = SERVICES.filter((s) => pk[s.code]!.order).map((s) => {
+      const r = pk[s.code]!;
+      const notes = [r.keterangan, r.mk && `MK:${r.mk}`, r.waktu && `Waktu:${r.waktu}`].filter(Boolean).join(' ');
+      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null };
+    });
+    const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
+    const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
+    const complaint = [keluhan, dmgSummary && `Kerusakan bodi: ${dmgSummary}`].filter(Boolean).join(' | ') || null;
+
+    const payload = {
+      uploadId,
+      docType: 'SPK_NAWILIS',
+      branchCode: branch,
+      captureMode: 'typed',
+      operatorUserId: menerima || 'unattributed',
+      operatorPinVerified: !!menerima,
+      deviceBindingVerified: true,
+      spkNumber: serial || null,
+      capturedAt: new Date().toISOString(),
+      arrivalTime: tanggal ? new Date(tanggal).toISOString() : undefined,
+      customer: { nama, wa: wa || null, alamat: alamat || null, kontakLain: kontakLain || null },
+      vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km },
+      complaint,
+      jobLines,
+      conditionChecks,
+      rekomendasiService: rekom || null,
+      estimasiMinutes: estimasi ? Number(estimasi) : null,
+      serviceAdvisorName: menerima || null,
+      salespersonName: menerima || null,
+      signatures: { menyerahkanPresent: !!menyerahkan, menerimaPresent: !!menerima, menerimaNamaJelas: menerima || null },
+      // Verbatim raw fields → reproduce the Nawilis export columns exactly.
+      raw: {
+        merek_oli: merekOli, tipe_oli: tipeOli, merek_ban: merekBan, tipe_ban: tipeBan,
+        nama_cs: namaCs || menerima, kontak_lainnya: kontakLain, nama_customer_menyerahkan: menyerahkan,
+        merek_oli_sebelumnya: prevMerekOli, tipe_oli_sebelumnya: prevTipeOli, bengkel_sebelumnya: prevBengkel, km_ganti_oli_sebelumnya: prevKmOli,
+        service_lain: [extra1, extra2].filter(Boolean).join(', '),
+      },
+    };
+
+    if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
+    if (!noPol || !km || !nama || jobLines.length === 0) { setResult({ ok: false, text: 'Isi No. Polisi, KM, Nama, dan minimal 1 pekerjaan.' }); setSubmitting(false); return; }
+
+    const res = await submitOrQueue(uploadId, payload);
+    if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
+      setResult({ ok: !body.needsReview, text: (body.needsReview ? 'Tersimpan, perlu diperbaiki: ' : `✓ Tersimpan ke MongoDB (${body.state}). `) + notes });
+    } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
+    setSubmitting(false);
+  }
+
+  return (
+    <div className="sheet-wrap">
+      <div className="sheet">
+        {/* Header */}
+        <div className="hd">
+          <div className="logo">
+            <svg className="mark" viewBox="0 0 40 40" aria-label="NAWILIS">
+              <rect width="40" height="40" rx="6" fill="#0a3d8f" />
+              <path d="M8 30 L16 10 L20 20 L24 10 L32 30 L26 30 L22 21 L20 25 L18 21 L14 30 Z" fill="#fff" />
+            </svg>
+            <div className="word">NAWILIS<small>SPOORING · BALANCING SPECIALIST</small></div>
+          </div>
+          <div className="title">
+            <b>SURAT PERINTAH KERJA (S.P.K.)</b>
+            <small>SAFETY &amp; COMFORT FIRST</small>
+          </div>
+          <div className="serial">NO. <input value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="202" /><div className="qr">QR</div></div>
+        </div>
+
+        {/* Customer + Vehicle */}
+        <div className="two">
+          <div className="box">
+            <span className="sec-h">INFORMASI CUSTOMER</span>
+            <div className="fld"><label>Tanggal</label><input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} /></div>
+            <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
+            <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
+            <div className="fld"><label>Nomor WA</label><input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" /></div>
+          </div>
+          <div className="box">
+            <span className="sec-h">INFORMASI KENDARAAN</span>
+            <div className="fld"><label>Merk Mobil</label><input value={merk} onChange={(e) => setMerk(e.target.value)} /></div>
+            <div className="fld"><label>Tipe</label><input value={tipe} onChange={(e) => setTipe(e.target.value)} /></div>
+            <div className="fld"><label>No. Polisi</label><input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" /></div>
+            <div className="fld"><label>Tahun/Warna</label><div style={{ display: 'flex', gap: 4 }}><input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" /><input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Warna" /></div></div>
+            <div className="fld"><label>KM</label><input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" /></div>
+          </div>
+        </div>
+
+        {/* Keluhan */}
+        <div className="box" style={{ marginTop: 8 }}>
+          <span className="sec-h">KELUHAN</span>
+          <input value={keluhan} onChange={(e) => setKeluhan(e.target.value)} />
+        </div>
+
+        {/* Pekerjaan + diagram */}
+        <div className="mid">
+          <div>
+            <table className="pk">
+              <thead>
+                <tr><th style={{ width: 18 }}>#</th><th>PEKERJAAN</th><th style={{ width: 42 }}>ORDER</th><th>KETERANGAN</th><th style={{ width: 40 }}>MK</th><th style={{ width: 44 }}>WAKTU</th></tr>
+              </thead>
+              <tbody>
+                {SERVICES.map((s, i) => {
+                  const r = pk[s.code]!;
+                  return (
+                    <tr key={s.code}>
+                      <td style={{ textAlign: 'center' }}>{i + 1}</td>
+                      <td className="svc">{s.label.toUpperCase()}</td>
+                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                        <span className={`tick ${r.order ? 'on' : ''}`} onClick={() => setRow(s.code, { order: !r.order })}>{r.order ? '✓' : '▢'}</span>
+                        {r.order && <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />}
+                      </td>
+                      <td><input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} /></td>
+                      <td><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>
+                      <td><input type="text" value={r.waktu} onChange={(e) => setRow(s.code, { waktu: e.target.value })} /></td>
+                    </tr>
+                  );
+                })}
+                <tr><td style={{ textAlign: 'center' }}>13</td><td className="svc"><input value={extra1} onChange={(e) => setExtra1(e.target.value)} /></td><td /><td /><td /><td /></tr>
+                <tr><td style={{ textAlign: 'center' }}>14</td><td className="svc"><input value={extra2} onChange={(e) => setExtra2(e.target.value)} /></td><td /><td /><td /><td /></tr>
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div className="box" style={{ height: '100%' }}>
+              <div style={{ fontSize: 9, fontWeight: 700, marginBottom: 2 }}>Pengecekan bodi — klik bagian yang rusak:</div>
+              <svg className="car" viewBox="0 0 200 300" height="300" style={{ display: 'block', margin: '0 auto' }}>
+                {/* wheels (decoration) */}
+                {[[16, 40], [170, 40], [16, 214], [170, 214]].map(([wx, wy], i) => (
+                  <rect key={i} x={wx} y={wy} width="14" height="46" rx="5" fill="#3a3a3a" />
+                ))}
+                {/* car body outline */}
+                <rect x="34" y="6" width="132" height="262" rx="30" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
+                {/* clickable zones */}
+                {DAMAGE_ZONES.map((z) => (
+                  <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
+                    <rect className={`zone ${dmg.has(z.code) ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="3">
+                      <title>{z.label}</title>
+                    </rect>
+                    <text x={z.x + z.w / 2} y={z.y + z.h / 2 + 3} textAnchor="middle" fontSize="7" fill="#555" pointerEvents="none">{z.abbr}</text>
+                  </g>
+                ))}
+                {/* X marks on damaged zones */}
+                {[...dmg].map((z) => { const d = DAMAGE_ZONES.find((x) => x.code === z)!; return <text key={z} x={d.x + d.w / 2} y={d.y + d.h / 2 + 6} textAnchor="middle" fontSize="16" fill="#1763d6" fontWeight="900" pointerEvents="none">✕</text>; })}
+                <text x="100" y="300" textAnchor="middle" fontSize="7" fill="#888">DEPAN ↑</text>
+              </svg>
+              <div className="fld" style={{ marginTop: 4 }}><label style={{ fontSize: 10 }}>Estimasi (menit)</label><input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" /></div>
+            </div>
+          </div>
+        </div>
+
+        {/* Pengecekan awal */}
+        <div style={{ marginTop: 8 }}>
+          <span className="sec-h">PENGECEKAN AWAL KENDARAAN</span>
+          <table className="cond">
+            <tbody>
+              {CONDITION_ITEMS.map((c, i) => (
+                <tr key={c.code}>
+                  <td style={{ width: 18, textAlign: 'center' }}>{i + 1}</td>
+                  <td style={{ width: 130, fontWeight: 600 }}>{c.label}</td>
+                  <td>
+                    <span className={`opt ${cond[c.code] === 'OK' ? 'on' : ''}`} onClick={() => setCond((s) => ({ ...s, [c.code]: 'OK' }))}>OK</span>
+                    {c.marks.map((m) => (
+                      <span key={m} className={`opt ${cond[c.code] === m ? 'on' : ''}`} style={{ marginLeft: 6 }} onClick={() => setCond((s) => ({ ...s, [c.code]: m }))}>{m}</span>
+                    ))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Detail tambahan (maps to export columns) */}
+        <div className="box" style={{ marginTop: 8 }}>
+          <span className="sec-h">DETAIL TAMBAHAN</span>
+          <div className="two">
+            <div className="fld"><label>Merek Oli</label><input value={merekOli} onChange={(e) => setMerekOli(e.target.value)} /></div>
+            <div className="fld"><label>Tipe Oli</label><input value={tipeOli} onChange={(e) => setTipeOli(e.target.value)} /></div>
+            <div className="fld"><label>Merek Ban</label><input value={merekBan} onChange={(e) => setMerekBan(e.target.value)} /></div>
+            <div className="fld"><label>Tipe Ban</label><input value={tipeBan} onChange={(e) => setTipeBan(e.target.value)} /></div>
+            <div className="fld"><label>Oli sblm (merek)</label><input value={prevMerekOli} onChange={(e) => setPrevMerekOli(e.target.value)} /></div>
+            <div className="fld"><label>Oli sblm (tipe)</label><input value={prevTipeOli} onChange={(e) => setPrevTipeOli(e.target.value)} /></div>
+            <div className="fld"><label>Bengkel sblm</label><input value={prevBengkel} onChange={(e) => setPrevBengkel(e.target.value)} /></div>
+            <div className="fld"><label>KM ganti oli sblm</label><input value={prevKmOli} onChange={(e) => setPrevKmOli(e.target.value)} inputMode="numeric" /></div>
+            <div className="fld"><label>Nama CS</label><input value={namaCs} onChange={(e) => setNamaCs(e.target.value)} /></div>
+          </div>
+        </div>
+
+        {/* Authorization + signatures */}
+        <div className="auth">
+          Saya yang bertanda tangan dibawah ini memberi wewenang penuh kepada bengkel NAWILIS untuk melakukan pekerjaan sesuai dengan permintaan order di atas dan test jalan apabila diperlukan.
+        </div>
+        <div className="sign">
+          <div className="b">Yang menyerahkan,<input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
+          <div className="b">Yang menerima,<input value={menerima} onChange={(e) => setMenerima(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
+        </div>
+        <div className="two" style={{ marginTop: 6 }}>
+          <div className="fld"><label>Kontak Lain</label><input value={kontakLain} onChange={(e) => setKontakLain(e.target.value)} /></div>
+          <div className="fld"><label>Rekomendasi Service</label><input value={rekom} onChange={(e) => setRekom(e.target.value)} /></div>
+        </div>
+
+        {/* Branch checklist */}
+        <div className="branches">
+          {BRANCHES.map((b) => (
+            <label key={b.code}>
+              <input type="radio" name="branch" checked={branch === b.code} onChange={() => setBranch(b.code)} /> {b.name}
+            </label>
+          ))}
+        </div>
+        <div className="foot">Pioneering wheel alignment and balancing for more than 50 years</div>
+      </div>
+
+      <div className="sheet-actions">
+        <button className="btn primary" style={{ flex: 1 }} disabled={submitting} onClick={submit}>
+          {submitting ? 'Menyimpan…' : `Simpan SPK ke MongoDB (${orderedCount} pekerjaan)`}
+        </button>
+        <a className="btn ghost" href="/admin">Dashboard</a>
+      </div>
+      {result && (
+        <div className="sheet-actions">
+          <div className={`finding ${result.ok ? 'CONFIRM' : 'BLOCK'}`} style={result.ok ? { background: '#e6f4ea', color: '#157a3c', flex: 1 } : { flex: 1 }}>{result.text}</div>
+        </div>
+      )}
+    </div>
+  );
+}
