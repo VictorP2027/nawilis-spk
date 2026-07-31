@@ -83,9 +83,10 @@ export class TurbolySession {
   /** Robust logged-in check: on the SO list, not on a login URL, New button present. */
   private async loggedIn(): Promise<boolean> {
     const page = this.page_();
+    // Logged in iff visiting a protected page does NOT bounce us to the login.
     await page.goto(SELECTOR_MAP.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    if (/sign_in|sign-in|\/login/i.test(page.url())) return false;
-    return exists(page, SELECTOR_MAP.routes.newServiceOrderButton, 4000);
+    await page.waitForTimeout(600);
+    return !/sign_in|sign-in|\/login|\/signin/i.test(page.url());
   }
 
   /**

@@ -38,10 +38,9 @@ function statePath(branch: string): string {
 
 async function isLoggedIn(page: Page): Promise<boolean> {
   await page.goto(BASE + S.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' }).catch(() => {});
-  if (/\/login|\/signin|\/welcome\/login/i.test(page.url())) return false;
-  // Logged in if the Service Orders list (its New button) is reachable.
-  const newBtn = page.getByRole('button', { name: /new service order/i });
-  return (await newBtn.count()) > 0;
+  await page.waitForTimeout(600);
+  // Logged in iff a protected page does NOT redirect to the sign-in page.
+  return !/sign_in|sign-in|\/login|\/signin|\/welcome\/login/i.test(page.url());
 }
 
 async function heuristicLogin(page: Page, username: string, password: string): Promise<void> {
