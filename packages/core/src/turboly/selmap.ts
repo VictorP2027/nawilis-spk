@@ -145,16 +145,18 @@ const css = (value: string, note?: string): Loc => ({ kind: 'css', value, note }
 export const SELECTOR_MAP: TurbolySelectorMap = {
   version: '2026-07-31-sandbox',
   routes: {
-    login: '/login',
+    login: '/users/sign_in',
     salesMenu: '/welcome/sales',
     serviceOrdersList: '/service_orders',
-    newServiceOrderButton: role('button', 'New Service Order'),
+    // Confirmed: it's a LINK, not a button.
+    newServiceOrderButton: role('link', 'New Service Order'),
   },
   login: {
-    username: ph('Email', 'CONFIRM — could be Email/Username'),
-    password: ph('Password'),
-    submit: role('button', 'Login', 'CONFIRM — could be Sign In'),
-    loggedInMarker: text('Dashboard'),
+    // Confirmed Rails/Devise login form on sandbox.turboly.com/users/sign_in.
+    username: css('#user_email'),
+    password: css('#password-input'),
+    submit: role('button', 'Login'),
+    loggedInMarker: text('New Service Order'),
     otpField: ph('OTP', 'only present if 2FA enabled'),
   },
   header: {

@@ -84,7 +84,7 @@ export class TurbolySession {
   private async loggedIn(): Promise<boolean> {
     const page = this.page_();
     await page.goto(SELECTOR_MAP.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    if (/\/login|\/signin/i.test(page.url())) return false;
+    if (/sign_in|sign-in|\/login/i.test(page.url())) return false;
     return exists(page, SELECTOR_MAP.routes.newServiceOrderButton, 4000);
   }
 
