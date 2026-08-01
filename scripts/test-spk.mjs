@@ -12,14 +12,14 @@ const input = {
   vehicle: { noPolisi: 'B1743RKA', merk: 'Toyota', tipe: 'Avanza', tahun: 2021, warna: 'Silver', km: '12500' },
   complaint: 'auto test', jobLines: [{ serviceCode: 'SPOORING', ordered: true, qty: 1, keterangan: 'Spooring', quotedPrice: null }],
   conditionChecks: [], rekomendasiService: null, estimasiMinutes: null,
-  serviceAdvisorName: 'Demo Advisor', salespersonName: 'Demo Advisor',
-  signatures: { menyerahkanPresent: true, menyerahkanInkDensity: null, menerimaPresent: true, menerimaNamaJelas: 'Demo Advisor' },
+  serviceAdvisorName: process.argv[2] || 'DEVI FITRIANI', salespersonName: process.argv[2] || 'DEVI FITRIANI',
+  signatures: { menyerahkanPresent: true, menyerahkanInkDensity: null, menerimaPresent: true, menerimaNamaJelas: process.argv[2] || 'DEVI FITRIANI' },
   attachments: [],
 };
 
 let doc = buildSpkDoc(input);
 doc.uploadId = input.uploadId;
-doc.signatures.menerima.namaJelas = 'Demo Advisor';
+doc.signatures.menerima.namaJelas = process.argv[2] || 'DEVI FITRIANI';
 const mirror = await loadMirror('NWL-BKS');
 doc = resolveSkus(doc, mirror.skuFor);
 doc.state = 'awaiting_assignment';
