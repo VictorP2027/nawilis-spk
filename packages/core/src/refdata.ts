@@ -67,7 +67,7 @@ export const REF_SERVICES: readonly RefService[] = [
   { code: 'KURAS_RADIATOR', label: 'KURAS RADIATOR', lineNo: 8, turbolySection: 'service' },
   { code: 'SERVICE_REM', label: 'SERVICE REM / KRS MINYAK REM', lineNo: 9, turbolySection: 'service' },
   { code: 'BUBUT_REM', label: 'BUBUT REM', lineNo: 10, turbolySection: 'service' },
-  { code: 'BAN', label: 'BAN', lineNo: 11, turbolySection: 'sparepart' },
+  { code: 'BAN', label: 'BAN', lineNo: 11, turbolySection: 'service' },
   { code: 'NITROGEN', label: 'NITROGEN', lineNo: 12, turbolySection: 'service' },
 ];
 

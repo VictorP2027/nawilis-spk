@@ -107,16 +107,27 @@ export class RpaSink implements ServiceOrderSink {
     if (payload.notes) await page.fill('#service_order_notes', payload.notes).catch(() => {});
 
     // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
+    // Each add must create a NEW row before we search it — otherwise a fast loop
+    // silently drops a line (search lands on a stale/last row). Wait for the row
+    // count to grow, then verify at the end that every line made it.
     await this.dismissModals();
     await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
     await page.waitForTimeout(700);
+    const rowSel = '.select2-container.input-service-product';
     for (const line of payload.serviceLines) {
+      const before = await page.locator(rowSel).count();
       await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
-      await page.waitForTimeout(900);
-      await this.pickSelect2Locator(page.locator('.select2-container.input-service-product').last(), line.serviceName || line.expectedSku);
-      await page.waitForTimeout(800);
+      for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
+      if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
+      await page.waitForTimeout(400);
+      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
+      await page.waitForTimeout(600);
       await this.setLastServiceRow(page, line.qty, line.description || line.serviceName);
     }
+    const rowCount = await page.locator(rowSel).count();
+    if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
+    // Spareparts aren't driven yet — fail LOUD rather than silently drop the line.
+    if (payload.sparepartLines.length) throw new DataError(`${payload.sparepartLines.length} sparepart line(s) not supported by RPA yet: ${payload.sparepartLines.map((s) => s.expectedSku).join(', ')}`);
 
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
 
@@ -440,7 +451,17 @@ export class RpaSink implements ServiceOrderSink {
     // This avoids the fragile list-filter selectors entirely.
     const directUrl = doc.turboly.serviceOrderUrl;
     if (directUrl && /\/service_orders\/\d+/.test(directUrl)) {
-      await page.goto(directUrl, { waitUntil: 'domcontentloaded' });
+      // Retry the read-back navigation — a transient timeout shouldn't leave a
+      // successfully-created SO stuck as unverified.
+      let navOk = false;
+      for (let i = 0; i < 3 && !navOk; i++) {
+        try {
+          await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          navOk = true;
+        } catch {
+          await page.waitForTimeout(1500);
+        }
+      }
       await page.waitForTimeout(1500);
       return this.readbackFromDetail(page, doc);
     }
