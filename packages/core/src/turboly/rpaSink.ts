@@ -376,16 +376,20 @@ export class RpaSink implements ServiceOrderSink {
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
   private async modalSelect2Pick(containerId: string, query: string): Promise<void> {
     const page = this.session.page_();
+    const q = query.trim(); // a trailing space can hang Turboly's remote search forever
     await page.locator(`#${containerId} .select2-choice, #${containerId} .select2-choices, #${containerId}`).first().click({ timeout: 8000 });
     await page.waitForTimeout(400);
-    await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(query);
+    await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(q);
     const results = '.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable';
+    let found = false;
     for (let i = 0; i < 20; i++) {
-      if ((await page.locator(results).count()) > 0) break;
+      if ((await page.locator(results).count()) > 0) { found = true; break; }
       const txt = await page.locator('.select2-drop:visible .select2-results, #select2-drop:visible .select2-results').first().innerText().catch(() => '');
-      if (txt && !/searching|loading|more characters/i.test(txt)) throw new DataError(`no Turboly match for "${query}"`);
+      if (txt && !/searching|loading|more characters/i.test(txt)) throw new DataError(`no Turboly match for "${q}"`);
       await page.waitForTimeout(500);
     }
+    // Search never resolved (stuck "Searching…") — a data/timeout condition, not a broken page.
+    if (!found) throw new DataError(`Turboly search for "${q}" returned no results (timed out)`);
     await page.locator(results).first().click({ timeout: 5000 });
     await page.waitForTimeout(500);
   }
