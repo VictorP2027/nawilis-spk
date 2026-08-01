@@ -247,7 +247,7 @@ export class RpaSink implements ServiceOrderSink {
         return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
       });
       if (st.sel > 0) break;
-      if (st.txt && !/searching/i.test(st.txt)) throw new Error(`no Turboly match for "${query}"`);
+      if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`no Turboly match for "${query}"`);
       await page.waitForTimeout(600);
     }
     await page.locator('#select2-drop .select2-results li.select2-result-selectable').first().click({ timeout: 4000 });

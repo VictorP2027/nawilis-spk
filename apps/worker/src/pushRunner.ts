@@ -32,6 +32,22 @@ export async function pushQueued(
   const log = opts.log ?? (() => {});
   const out: RunResult = { candidates: 0, pushed: 0, confirmed: 0, failed: 0 };
 
+  // Requeue transient failures that are due for retry (bounded). Data failures
+  // (no Turboly match, bad SKU) are left for a human — retrying won't help.
+  const MAX_ATTEMPTS = 5;
+  if (!opts.onlyId) {
+    const nowIso = new Date().toISOString();
+    const retryable = await collections
+      .spk()
+      .find({ state: 'failed', 'push.attempt': { $lt: MAX_ATTEMPTS }, 'push.nextAttemptAt': { $lte: nowIso }, 'push.failureClass': { $nin: ['data'] } })
+      .limit(opts.limit ?? 25)
+      .toArray();
+    for (const d of retryable) {
+      const r = await transition(d._id, 'failed', 'queued', {}).catch(() => null);
+      if (r) log(`↻ requeued ${d._id} (attempt ${d.push.attempt}, was ${d.push.failureClass ?? '?'})`);
+    }
+  }
+
   const filter = opts.onlyId ? { _id: opts.onlyId } : { state: 'queued' as const };
   const docs = await collections.spk().find(filter).limit(opts.limit ?? 25).toArray();
   out.candidates = docs.length;
@@ -66,7 +82,14 @@ export async function pushQueued(
       const res = await branchSinks.withSink(claimed.branchCode, (sink) =>
         sink.pushServiceOrder(payload, { workerId, epoch, approve: config.approveAfterSave, leaseExpiresAt }),
       );
-      if (!res.ok) throw new Error(`push failed [${res.failureClass}]: ${res.error}`);
+      if (!res.ok) {
+        out.failed++;
+        await transition(doc._id, 'pushing', 'failed', {
+          push: { ...claimed.push, failureClass: res.failureClass ?? 'structural', lastError: res.error ?? 'push failed', nextAttemptAt: new Date(Date.now() + 60_000).toISOString() },
+        }).catch(() => {});
+        log(`✗ ${doc._id}: [${res.failureClass ?? '?'}] ${res.error ?? ''}`);
+        continue;
+      }
       const pushedTurboly = { ...claimed.turboly, serviceOrderNo: res.serviceOrderNo, serviceOrderUrl: res.serviceOrderUrl ?? null };
       await transition(doc._id, 'pushing', 'pushed', { turboly: pushedTurboly });
       out.pushed++;
@@ -87,7 +110,7 @@ export async function pushQueued(
     } catch (e) {
       out.failed++;
       await transition(doc._id, 'pushing', 'failed', {
-        push: { ...claimed.push, lastError: String((e as Error).message ?? e), nextAttemptAt: new Date(Date.now() + 60_000).toISOString() },
+        push: { ...claimed.push, failureClass: 'structural', lastError: String((e as Error).message ?? e), nextAttemptAt: new Date(Date.now() + 60_000).toISOString() },
       }).catch(() => {});
       log(`✗ ${doc._id}: ${(e as Error).message ?? e}`);
     }
