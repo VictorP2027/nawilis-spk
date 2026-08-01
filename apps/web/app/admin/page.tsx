@@ -19,6 +19,7 @@ interface Row {
   vehicle: { noPolisi: { display: string } };
   jobLineSummary: { orderedCount: number; quotedTotal: number };
   turboly: { serviceOrderNo: string | null };
+  push?: { lastError?: string | null; failureClass?: string | null };
 }
 
 const RUNG_LABEL = ['0 · Full auto', '1 · Sampled audit', '2 · Assisted entry', '3 · Manual'];
@@ -43,6 +44,11 @@ export default function Admin() {
   async function del(id: string) {
     if (!confirm('Hapus SPK ini?')) return;
     await fetch(`/api/spk/${id}`, { method: 'DELETE' });
+    await load();
+  }
+
+  async function retry(id: string) {
+    await fetch(`/api/spk/${id}/retry`, { method: 'POST' });
     await load();
   }
 
@@ -156,9 +162,19 @@ export default function Admin() {
                   <td>{r.vehicle.noPolisi.display}</td>
                   <td>{r.customer.nama}</td>
                   <td>{r.branchCode}</td>
-                  <td><StateBadge state={r.state} /></td>
+                  <td>
+                    <StateBadge state={r.state} />
+                    {r.state === 'failed' && r.push?.lastError && (
+                      <div style={{ fontSize: 11, color: '#b45309', maxWidth: 260, marginTop: 2 }}>{r.push.lastError}</div>
+                    )}
+                  </td>
                   <td>{r.turboly?.serviceOrderNo ?? '—'}</td>
-                  <td><button className="btn ghost" style={{ padding: '6px 10px', fontSize: 14, color: 'var(--block)' }} onClick={() => del(r._id)}>Hapus</button></td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {r.state === 'failed' && (
+                      <button className="btn ghost" style={{ padding: '6px 10px', fontSize: 14, marginRight: 6 }} onClick={() => retry(r._id)}>↻ Coba lagi</button>
+                    )}
+                    <button className="btn ghost" style={{ padding: '6px 10px', fontSize: 14, color: 'var(--block)' }} onClick={() => del(r._id)}>Hapus</button>
+                  </td>
                 </tr>
               ))}
               {all.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--muted)' }}>Belum ada SPK.</td></tr>}

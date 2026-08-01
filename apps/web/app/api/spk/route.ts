@@ -46,7 +46,7 @@ export async function GET(req: Request): Promise<Response> {
   if (plate) q['vehicle.plateVariants'] = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const rows = await collections
     .spk()
-    .find(q, { projection: { customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1, 'push.correlationToken': 1, turboly: 1 }, sort: { createdAt: -1 }, limit: 100 })
+    .find(q, { projection: { customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1, 'push.correlationToken': 1, 'push.lastError': 1, 'push.failureClass': 1, turboly: 1 }, sort: { createdAt: -1 }, limit: 100 })
     .toArray();
   return NextResponse.json({ rows });
 }
