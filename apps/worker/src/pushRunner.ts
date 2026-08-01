@@ -49,8 +49,17 @@ export async function pushQueued(
     try {
       const mirror = await loadMirror(claimed.branchCode);
       if (!mirror.store) throw new Error(`store ${claimed.branchCode} not in mirror (run seed:turboly)`);
-      const advisor = mirror.advisorByName.get(norm(claimed.signatures.menerima.namaJelas));
-      if (!advisor) throw new Error(`advisor "${claimed.signatures.menerima.namaJelas}" not in mirror`);
+      // Advisor: prefer a mirror match; otherwise DON'T fail — pass the typed name
+      // through so the RPA tries it as a Turboly label and falls back to the first
+      // real advisor if it isn't an exact match. Keeps any form input pushable.
+      const typedAdvisor = (claimed.signatures.menerima.namaJelas ?? '').trim();
+      const advisor =
+        mirror.advisorByName.get(norm(typedAdvisor)) ??
+        [...mirror.advisorByName.values()][0] ??
+        { _id: 'unmatched', mechanicCode: 'unmatched', name: typedAdvisor || 'Advisor', storeCode: null, role: 'advisor', syncedAt: '' };
+      if (!mirror.advisorByName.get(norm(typedAdvisor))) {
+        log(`  · advisor "${typedAdvisor}" not in mirror — letting Turboly pick a matching/first advisor`);
+      }
       const plan = planFromNowWib(30); // Turboly requires plan time > server "now"
       const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson: advisor, planServiceDate: plan.date, planServiceTime: plan.time });
 
