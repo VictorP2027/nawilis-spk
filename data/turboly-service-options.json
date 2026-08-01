@@ -70,8 +70,12 @@
     ]
   },
   "BALANCING_ON_CAR": {
-    "defaultSku": "BAL-NAW-STD",
+    "defaultSku": "OTL-NAW-BOTCL",
     "options": [
+      {
+        "sku": "OTL-NAW-BOTCL",
+        "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
+      },
       {
         "sku": "BAL-NAW-STD",
         "label": "BAL-NAW-STD Balancing"
@@ -103,10 +107,6 @@
       {
         "sku": "LAI-NAW-BVIPAC",
         "label": "LAI-NAW-BVIPAC Balancing VIP Additional Charge"
-      },
-      {
-        "sku": "OTL-NAW-BOTCL",
-        "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
       },
       {
         "sku": "OTL-NAW-BOTLVIP",

@@ -7,7 +7,7 @@ import { connect, close, collections } from '/Users/victorphisitkul/Desktop/unti
 const MAP = {
   SPOORING: 'SPO-NAW-000',
   BALANCING: 'BAL-NAW-STD',
-  BALANCING_ON_CAR: 'BAL-NAW-STD', // * no distinct on-car service in sandbox → Balancing
+  BALANCING_ON_CAR: 'OTL-NAW-BOTCL', // Balancing OTC Langsung (on the car)
   OLI: 'JAS-NAW-JGO',
   ENGINE_FLUSH: 'EFL-NAW-EF',
   TUNE_UP_CARBON_CLEAN: 'TUN-NAW-PTU', // * Power Tune Up
