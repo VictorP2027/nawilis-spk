@@ -1,6 +1,6 @@
 import { collections, transition, emit, loadMirror, claimId } from '@spk/core';
 import type { SpkDoc, FailureClass } from '@spk/core';
-import { buildTurbolyPayload, type ServiceOrderSink } from '@spk/core/turboly';
+import { buildTurbolyPayload, planFromNowWib, type ServiceOrderSink } from '@spk/core/turboly';
 import { config } from './config.js';
 import { backoffMs } from './util.js';
 import { AuthBreaker, StructuralBreaker } from './breaker.js';
@@ -100,12 +100,15 @@ export class PushWorker {
     }
     const salesperson = advisor; // Nawilis: advisor doubles as salesperson unless configured otherwise
 
+    const plan = planFromNowWib(30); // Turboly rejects a plan time <= server "now"
     const payload = buildTurbolyPayload({
       doc: claimed,
       store: mirror.store,
       serviceProducts: mirror.serviceProducts,
       serviceAdvisor: advisor,
       salesperson,
+      planServiceDate: plan.date,
+      planServiceTime: plan.time,
     });
 
     // Drive the sink.
@@ -124,7 +127,7 @@ export class PushWorker {
         { $set: { committedAt: new Date().toISOString(), turbolyDocNo: result.serviceOrderNo } },
       );
       await transition(doc._id, 'pushing', 'pushed', {
-        turboly: { ...claimed.turboly, serviceOrderNo: result.serviceOrderNo },
+        turboly: { ...claimed.turboly, serviceOrderNo: result.serviceOrderNo, serviceOrderUrl: result.serviceOrderUrl ?? null },
         push: { ...claimed.push, phases: { ...claimed.push.phases, order: { status: 'committed', at: new Date().toISOString(), turbolyDocNo: result.serviceOrderNo } }, failureClass: null, lastError: null },
       });
       await emit({ spkId: doc._id, type: 'pushed', by: this.workerId, data: { serviceOrderNo: result.serviceOrderNo, screenshotRef: result.screenshotRef } });

@@ -18,7 +18,8 @@ async function main(): Promise<void> {
   const now = new Date().toISOString();
   const BRANCH = 'NWL-BKS';
 
-  await collections.tbStores().updateOne({ _id: BRANCH }, { $set: { _id: BRANCH, turbolyStoreId: 'demo-7', turbolyStoreName: 'Nawilis Bekasi', syncedAt: now } }, { upsert: true });
+  // Real Turboly sandbox store id for Nawilis Bekasi (harvested), so RPA can select it.
+  await collections.tbStores().updateOne({ _id: BRANCH }, { $set: { _id: BRANCH, turbolyStoreId: '8339', turbolyStoreName: 'Nawilis Bekasi', syncedAt: now } }, { upsert: true });
   await collections.tbMechanics().updateOne({ _id: 'DEMO-ADV' }, { $set: { _id: 'DEMO-ADV', mechanicCode: 'DEMO-ADV', name: 'Demo Advisor', storeCode: null, role: 'advisor', syncedAt: now } }, { upsert: true });
 
   for (const s of REF_SERVICES) {

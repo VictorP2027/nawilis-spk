@@ -1,14 +1,21 @@
-# Deploy for FREE (Vercel + Atlas + Oracle Cloud Free VM)
+# Deploy for FREE (Vercel + Atlas + Google Cloud Free VM)
 
-Runs the whole system in the cloud at **$0/month**:
+Runs the whole system in the cloud at **$0/month**, always-on (works with your laptop off):
 
 | Piece | Free host | Cost |
 |---|---|---|
 | Web app (form + admin) | **Vercel** Hobby | $0 |
 | Database | **MongoDB Atlas** M0 | $0 (already set up) |
-| Push worker (Playwright RPA) | **Oracle Cloud Free VM** (always-on, static IP) | $0 |
-| Redis (worker queue) | **on the same VM** | $0 |
+| Push worker (Playwright RPA) | **Google Cloud Free VM** (e2-micro, always-on) | $0 |
 | Code | **GitHub** | $0 |
+
+> The Google Cloud **e2-micro "Always Free"** VM is genuinely $0 forever (no time limit)
+> in regions `us-west1`, `us-central1`, or `us-east1`. A card is required at signup for
+> identity only — Always Free resources are not billed. Set a $1 budget alert for comfort.
+
+The worker is a single Node process (**Redis-free push loop**) kept alive by pm2 —
+it polls Atlas for `queued` SPKs and pushes+verifies each into Turboly. This is the
+exact path proven live (created `SRO/BKS/26080002`, `26080003`).
 
 Prereq: push this repo to **GitHub** (private is fine) — both Vercel and the VM pull from it.
 
@@ -35,56 +42,75 @@ Prereq: push this repo to **GitHub** (private is fine) — both Vercel and the V
 
 ---
 
-## 2. Push worker → Oracle Cloud Free VM (~30 min, one time)
+## 2. Push worker → Google Cloud Free VM (~15 min, one time)
 
-### 2a. Create the VM
-1. https://www.oracle.com/cloud/free → sign up (card for identity check; **not charged**
-   on Always Free resources).
-2. **Compute → Instances → Create.** Image **Ubuntu 22.04**, Shape
-   **VM.Standard.A1.Flex** (Ampere ARM — Always Free: up to 4 OCPU / 24 GB; 1 OCPU /
-   6 GB is plenty).
-3. Under Networking, **assign a public IPv4**. Then **reserve** it (Networking →
-   Reserved IPs) so it's **static**.
-4. Add your SSH key, create, and `ssh ubuntu@<vm-ip>`.
+### 2a. Create the free VM (browser only)
+1. https://console.cloud.google.com → sign in with your Google account.
+2. Create a **project** (top bar → New Project → name it `nawilis-spk`).
+3. **Billing** → link a billing account (add a card). Always-Free e2-micro is **not billed**;
+   the card is identity-only. (Optional peace of mind: **Billing → Budgets → Create budget → $1**.)
+4. **Compute Engine → VM instances → Enable API** (first time, ~1 min).
+5. **Create instance:**
+   - **Name:** `spk-worker`
+   - **Region:** `us-west1` (or `us-central1` / `us-east1` — these three ONLY are free-tier)
+   - **Machine type:** series **E2**, **e2-micro** ← the exact free one
+   - **Boot disk:** Change → **Ubuntu 22.04 LTS**, **30 GB Standard** (not SSD — 30 GB standard is the free limit)
+   - Leave firewall unchecked (worker only makes OUTbound calls; no inbound needed).
+   - **Create.**
+6. When it shows a green check, click **SSH** in its row → a terminal opens **in your browser**
+   (no keys, no local terminal needed).
 
-### 2b. Install + build (one command)
+### 2b. Install + build (paste into the browser SSH)
+Clone the private repo (log into GitHub first), then run the one-shot setup:
 ```bash
-export REPO_URL=git@github.com:YOU/nawilis-spk.git   # your repo
-curl -fsSL https://raw.githubusercontent.com/YOU/nawilis-spk/main/scripts/vm-setup.sh | REPO_URL=$REPO_URL bash
+sudo apt-get update -y && sudo apt-get install -y git gh
+gh auth login          # GitHub.com → HTTPS → Login with a web browser → paste the code
+git clone https://github.com/VictorP2027/nawilis-spk.git ~/nawilis-spk
+cd ~/nawilis-spk && bash scripts/vm-setup.sh
 ```
-(or copy `scripts/vm-setup.sh` up and run it). It installs Node 20, Redis, Playwright +
-Chromium, builds core + worker, and installs pm2.
+`vm-setup.sh` adds 2 GB swap (vital on 1 GB RAM), installs Node 22, Playwright + Chromium,
+builds core + worker, and installs pm2. Takes ~5–8 min on e2-micro.
 
 ### 2c. Configure `.env` on the VM
 ```bash
 cd ~/nawilis-spk && nano .env
 ```
+Paste and fill in:
 ```
-MONGODB_URI=mongodb+srv://...           # Atlas
+MONGODB_URI=mongodb+srv://...           # your Atlas connection string
 MONGODB_DB=spk
-REDIS_URL=redis://localhost:6379
-TURBOLY_BASE_URL=https://sandbox.turboly.com   # sandbox first!
+TURBOLY_BASE_URL=https://sandbox.turboly.com   # sandbox until fully verified!
 PUSH_MODE=rpa
 PUSH_APPROVE=true
 CREDENTIAL_ENC_KEY=<32-byte base64>     # node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-TURBOLY_USERNAME=<service account>      # must NOT have 2FA (headless VM can't do OTP)
+TURBOLY_USERNAME=<service account>      # must NOT have 2FA (headless VM can't solve OTP)
 TURBOLY_PASSWORD=<password>
-MAX_BROWSER_WORKERS=3
+PUSH_WINDOW_START=00:00                 # run 24/7 (or set 07:00–20:00 for business hours WIB)
+PUSH_WINDOW_END=23:59
 ```
+Save with **Ctrl-O, Enter, Ctrl-X**.
 
-### 2d. Allowlist the VM
-- **Atlas → Network Access →** add the VM's static IP (so the worker can reach the DB).
-- Note the same IP for Turboly (and, later, ask the vendor to allowlist it).
+### 2d. Database access
+Atlas is already open to `0.0.0.0/0` (added earlier for Vercel), so the VM can reach it with
+no extra step. To tighten it later: **Atlas → Network Access →** add just the VM's external IP
+(shown next to the instance in the console).
 
 ### 2e. Start it 24/7
 ```bash
+cd ~/nawilis-spk
 pm2 start ecosystem.config.cjs
-pm2 save && pm2 startup     # run the command it prints (survives reboots)
-pm2 logs spk-worker
+pm2 save && pm2 startup     # copy-paste the `sudo ...` line it prints (makes it boot-persistent)
+pm2 logs spk-worker         # watch it: polls Atlas, pushes queued SPKs, verifies
 ```
 
-The worker now polls Atlas every ~15s, and any SPK you assign to a mechanic
-auto-pushes to Turboly and gets verified.
+The worker now polls Atlas every ~15s. Any SPK assigned to a mechanic (state `queued`)
+auto-pushes to Turboly and is read-back-verified → `confirmed`. It keeps running with your
+laptop off, and restarts itself on crash or VM reboot.
+
+### 2f. Updating later (after code changes)
+```bash
+cd ~/nawilis-spk && git pull && npm install && npm run build -w @spk/core && npm --workspace @spk/worker run build && pm2 restart spk-worker
+```
 
 ---
 
@@ -98,9 +124,10 @@ npm run seed:turboly -- ./turboly-export.json    # on the VM or locally against 
 - **Sandbox first.** Keep `TURBOLY_BASE_URL=https://sandbox.turboly.com` until a full
   run is verified, then switch to production.
 - **2FA:** the headless VM can't solve OTP — use a Turboly service account without 2FA,
-  or do an interactive `login:turboly` once and copy the saved `.turboly-state/` up to
-  the VM (session reuse).
-- **Static IP** is the reason to prefer this over GitHub Actions: Turboly + Atlas see one
-  consistent address you can allowlist, and it's defensible automation.
-- Free limits: Oracle Always Free ARM is genuinely always-on. Atlas M0 = 512 MB (plenty
-  for years of SPKs). Vercel Hobby = fine for internal use.
+  or do an interactive `login:turboly` once on your laptop and copy the saved
+  `.turboly-state/` up (`gcloud`/browser-SSH file upload) for session reuse.
+- **Memory:** e2-micro has 1 GB RAM; the setup script adds 2 GB swap so headless Chromium
+  runs comfortably for serial (one-at-a-time) pushes — which is exactly how the RPA works.
+- **Free limits:** Google Cloud e2-micro is Always Free **forever** (no 12-month clock) in
+  us-west1 / us-central1 / us-east1. Atlas M0 = 512 MB (plenty for years of SPKs).
+  Vercel Hobby = fine for internal use. 1 GB/mo egress is far more than this worker uses.

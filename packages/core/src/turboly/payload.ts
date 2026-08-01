@@ -13,17 +13,30 @@ export interface ResolveInput {
   planServiceTime?: string;
 }
 
-/** Format an ISO instant as DD-MM-YYYY in WIB (matches Indonesian date fields). */
+/** Format an ISO instant as YYYY-MM-DD in WIB (Turboly's #service-date field format). */
 export function formatDateWib(iso: string): string {
   const d = new Date(new Date(iso).getTime() + 7 * 3600 * 1000);
   const dd = String(d.getUTCDate()).padStart(2, '0');
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  return `${dd}-${mm}-${d.getUTCFullYear()}`;
+  return `${d.getUTCFullYear()}-${mm}-${dd}`;
 }
 
 export function formatTimeWib(iso: string): string {
   const d = new Date(new Date(iso).getTime() + 7 * 3600 * 1000);
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * A guaranteed-future plan date/time in WIB, derived from the real clock.
+ * Turboly rejects a Service Order whose Plan Service Time is not greater than
+ * the current server time, so a walk-in SPK (plan == "now") must be nudged
+ * forward by a small buffer. Date + time come from the same instant so they
+ * stay consistent across a midnight rollover. This is impure by design — the
+ * caller (the worker) owns the side effect; buildTurbolyPayload stays pure.
+ */
+export function planFromNowWib(bufferMinutes = 30): { date: string; time: string } {
+  const iso = new Date(Date.now() + bufferMinutes * 60 * 1000).toISOString();
+  return { date: formatDateWib(iso), time: formatTimeWib(iso) };
 }
 
 /**
@@ -70,6 +83,7 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     spkId: doc._id,
     correlationToken: doc.push.correlationToken,
     storeName: store.turbolyStoreName,
+    storeTurbolyId: store.turbolyStoreId,
     type: 'General',
     customer: customerExisting
       ? { existingQuery: customerExisting, create: null }

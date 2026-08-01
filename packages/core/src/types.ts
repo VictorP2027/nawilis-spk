@@ -206,6 +206,8 @@ export type FailureClass = 'transient' | 'auth' | 'data' | 'structural' | 'infra
 export interface TurbolyReadback {
   serviceOrderNo: string | null;
   workOrderNo: string | null;
+  /** Absolute URL of the created SO detail page, captured on save for direct read-back. */
+  serviceOrderUrl?: string | null;
   readback: {
     matchedOn: string[];
     lineCount: number | null;

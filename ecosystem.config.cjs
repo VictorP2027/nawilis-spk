@@ -5,16 +5,20 @@
  *   pm2 start ecosystem.config.cjs
  *   pm2 save && pm2 startup   # survive reboots
  *   pm2 logs spk-worker       # watch it
+ *
+ * Runs the Redis-free push loop (apps/worker/dist/push-loop.js): polls Atlas
+ * for `queued` SPKs and pushes+verifies each to Turboly. No Redis needed.
+ * Env is loaded from the repo-root .env by the worker itself (config.ts).
  */
 module.exports = {
   apps: [
     {
       name: 'spk-worker',
-      script: 'apps/worker/dist/index.js',
+      script: 'apps/worker/dist/push-loop.js',
       cwd: __dirname,
       instances: 1,
       autorestart: true,
-      max_memory_restart: '700M', // headless Chromium is memory-hungry
+      max_memory_restart: '1500M', // headless Chromium is memory-hungry (use A1.Flex 6GB+)
       env: { NODE_ENV: 'production' },
     },
   ],

@@ -9,6 +9,7 @@ export interface TurbolyServiceOrderPayload {
   spkId: string;
   correlationToken: string;
   storeName: string;
+  storeTurbolyId: string; // numeric option value for <select id="store-id">, e.g. "8339"
   type: string; // default "General"
   customer: { existingQuery: string | null; create: { nama: string; phone: string; alamat: string } | null };
   vehicleRegistration: string; // display plate, matching Turboly spacing
@@ -49,6 +50,8 @@ export interface PushResult {
   /** Turboly's generated Service Order document number, captured on save. */
   serviceOrderNo: string | null;
   workOrderNo: string | null;
+  /** Absolute URL of the created SO detail page (for direct, independent read-back). */
+  serviceOrderUrl?: string | null;
   /** What the read-back verified against. */
   verified: {
     matchedOn: string[];

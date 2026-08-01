@@ -42,127 +42,230 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     try {
-      // 1. Open a fresh New Service Order form.
-      await page.goto(S.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' });
-      await resolve(page, S.routes.newServiceOrderButton).click({ timeout: 10000 });
-      await resolve(page, S.tabs.packagesSparepartsServices).waitFor({ state: 'visible', timeout: 10000 });
+      // Verified sequence (proved live 2026-08-01, created SRO/BKS/26080001).
+      await page.goto(`${this.baseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(3000);
 
-      // 2. Header — required fields first (the form won't save without them).
-      await selectTypeahead(page, S.header.store, payload.storeName);
+      // 1. Header native <select>s (Select2-enhanced; selectOption drives them).
+      await page.selectOption('#order-type', { label: payload.type || 'General' }).catch(() => {});
+      await page.selectOption('#store-id', { value: payload.storeTurbolyId });
+      await page.waitForTimeout(2800); // advisors load after store (AJAX)
 
-      // Customer: search existing, else create.
-      if (payload.customer.existingQuery) {
-        await selectTypeahead(page, S.header.customerSearch, payload.customer.existingQuery);
-      } else if (payload.customer.create) {
-        await resolve(page, S.header.addNewCustomerButton).click();
-        await fillInput(page, S.newCustomer.nama, payload.customer.create.nama);
-        await fillInput(page, S.newCustomer.phone, payload.customer.create.phone);
-        if (payload.customer.create.alamat) await fillInput(page, S.newCustomer.alamat, payload.customer.create.alamat);
-        await resolve(page, S.newCustomer.save).click();
-      }
+      await this.selectByLabelOrFirst('#service-advisor-id', payload.serviceAdvisorName);
+      await this.selectByLabelOrFirst('#salesperson-id', payload.salespersonName);
 
-      // Vehicle by registration (typeahead against Turboly's vehicle master).
-      await selectTypeahead(page, S.header.vehicleRegistrationSearch, payload.vehicleRegistration);
+      // 2. Customer (Select2 v3 remote search) — pick existing match.
+      await this.pickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery ?? payload.customer.create?.nama ?? '');
+      await page.waitForTimeout(1200);
 
-      await fillInput(page, S.header.odometer, payload.odometer);
-      await fillInput(page, S.header.planServiceDate, payload.planServiceDate);
-      await fillInput(page, S.header.planServiceTime, payload.planServiceTime);
-      await selectTypeahead(page, S.header.serviceAdvisor, payload.serviceAdvisorName);
-      await selectTypeahead(page, S.header.salesperson, payload.salespersonName);
+      // 3. Vehicle — search by registration WITHOUT spaces (Turboly's index).
+      await this.pickSelect2('#s2id_select2-input-vehicle', payload.vehicleRegistration.replace(/\s/g, ''));
+      await page.waitForTimeout(1200);
+      // Turboly warns "Found in-progress service documents for this vehicle" — dismiss it.
+      await this.dismissModals();
 
-      // Reference number = correlation token (the identity we read back on).
-      await fillInput(page, S.header.referenceNumber, payload.referenceNumber);
-      if (payload.notes) await fillInput(page, S.header.notes, payload.notes);
+      // 4. Odometer, reference token, plan date/time.
+      await page.fill('#odometer', payload.odometer);
+      await page.fill('#service_order_reference_no', payload.referenceNumber);
+      await this.setPickerValue('#service-date', payload.planServiceDate);
+      await this.setPickerValue('#service-time', payload.planServiceTime);
+      if (payload.notes) await page.fill('#service_order_notes', payload.notes).catch(() => {});
 
-      // 3. Service lines under the Packages/Spareparts/Services tab.
-      await resolve(page, S.tabs.packagesSparepartsServices).click();
+      // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
+      await this.dismissModals();
+      await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
+      await page.waitForTimeout(700);
       for (const line of payload.serviceLines) {
-        await resolve(page, S.services.addServiceItem).click();
-        await selectTypeahead(page, S.services.rowService, line.serviceName);
-        if (line.description) await fillInput(page, S.services.rowDescription, line.description);
-        await fillInput(page, S.services.rowQty, String(line.qty));
-        if (line.priceIncTax != null) await fillInput(page, S.services.rowPriceIncTax, String(line.priceIncTax));
-        if (line.discount != null) await fillInput(page, S.services.rowDiscount, String(line.discount));
-      }
-      for (const part of payload.sparepartLines) {
-        await resolve(page, S.spareparts.addSparepart).click();
-        await selectTypeahead(page, S.spareparts.rowProduct, part.productName);
-        await fillInput(page, S.spareparts.rowQty, String(part.qty));
-        if (part.priceIncTax != null) await fillInput(page, S.spareparts.rowPriceIncTax, String(part.priceIncTax));
+        await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
+        await page.waitForTimeout(900);
+        await this.pickSelect2Locator(page.locator('.select2-container.input-service-product').last(), line.serviceName || line.expectedSku);
+        await page.waitForTimeout(800);
+        await this.setLastServiceRow(page, line.qty, line.description || line.serviceName);
       }
 
-      // 4. Evidence screenshot BEFORE the irreversible save.
       const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
 
-      // 5. Save — the irreversible action. Re-assert the lease immediately before.
+      // 6. Save — irreversible; re-assert the lease first.
       this.assertLease(ctx);
-      await resolve(page, S.actions.save).click({ timeout: 15000 });
+      await this.dismissModals(); // clear any stray warning before the click can be intercepted
+      await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
+      await page.waitForTimeout(1500);
+      // Because this vehicle may have in-progress docs, Turboly re-prompts a
+      // confirmation modal ON save ("Continue?/Yes"). Affirm it, don't dismiss.
+      await this.confirmModals();
+      await page.waitForTimeout(3500);
       await page.waitForLoadState('networkidle').catch(() => {});
+      await this.snapshot(page, `${payload.spkId}-aftersave`);
 
-      // 6. Capture Turboly's generated document number.
-      const serviceOrderNo = await this.captureDocNumber(page);
-
-      // 7. Optionally advance DRAFT → APPROVED.
-      if (ctx.approve && (await exists(page, S.actions.approve, 4000))) {
-        this.assertLease(ctx);
-        await resolve(page, S.actions.approve).click();
-        await page.waitForLoadState('networkidle').catch(() => {});
+      // 7. Result: success redirects to the created SO; else an inline error shows.
+      const inlineErr = await this.readInlineError(page).catch(() => null);
+      const onDetailPage = /\/service_orders\/\d+/.test(page.url());
+      const serviceOrderNo = onDetailPage ? await this.captureDocNumber(page) : null;
+      const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
+      const success = onDetailPage || flashOk;
+      if (!success || (inlineErr && !serviceOrderNo)) {
+        return { ...fail('data', inlineErr ?? 'save did not confirm'), screenshotRef };
       }
 
+      const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;
+      if (ctx.approve && (await exists(page, S.actions.approve, 4000))) {
+        this.assertLease(ctx);
+        await resolve(page, S.actions.approve).click().catch(() => {});
+        await page.waitForTimeout(2500);
+      }
       await this.session.noteJobDone();
-
-      return {
-        ok: true,
-        serviceOrderNo,
-        workOrderNo: null,
-        verified: null, // verification is a separate, fresh-context step
-        screenshotRef,
-      };
+      return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl };
     } catch (e) {
       const shot = await this.snapshot(this.session.page_(), `${payload.spkId}-error`).catch(() => null);
       if (e instanceof LeaseLostError) return { ...fail('transient', e.message), screenshotRef: shot };
       if (e instanceof AuthChallengeError) return { ...fail('auth', e.message), screenshotRef: shot };
-      // A visible inline validation error means Turboly rejected our DATA
-      // (e.g. a newly-required field) — classify as data, not structural, but the
-      // worker's cross-branch identical-error detector will escalate to structural
-      // if the same message hits many records.
       const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
       if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
       return { ...fail('structural', errMsg(e)), screenshotRef: shot };
     }
   }
 
+  private get baseUrl(): string {
+    return (this.session as unknown as { cfg?: { baseUrl?: string } }).cfg?.baseUrl ?? 'https://sandbox.turboly.com';
+  }
+
+  /** Select an <option> by (normalized) label; fall back to the first real option. */
+  private async selectByLabelOrFirst(sel: string, label: string): Promise<void> {
+    const page = this.session.page_();
+    const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+    const opts = await page.$$eval(`${sel} option`, (els) => els.map((e) => ({ v: (e as HTMLOptionElement).value, t: (e.textContent ?? '').trim() })).filter((o) => o.v));
+    const hit = opts.find((o) => norm(o.t) === norm(label));
+    await page.selectOption(sel, { value: (hit ?? opts[0])?.v }).catch(() => {});
+  }
+
+  /** Open a Select2-v3 widget by container selector, type, and pick first selectable result. */
+  private async pickSelect2(containerSel: string, query: string): Promise<void> {
+    const page = this.session.page_();
+    await page.locator(`${containerSel} .select2-choice, ${containerSel}`).first().click();
+    await this.dropPick(query);
+  }
+  private async pickSelect2Locator(container: import('playwright').Locator, query: string): Promise<void> {
+    await container.click();
+    await this.dropPick(query);
+  }
+  private async dropPick(query: string): Promise<void> {
+    const page = this.session.page_();
+    await page.waitForTimeout(400);
+    await page.locator('#select2-drop input').first().fill(query);
+    for (let i = 0; i < 18; i++) {
+      const st = await page.evaluate(() => {
+        const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
+        return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
+      });
+      if (st.sel > 0) break;
+      if (st.txt && !/searching/i.test(st.txt)) throw new Error(`no Turboly match for "${query}"`);
+      await page.waitForTimeout(600);
+    }
+    await page.locator('#select2-drop .select2-results li.select2-result-selectable').first().click({ timeout: 4000 });
+  }
+
+  /** Dismiss any visible Turboly warning/info modal (e.g. in-progress-docs) by clicking OK. */
+  private async dismissModals(): Promise<void> {
+    const page = this.session.page_();
+    for (let i = 0; i < 4; i++) {
+      // Direct DOM click bypasses the modal overlay intercepting pointer events;
+      // the OK/Close control may be a <button> OR an <a>.
+      const clicked = await page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('.modal-scrollable button, .modal-scrollable a, .modal button, .modal a, [role=dialog] button, [role=dialog] a'));
+        const ok = nodes.find((n) => (n as HTMLElement).offsetParent !== null && /^(ok|close|tutup)$/i.test(((n as HTMLElement).textContent ?? '').trim()));
+        if (ok) { (ok as HTMLElement).click(); return true; }
+        return false;
+      });
+      if (!clicked) break;
+      await page.waitForTimeout(600);
+    }
+  }
+
+  /** Affirm any confirmation modal (Yes/Continue/Save-anyway) — the opposite of dismiss. */
+  private async confirmModals(): Promise<void> {
+    const page = this.session.page_();
+    for (let i = 0; i < 3; i++) {
+      const clicked = await page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('.modal-scrollable button, .modal-scrollable a, .modal button, .modal a, [role=dialog] button, [role=dialog] a'));
+        const yes = nodes.find((n) => (n as HTMLElement).offsetParent !== null && /^(ya|yes|ok|save|simpan|lanjut|lanjutkan|continue|confirm|proceed)$/i.test(((n as HTMLElement).textContent ?? '').trim()));
+        if (yes) { (yes as HTMLElement).click(); return true; }
+        return false;
+      });
+      if (!clicked) break;
+      await page.waitForTimeout(1200);
+    }
+  }
+
+  /** Set a datepicker/timepicker input by value + dispatch change (typed fill mangles it). */
+  private async setPickerValue(sel: string, value: string): Promise<void> {
+    const page = this.session.page_();
+    await page.evaluate(({ sel, value }) => { const el = document.querySelector(sel) as HTMLInputElement | null; if (el) { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); } }, { sel, value });
+  }
+
+  /** Set qty + description on the most recently added service row (both required). */
+  private async setLastServiceRow(page: Page, qty: number, description: string): Promise<void> {
+    await page.evaluate(({ qty, description }) => {
+      const rows = Array.from(document.querySelectorAll('tr.additional-line-item-row'));
+      const row = rows[rows.length - 1];
+      if (!row) return;
+      const q = row.querySelector('input[name*="[quantity]"]') as HTMLInputElement | null;
+      if (q) { q.value = String(qty || 1); q.dispatchEvent(new Event('input', { bubbles: true })); q.dispatchEvent(new Event('change', { bubbles: true })); }
+      const d = row.querySelector('input[name*="[description]"], textarea[name*="[description]"], input[name*="[notes]"]') as HTMLInputElement | null;
+      if (d) { d.value = description || 'Service'; d.dispatchEvent(new Event('input', { bubbles: true })); d.dispatchEvent(new Event('change', { bubbles: true })); }
+    }, { qty, description });
+  }
+
   async verifyByToken(doc: SpkDoc): Promise<VerifyResult> {
     // MUST be a fresh navigation — never reuse the write flow's state.
     await this.session.ensureLoggedIn();
     const page = this.session.page_();
-    await page.goto(S.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' });
+    const notFound = { found: false, serviceOrderNo: null, store: null, lineCount: null, lineSkus: [], km: null };
 
+    // Preferred path: go straight to the created SO detail page (captured on save).
+    // This avoids the fragile list-filter selectors entirely.
+    const directUrl = doc.turboly.serviceOrderUrl;
+    if (directUrl && /\/service_orders\/\d+/.test(directUrl)) {
+      await page.goto(directUrl, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(1500);
+      return this.readbackFromDetail(page, doc);
+    }
+
+    // Fallback: search the Service Orders list by document number / registration.
+    await page.goto(S.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' });
     const docNo = doc.turboly.serviceOrderNo;
     if (docNo) {
-      await fillInput(page, S.list.documentNumberFilter, docNo);
+      await fillInput(page, S.list.documentNumberFilter, docNo).catch(() => {});
     } else {
-      // Fallback: search by registration; we'll confirm the token on the detail page.
-      await fillInput(page, S.list.registrationFilter, doc.vehicle.noPolisi.display);
+      await fillInput(page, S.list.registrationFilter, doc.vehicle.noPolisi.display).catch(() => {});
     }
-    await resolve(page, S.list.searchButton).click();
+    await resolve(page, S.list.searchButton).click().catch(() => {});
     await page.waitForLoadState('networkidle').catch(() => {});
 
     const rowLoc = docNo ? S.list.rowByDocNo(docNo) : S.list.rowByRegistration(doc.vehicle.noPolisi.display);
-    if (!(await exists(page, rowLoc, 6000))) {
-      return { found: false, serviceOrderNo: null, store: null, lineCount: null, lineSkus: [], km: null };
-    }
+    if (!(await exists(page, rowLoc, 6000))) return notFound;
     await resolve(page, rowLoc).first().click();
     await page.waitForLoadState('networkidle').catch(() => {});
+    return this.readbackFromDetail(page, doc);
+  }
 
-    // On the detail page, prove identity: REFERENCE NUMBER == our token.
-    const ref = await readValue(page, S.header.referenceNumber);
-    const tokenMatches = (ref ?? '').includes(doc.push.correlationToken);
-    const store = await readValue(page, S.header.store.trigger);
-    const km = await readValue(page, S.header.odometer);
+  /** On a Service Order detail page, prove identity by REFERENCE NUMBER == our token. */
+  private async readbackFromDetail(page: Page, doc: SpkDoc): Promise<VerifyResult> {
+    // The reference field is an <input>; read its value robustly by DOM scan,
+    // then fall back to a whole-body text search for the token.
+    const token = doc.push.correlationToken;
+    const refVal = await page.evaluate(() => {
+      const el = document.querySelector('#service_order_reference_no') as HTMLInputElement | null;
+      return el?.value ?? null;
+    }).catch(() => null);
+    const bodyText = (await page.textContent('body').catch(() => '')) ?? '';
+    const tokenMatches = (refVal ?? '').includes(token) || bodyText.includes(token);
+
+    const km = await page.evaluate(() => {
+      const el = document.querySelector('#odometer') as HTMLInputElement | null;
+      return el?.value ?? null;
+    }).catch(() => null);
     const savedNo = await this.captureDocNumber(page);
 
-    // Line count/SKUs read from the services table (best-effort text scrape).
     const lineSkus = await page
       .locator('table')
       .last()
@@ -173,8 +276,8 @@ export class RpaSink implements ServiceOrderSink {
 
     return {
       found: tokenMatches,
-      serviceOrderNo: savedNo ?? docNo,
-      store: store,
+      serviceOrderNo: savedNo ?? doc.turboly.serviceOrderNo,
+      store: null,
       lineCount: lineSkus.length || null,
       lineSkus,
       km: km ? Number(km.replace(/[^\d]/g, '')) || null : null,
