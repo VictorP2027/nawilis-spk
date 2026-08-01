@@ -135,32 +135,46 @@ export default function Sheet() {
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
 
-    // Pre-submit warning popup: list every problem, let staff fix or continue anyway.
+    // Pre-submit checks. The confirm popup appears ONLY when something is off —
+    // a value outside its expected boundary or another warning. Clean SPKs send silently.
     const warns: string[] = [];
     const plateNorm = noPol.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (!plateNorm || !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm)) warns.push('No. Polisi tidak valid (contoh: B 1234 XYZ)');
     if (!nama.trim()) warns.push('Nama customer kosong');
     if (jobLines.length === 0) warns.push('Belum ada pekerjaan yang dipilih');
-    if (!km.trim() || !/\d/.test(km)) warns.push('KM kosong / tidak terbaca');
+    // Number boundaries
+    const kmVal = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '').replace(/,/g, '')) : NaN;
+    if (!km.trim() || Number.isNaN(kmVal)) warns.push('KM kosong / tidak terbaca');
+    else if (kmVal < 0) warns.push('KM negatif');
+    else if (kmVal > 2_000_000) warns.push(`KM ${kmVal.toLocaleString('id-ID')} sangat tinggi — periksa`);
+    const yearNow = new Date().getFullYear();
+    if (tahun && (Number(tahun) < 1950 || Number(tahun) > yearNow + 1)) warns.push(`Tahun ${tahun} di luar batas wajar (1950–${yearNow + 1})`);
+    // KM vs previous visit (expected boundary: never lower than last recorded)
+    if (plateNorm && !Number.isNaN(kmVal)) {
+      try {
+        const v = await fetch(`/api/vehicle?plate=${encodeURIComponent(plateNorm)}`).then((r) => r.json());
+        if (v?.vehicle?.lastKm != null && kmVal < v.vehicle.lastKm) {
+          warns.push(`KM ${kmVal.toLocaleString('id-ID')} LEBIH KECIL dari kunjungan sebelumnya (${Number(v.vehicle.lastKm).toLocaleString('id-ID')})`);
+        }
+      } catch { /* history unavailable — server still checks */ }
+    }
     if (makeUnknown) warns.push(`Merk "${merk.trim()}" tidak ada di katalog Turboly (mobil baru akan gagal dibuat)`);
     if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
     if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
-    // ALWAYS confirm before sending — a clean SPK shows its summary; a
-    // problematic one shows the warning list. Cancel returns to the form.
-    const branchName = BRANCHES.find((b) => b.code === branch)?.name ?? branch;
-    const jobNames = SERVICES.filter((s) => pk[s.code]!.order).map((s) => s.label).join(', ');
-    const summary = [
-      `Customer : ${nama.trim() || '—'}`,
-      `No. Polisi: ${noPol.trim() || '—'}`,
-      `KM       : ${km.trim() || '—'}`,
-      `Pekerjaan: ${jobNames || '—'} (${jobLines.length})`,
-      `Advisor  : ${menerima.trim() || '—'}`,
-      `Cabang   : ${branchName}`,
-    ].join('\n');
-    const msg = warns.length > 0
-      ? `⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\n${summary}\n\nTetap simpan & kirim ke Turboly?`
-      : `KONFIRMASI KIRIM:\n\n${summary}\n\nSimpan & kirim ke Turboly?`;
-    if (!window.confirm(msg)) { setSubmitting(false); return; }
+    if (warns.length > 0) {
+      const branchName = BRANCHES.find((b) => b.code === branch)?.name ?? branch;
+      const jobNames = SERVICES.filter((s) => pk[s.code]!.order).map((s) => s.label).join(', ');
+      const summary = [
+        `Customer : ${nama.trim() || '—'}`,
+        `No. Polisi: ${noPol.trim() || '—'}`,
+        `KM       : ${km.trim() || '—'}`,
+        `Pekerjaan: ${jobNames || '—'} (${jobLines.length})`,
+        `Advisor  : ${menerima.trim() || '—'}`,
+        `Cabang   : ${branchName}`,
+      ].join('\n');
+      const ok = window.confirm(`⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\n${summary}\n\nTetap simpan & kirim ke Turboly?`);
+      if (!ok) { setSubmitting(false); return; }
+    }
 
     const res = await submitOrQueue(uploadId, payload);
     if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
