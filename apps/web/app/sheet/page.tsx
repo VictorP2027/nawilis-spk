@@ -221,25 +221,36 @@ export default function Sheet() {
           <div>
             <div className="box" style={{ height: '100%' }}>
               <div style={{ fontSize: 9, fontWeight: 700, marginBottom: 2 }}>Pengecekan bodi — klik bagian yang rusak:</div>
-              <svg className="car" viewBox="0 0 200 300" height="300" style={{ display: 'block', margin: '0 auto' }}>
-                {/* wheels (decoration) */}
-                {[[16, 40], [170, 40], [16, 214], [170, 214]].map(([wx, wy], i) => (
-                  <rect key={i} x={wx} y={wy} width="14" height="46" rx="5" fill="#3a3a3a" />
+              <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
+                {/* tyre discs behind the clickable wheel zones */}
+                {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
+                  <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
                 ))}
                 {/* car body outline */}
-                <rect x="34" y="6" width="132" height="262" rx="30" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
-                {/* clickable zones */}
-                {DAMAGE_ZONES.map((z) => (
-                  <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
-                    <rect className={`zone ${dmg.has(z.code) ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="3">
-                      <title>{z.label}</title>
-                    </rect>
-                    <text x={z.x + z.w / 2} y={z.y + z.h / 2 + 3} textAnchor="middle" fontSize="7" fill="#555" pointerEvents="none">{z.abbr}</text>
-                  </g>
-                ))}
-                {/* X marks on damaged zones */}
-                {[...dmg].map((z) => { const d = DAMAGE_ZONES.find((x) => x.code === z)!; return <text key={z} x={d.x + d.w / 2} y={d.y + d.h / 2 + 6} textAnchor="middle" fontSize="16" fill="#1763d6" fontWeight="900" pointerEvents="none">✕</text>; })}
-                <text x="100" y="300" textAnchor="middle" fontSize="7" fill="#888">DEPAN ↑</text>
+                <rect x="80" y="8" width="200" height="500" rx="34" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
+                {/* clickable zones (rects + wheel circles) */}
+                {DAMAGE_ZONES.map((z) => {
+                  const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
+                  const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
+                  const on = dmg.has(z.code);
+                  return (
+                    <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
+                      {z.shape === 'circle' ? (
+                        <circle className={`zone ${on ? 'on' : ''}`} cx={z.cx} cy={z.cy} r={z.r}><title>{z.label}</title></circle>
+                      ) : (
+                        <rect className={`zone ${on ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="2"><title>{z.label}</title></rect>
+                      )}
+                      <text x={cx} y={cy + 3} textAnchor="middle" fontSize="8" fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
+                      {on && <text x={cx} y={cy + 6} textAnchor="middle" fontSize="17" fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
+                    </g>
+                  );
+                })}
+                {/* emblem L/R markers + orientation */}
+                <text x="90" y="39" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">L</text>
+                <text x="270" y="39" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">R</text>
+                <text x="90" y="473" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">L</text>
+                <text x="270" y="473" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">R</text>
+                <text x="180" y="518" textAnchor="middle" fontSize="10" fill="#888" pointerEvents="none">↑ DEPAN</text>
               </svg>
               <div className="fld" style={{ marginTop: 4 }}><label style={{ fontSize: 10 }}>Estimasi (menit)</label><input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" /></div>
             </div>

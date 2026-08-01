@@ -35,20 +35,53 @@ export const CONDITION_ITEMS: ReadonlyArray<{ code: string; label: string; marks
  * mirrors the paper SPK layout. viewBox is 0 0 200 300; body spans x34..166.
  * `t` centers the label text.
  */
-export const DAMAGE_ZONES: ReadonlyArray<{ code: string; label: string; x: number; y: number; w: number; h: number; abbr: string }> = [
-  { code: 'BUMPER_DEPAN', label: 'Bumper Depan', abbr: 'BUMPER', x: 44, y: 8, w: 112, h: 14 },
-  { code: 'KAP_MESIN', label: 'Kap Mesin', abbr: 'KAP MESIN', x: 44, y: 24, w: 112, h: 40 },
-  { code: 'KACA_DEPAN', label: 'Kaca Depan', abbr: 'KACA', x: 54, y: 66, w: 92, h: 22 },
-  { code: 'SPAKBOR_KIRI_DPN', label: 'Spakbor Kiri Depan', abbr: 'SPKB', x: 34, y: 66, w: 18, h: 22 },
-  { code: 'SPAKBOR_KANAN_DPN', label: 'Spakbor Kanan Depan', abbr: 'SPKB', x: 148, y: 66, w: 18, h: 22 },
-  { code: 'PINTU_KIRI', label: 'Pintu Kiri', abbr: 'PINTU', x: 34, y: 90, w: 20, h: 96 },
-  { code: 'ATAP', label: 'Atap', abbr: 'ATAP', x: 56, y: 90, w: 88, h: 96 },
-  { code: 'PINTU_KANAN', label: 'Pintu Kanan', abbr: 'PINTU', x: 146, y: 90, w: 20, h: 96 },
-  { code: 'KACA_BELAKANG', label: 'Kaca Belakang', abbr: 'KACA', x: 54, y: 188, w: 92, h: 22 },
-  { code: 'SPAKBOR_KIRI_BLK', label: 'Spakbor Kiri Belakang', abbr: 'SPKB', x: 34, y: 188, w: 18, h: 22 },
-  { code: 'SPAKBOR_KANAN_BLK', label: 'Spakbor Kanan Belakang', abbr: 'SPKB', x: 148, y: 188, w: 18, h: 22 },
-  { code: 'BAGASI', label: 'Bagasi / Body Belakang', abbr: 'BAGASI', x: 44, y: 212, w: 112, h: 40 },
-  { code: 'BUMPER_BELAKANG', label: 'Bumper Belakang', abbr: 'BUMPER', x: 44, y: 254, w: 112, h: 14 },
+/**
+ * Body-inspection zones, laid out to match the printed Nawilis SPK top-view
+ * diagram (viewBox 360×520). Rectangles use x/y/w/h; the 4 wheels use shape:'circle'
+ * with cx/cy/r so ban/velg are selectable too.
+ */
+export type DamageZone = { code: string; label: string; abbr: string } & (
+  | { shape?: 'rect'; x: number; y: number; w: number; h: number }
+  | { shape: 'circle'; cx: number; cy: number; r: number }
+);
+
+export const DAMAGE_ZONES: ReadonlyArray<DamageZone> = [
+  // ── Front ──
+  { code: 'BUMPER_DEPAN', label: 'Bumper Depan', abbr: 'BUMPER', x: 80, y: 10, w: 200, h: 16 },
+  { code: 'LAMBANG_DEPAN', label: 'Lambang Depan (L/R)', abbr: 'LAMBANG', x: 104, y: 28, w: 152, h: 14 },
+  { code: 'GRILL', label: 'Grill', abbr: 'GRILL', x: 120, y: 44, w: 120, h: 18 },
+  { code: 'KAP_MESIN', label: 'Kap Mesin', abbr: 'KAP MESIN', x: 112, y: 64, w: 136, h: 42 },
+  { code: 'BODY_DEPAN', label: 'Body Depan', abbr: 'BODY DEPAN', x: 90, y: 108, w: 180, h: 16 },
+  // ── Fenders (spakbor) ──
+  { code: 'SPAKBOR_DEPAN_KIRI', label: 'Spakbor Depan Kiri', abbr: 'SPKB', x: 80, y: 58, w: 16, h: 48 },
+  { code: 'SPAKBOR_DEPAN_KANAN', label: 'Spakbor Depan Kanan', abbr: 'SPKB', x: 264, y: 58, w: 16, h: 48 },
+  { code: 'SPAKBOR_BELAKANG_KIRI', label: 'Spakbor Belakang Kiri', abbr: 'SPKB', x: 80, y: 402, w: 16, h: 48 },
+  { code: 'SPAKBOR_BELAKANG_KANAN', label: 'Spakbor Belakang Kanan', abbr: 'SPKB', x: 264, y: 402, w: 16, h: 48 },
+  // ── Wheels (ban + velg) — clickable circles ──
+  { code: 'RODA_DEPAN_KIRI', label: 'Roda Depan Kiri (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 40, cy: 70, r: 27 },
+  { code: 'RODA_DEPAN_KANAN', label: 'Roda Depan Kanan (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 320, cy: 70, r: 27 },
+  { code: 'RODA_BELAKANG_KIRI', label: 'Roda Belakang Kiri (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 40, cy: 450, r: 27 },
+  { code: 'RODA_BELAKANG_KANAN', label: 'Roda Belakang Kanan (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 320, cy: 450, r: 27 },
+  // ── Cabin: glass ──
+  { code: 'KACA_DEPAN', label: 'Kaca Depan', abbr: 'KACA', x: 122, y: 126, w: 116, h: 30 },
+  { code: 'KACA_KIRI_1', label: 'Kaca Samping Kiri 1', abbr: 'KACA', x: 110, y: 160, w: 18, h: 44 },
+  { code: 'KACA_KIRI_2', label: 'Kaca Samping Kiri 2', abbr: 'KACA', x: 110, y: 208, w: 18, h: 44 },
+  { code: 'KACA_KIRI_3', label: 'Kaca Samping Kiri 3', abbr: 'KACA', x: 110, y: 280, w: 18, h: 44 },
+  { code: 'KACA_KANAN_1', label: 'Kaca Samping Kanan 1', abbr: 'KACA', x: 232, y: 160, w: 18, h: 44 },
+  { code: 'KACA_KANAN_2', label: 'Kaca Samping Kanan 2', abbr: 'KACA', x: 232, y: 208, w: 18, h: 44 },
+  { code: 'KACA_KANAN_3', label: 'Kaca Samping Kanan 3', abbr: 'KACA', x: 232, y: 280, w: 18, h: 44 },
+  { code: 'KACA_BELAKANG', label: 'Kaca Belakang', abbr: 'KACA', x: 122, y: 340, w: 116, h: 30 },
+  // ── Cabin: doors / roof / trim ──
+  { code: 'PINTU_DEPAN_KIRI', label: 'Pintu Depan Kiri', abbr: 'PINTU', x: 82, y: 160, w: 26, h: 96 },
+  { code: 'PINTU_BELAKANG_KIRI', label: 'Pintu Belakang Kiri', abbr: 'PINTU', x: 82, y: 258, w: 26, h: 96 },
+  { code: 'PINTU_DEPAN_KANAN', label: 'Pintu Depan Kanan', abbr: 'PINTU', x: 252, y: 160, w: 26, h: 96 },
+  { code: 'PINTU_BELAKANG_KANAN', label: 'Pintu Belakang Kanan', abbr: 'PINTU', x: 252, y: 258, w: 26, h: 96 },
+  { code: 'ATAP', label: 'Atap', abbr: 'ATAP', x: 132, y: 196, w: 96, h: 140 },
+  { code: 'LIST_KIRI', label: 'List Kiri', abbr: 'LIST', x: 76, y: 250, w: 6, h: 20 },
+  { code: 'LIST_KANAN', label: 'List Kanan', abbr: 'LIST', x: 278, y: 250, w: 6, h: 20 },
+  // ── Rear ──
+  { code: 'LAMBANG_BELAKANG', label: 'Lambang Belakang (L/R)', abbr: 'LAMBANG', x: 104, y: 462, w: 152, h: 14 },
+  { code: 'BUMPER_BELAKANG', label: 'Bumper Belakang', abbr: 'BUMPER', x: 80, y: 486, w: 200, h: 16 },
 ];
 
 export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILIS' | 'QUICKSERV' }> = [
