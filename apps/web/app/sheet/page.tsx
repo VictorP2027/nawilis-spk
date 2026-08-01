@@ -187,34 +187,35 @@ export default function Sheet() {
           <div>
             <table className="pk">
               <thead>
-                <tr><th style={{ width: 18 }}>#</th><th>PEKERJAAN</th><th style={{ width: 42 }}>ORDER</th><th>KETERANGAN</th><th style={{ width: 40 }}>MK</th><th style={{ width: 44 }}>WAKTU</th></tr>
+                <tr><th className="col-num" style={{ width: 18 }}>#</th><th>PEKERJAAN</th><th style={{ width: 42 }}>ORDER</th><th>KETERANGAN</th><th className="col-mk" style={{ width: 40 }}>MK</th><th className="col-waktu" style={{ width: 44 }}>WAKTU</th></tr>
               </thead>
               <tbody>
                 {SERVICES.map((s, i) => {
                   const r = pk[s.code]!;
                   return (
-                    <tr key={s.code}>
-                      <td style={{ textAlign: 'center' }}>{i + 1}</td>
-                      <td className="svc">{s.label.toUpperCase()}</td>
-                      <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    <tr key={s.code} className={r.order ? 'row-on' : ''}>
+                      <td className="col-num" style={{ textAlign: 'center' }}>{i + 1}</td>
+                      <td className="svc" onClick={() => setRow(s.code, { order: !r.order })}>{s.label.toUpperCase()}</td>
+                      <td className="tick-cell" style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                         <span className={`tick ${r.order ? 'on' : ''}`} onClick={() => setRow(s.code, { order: !r.order })}>{r.order ? '✓' : '▢'}</span>
-                        {r.order && <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />}
+                        {r.order && <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} className="qty" style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />}
                       </td>
-                      <td>
+                      <td className="ket-cell">
                         {r.order && svcOpts[s.code]?.options?.length ? (
                           <select value={r.sku || svcOpts[s.code]!.defaultSku} onChange={(e) => setRow(s.code, { sku: e.target.value })} style={{ width: '100%', marginBottom: 3, fontSize: 11 }}>
                             {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                           </select>
                         ) : null}
-                        <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />
+                        {r.order && <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
+                        {!r.order && <input className="ket-idle" type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
                       </td>
-                      <td><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>
-                      <td><input type="text" value={r.waktu} onChange={(e) => setRow(s.code, { waktu: e.target.value })} /></td>
+                      <td className="col-mk"><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>
+                      <td className="col-waktu"><input type="text" value={r.waktu} onChange={(e) => setRow(s.code, { waktu: e.target.value })} /></td>
                     </tr>
                   );
                 })}
-                <tr><td style={{ textAlign: 'center' }}>13</td><td className="svc"><input value={extra1} onChange={(e) => setExtra1(e.target.value)} /></td><td /><td /><td /><td /></tr>
-                <tr><td style={{ textAlign: 'center' }}>14</td><td className="svc"><input value={extra2} onChange={(e) => setExtra2(e.target.value)} /></td><td /><td /><td /><td /></tr>
+                <tr><td className="col-num" style={{ textAlign: 'center' }}>13</td><td className="svc"><input value={extra1} onChange={(e) => setExtra1(e.target.value)} placeholder="Pekerjaan lain…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
+                <tr><td className="col-num" style={{ textAlign: 'center' }}>14</td><td className="svc"><input value={extra2} onChange={(e) => setExtra2(e.target.value)} placeholder="Pekerjaan lain…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
               </tbody>
             </table>
           </div>

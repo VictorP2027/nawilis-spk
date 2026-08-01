@@ -105,7 +105,72 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .sheet .branches input { width: auto; accent-color: var(--nawilis); }
 .sheet .foot { text-align: center; font-size: 9px; font-style: italic; margin-top: 8px; border-top: 1px solid var(--nawilis); padding-top: 4px; color: var(--nawilis); }
 .sheet-actions { width: 820px; max-width: 100%; margin: 12px auto 0; display: flex; gap: 10px; align-items: center; }
-@media (max-width: 640px) { .sheet .two, .sheet .mid { grid-template-columns: 1fr; } .sheet .branches { columns: 2; } }
+/* ── Mobile: friendly fill-out mode (keeps the paper look on desktop) ──── */
+@media (max-width: 640px) {
+  .sheet-wrap { padding: 8px 6px 90px; }
+  .sheet { width: 100%; padding: 12px 10px; border-radius: 12px; }
+  .sheet .two, .sheet .mid { grid-template-columns: 1fr; }
+
+  /* Inputs: 16px+ (no iOS auto-zoom), tall, clearly boxed */
+  .sheet input, .sheet textarea, .sheet select {
+    font-size: 16px; min-height: 44px; padding: 8px 12px;
+    border: 1.5px solid #b9c6de; border-radius: 10px; background: #fff;
+  }
+  .sheet input:focus, .sheet textarea:focus, .sheet select:focus {
+    border-color: var(--nawilis-2); box-shadow: 0 0 0 3px rgba(23, 99, 214, .15);
+  }
+  .sheet input[type=radio], .sheet input[type=checkbox] {
+    min-height: 0; padding: 0; border: none; width: 20px; height: 20px; flex: none;
+  }
+  .sheet .fld { grid-template-columns: 1fr; gap: 2px; margin: 8px 0; }
+  .sheet .fld label { font-size: 12px; color: #33415c; }
+  .sheet .hd { flex-wrap: wrap; }
+  .sheet .title small { width: auto; }
+
+  /* PEKERJAAN table → cards: tap the name or the big tick; MK/WAKTU hidden
+     (they're filled at job-start by the mechanic, not at intake) */
+  .sheet table.pk, .sheet table.pk tbody { display: block; }
+  .sheet table.pk thead { display: none; }
+  .sheet table.pk tr {
+    display: grid; grid-template-columns: 1fr auto; align-items: center;
+    gap: 4px 8px; border: 1.5px solid #b9c6de; border-radius: 12px;
+    background: #fbfdff; padding: 10px 12px; margin-bottom: 8px;
+  }
+  .sheet table.pk tr.row-on { border-color: var(--nawilis); background: var(--nawilis-tint); }
+  .sheet table.pk td { display: block; border: none; padding: 0; }
+  .sheet table.pk td.col-num, .sheet table.pk td.col-mk, .sheet table.pk td.col-waktu { display: none; }
+  .sheet table.pk td.svc { font-size: 15px; white-space: normal; cursor: pointer; padding: 6px 0; }
+  .sheet table.pk td.tick-cell { justify-self: end; display: flex; align-items: center; gap: 8px; }
+  .sheet table.pk td.ket-cell { grid-column: 1 / -1; }
+  .sheet table.pk td.ket-cell:empty { display: none; }
+  .sheet .tick { width: 44px; height: 44px; font-size: 24px; border: 1.5px solid #b9c6de; border-radius: 12px; background: #fff; }
+  .sheet .tick.on { background: var(--nawilis); color: #fff; border-color: var(--nawilis); }
+  .sheet table.pk input.qty { width: 60px !important; min-height: 44px; padding: 4px !important; font-size: 16px; }
+  .sheet table.pk select { font-size: 14px !important; margin-bottom: 6px !important; }
+  .sheet table.pk input.ket-idle { display: none; } /* collapse untouched rows */
+
+  /* Pengecekan awal: big pill options */
+  .sheet .cond { font-size: 13px; }
+  .sheet .cond td { padding: 8px 6px; }
+  .sheet .opt { padding: 8px 14px; border: 1.5px solid #b9c6de; border-radius: 999px; margin: 3px 6px 3px 0; background: #fff; }
+  .sheet .opt.on { border-color: var(--nawilis); }
+
+  /* Signatures stack; input inside flows normally */
+  .sheet .sign { grid-template-columns: 1fr; }
+  .sheet .sign .b { height: auto; min-height: 80px; font-size: 12px; padding: 8px; }
+  .sheet .sign .b input { position: static; margin-top: 8px; width: 100%; }
+
+  /* Branch picker: large tappable chips, selected highlighted */
+  .sheet .branches { grid-template-columns: 1fr 1fr; gap: 6px; font-size: 13px; }
+  .sheet .branches label { border: 1.5px solid #b9c6de; border-radius: 10px; padding: 10px 8px; background: #fff; }
+  .sheet .branches label:has(input:checked) { border-color: var(--nawilis); background: var(--nawilis-tint); font-weight: 700; }
+
+  .sheet .auth { font-size: 11px; }
+
+  /* Sticky submit bar */
+  .sheet-actions { position: sticky; bottom: 8px; z-index: 20; }
+  .sheet-actions .btn.primary { min-height: 52px; font-size: 16px; box-shadow: 0 6px 18px rgba(10, 61, 143, .35); }
+}
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
