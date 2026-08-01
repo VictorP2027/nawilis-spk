@@ -131,8 +131,9 @@ export default function Sheet() {
       },
     };
 
+    // Only the branch is mechanically required (it routes the Turboly store).
+    // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
-    if (!noPol || !km || !nama || jobLines.length === 0) { setResult({ ok: false, text: 'Isi No. Polisi, KM, Nama, dan minimal 1 pekerjaan.' }); setSubmitting(false); return; }
 
     const res = await submitOrQueue(uploadId, payload);
     if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }

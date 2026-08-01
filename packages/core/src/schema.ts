@@ -37,7 +37,7 @@ export const SpkIntakeInput = z.object({
   capturedAt: z.string().datetime(),
 
   customer: z.object({
-    nama: z.string().min(1),
+    nama: z.string().default(''), // may be empty — warned, not blocked
     wa: z.string().nullable().default(null),
     alamat: z.string().nullable().default(null),
     kontakLain: z.string().nullable().default(null),
@@ -45,7 +45,7 @@ export const SpkIntakeInput = z.object({
   }),
 
   vehicle: z.object({
-    noPolisi: z.string().min(1),
+    noPolisi: z.string().default(''), // may be empty/odd — warned, not blocked
     merk: z.string().nullable().default(null),
     tipe: z.string().nullable().default(null),
     tahun: z.number().int().nullable().default(null),
@@ -54,7 +54,7 @@ export const SpkIntakeInput = z.object({
   }),
 
   complaint: z.string().nullable().default(null),
-  jobLines: z.array(JobLineInput).min(1),
+  jobLines: z.array(JobLineInput).default([]), // may be empty — warned, not blocked
   conditionChecks: z.array(ConditionCheckInput).default([]),
   rekomendasiService: z.string().nullable().default(null),
   estimasiMinutes: z.number().int().nullable().default(null),

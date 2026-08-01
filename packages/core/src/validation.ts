@@ -47,7 +47,7 @@ export function validateLayer1(doc: SpkDoc, prior?: VehicleDoc | null): Validati
   if (!doc.vehicle.noPolisi.full || !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(doc.vehicle.noPolisi.full)) {
     f.push({
       rule: 'PLATE_FORMAT',
-      severity: 'BLOCK',
+      severity: 'CONFIRM', // warn-only by user directive: never refuse input
       path: 'vehicle.noPolisi',
       message: 'Format No. Polisi tidak valid (contoh: B 1234 XYZ — huruf wilayah, angka, huruf).',
     });
@@ -66,10 +66,10 @@ export function validateLayer1(doc: SpkDoc, prior?: VehicleDoc | null): Validati
   // KM — separator + range + monotonicity
   const km = doc.vehicle.km.value;
   if (km === null || Number.isNaN(km)) {
-    f.push({ rule: 'KM_PARSE', severity: 'BLOCK', path: 'vehicle.km', message: 'KM tidak terbaca.' });
+    f.push({ rule: 'KM_PARSE', severity: 'CONFIRM', path: 'vehicle.km', message: 'KM tidak terbaca.' });
   } else {
     if (km < 0) {
-      f.push({ rule: 'KM_RANGE', severity: 'BLOCK', path: 'vehicle.km', message: 'KM tidak boleh negatif.' });
+      f.push({ rule: 'KM_RANGE', severity: 'CONFIRM', path: 'vehicle.km', message: 'KM tidak boleh negatif.' });
     } else if (km > 2_000_000) {
       // Implausible, but never block CAPTURE on it — just ask to double-check.
       f.push({ rule: 'KM_RANGE', severity: 'CONFIRM', path: 'vehicle.km', message: 'KM sangat tinggi — mohon periksa.' });
@@ -123,12 +123,12 @@ export function validateLayer1(doc: SpkDoc, prior?: VehicleDoc | null): Validati
 
   // At least one ordered job line
   if (!doc.jobLines.some((l) => l.ordered)) {
-    f.push({ rule: 'JOBLINE_MIN_ONE', severity: 'BLOCK', path: 'jobLines', message: 'Minimal satu pekerjaan harus dipilih.' });
+    f.push({ rule: 'JOBLINE_MIN_ONE', severity: 'CONFIRM', path: 'jobLines', message: 'Minimal satu pekerjaan harus dipilih.' });
   }
 
   // Customer name required (Turboly CUSTOMER is required)
   if (!doc.customer.nama || doc.customer.nama.trim() === '') {
-    f.push({ rule: 'CUSTOMER_NAME', severity: 'BLOCK', path: 'customer.nama', message: 'Nama customer wajib diisi.' });
+    f.push({ rule: 'CUSTOMER_NAME', severity: 'CONFIRM', path: 'customer.nama', message: 'Nama customer wajib diisi.' });
   }
 
   return summarize(f);
