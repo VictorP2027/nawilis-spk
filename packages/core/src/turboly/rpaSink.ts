@@ -395,9 +395,15 @@ export class RpaSink implements ServiceOrderSink {
       } catch { /* fall through to most-similar stand-in */ }
     }
     const page = this.session.page_();
+    // Clearing the old drop's query does NOT re-trigger select2's load — only a
+    // FRESH open does. Close whatever is open, then reopen via a real mousedown
+    // (select2-v3's trigger; also immune to the stale drop intercepting clicks).
     await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(300);
-    await page.locator(`#${containerId} .select2-choice, #${containerId}`).first().click({ timeout: 8000 });
+    await page.waitForTimeout(400);
+    await page.evaluate((id) => {
+      const c = document.querySelector(`#${id} .select2-choice`) ?? document.getElementById(id);
+      if (c) c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    }, containerId);
     // Poll: the model list is a remote fetch — "Searching…" until it lands.
     let items: string[] = [];
     for (let i = 0; i < 16; i++) {

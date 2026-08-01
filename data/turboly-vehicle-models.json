@@ -1,10 +1,44 @@
 {
-  "ESEMKA": [],
-  "ASTON MARTIN": [],
-  "AUDI": [],
+  "ESEMKA": [
+    "BIMA"
+  ],
+  "ASTON MARTIN": [
+    "DB11"
+  ],
+  "AUDI": [
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "Q3",
+    "Q5",
+    "Q7",
+    "Q8",
+    "TT",
+    "TT RS"
+  ],
   "BMW": [],
-  "CADILLAC": [],
-  "CHERY": [],
+  "CADILLAC": [
+    "ESCALADE"
+  ],
+  "CHERY": [
+    "J1",
+    "J6",
+    "LEPAS L8",
+    "OMODA 5",
+    "OMODA E5",
+    "QQ GX MT",
+    "TIGGO 5X",
+    "TIGGO 7 PRO",
+    "TIGGO 8",
+    "TIGGO 8 PRO",
+    "TIGGO 9",
+    "TIGGO CROSS",
+    "TIGGO CROSS PREMIUM"
+  ],
   "CHEVROLET": [],
   "CHRYSLER": [],
   "DAIHATSU": [],
