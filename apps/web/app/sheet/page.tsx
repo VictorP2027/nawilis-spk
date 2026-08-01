@@ -270,14 +270,17 @@ export default function Sheet() {
         </div>
         <div className="sign">
           <div className="b">Yang menyerahkan,<input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
-          <div className="b">Yang menerima,{advisors.length > 0 ? (
-            <select value={menerima} onChange={(e) => setMenerima(e.target.value)}>
-              <option value="">— pilih advisor —</option>
-              {advisors.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}
-            </select>
-          ) : (
-            <input value={menerima} onChange={(e) => setMenerima(e.target.value)} placeholder={branch ? 'Nama jelas & tanda tangan' : 'Pilih cabang dulu untuk daftar advisor'} />
-          )}</div>
+          <div className="b">Yang menerima,
+            <input
+              list="advisor-list"
+              value={menerima}
+              onChange={(e) => setMenerima(e.target.value)}
+              placeholder={advisors.length ? 'Pilih dari daftar atau ketik nama baru' : (branch ? 'Nama jelas & tanda tangan' : 'Pilih cabang dulu / ketik nama')}
+            />
+            <datalist id="advisor-list">
+              {advisors.map((a) => <option key={a.code} value={a.name} />)}
+            </datalist>
+          </div>
         </div>
         <div className="two" style={{ marginTop: 6 }}>
           <div className="fld"><label>Kontak Lain</label><input value={kontakLain} onChange={(e) => setKontakLain(e.target.value)} /></div>
