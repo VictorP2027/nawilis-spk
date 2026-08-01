@@ -31,7 +31,11 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
+  /** Extra note lines accumulated during a push (e.g. model-fallback substitutions). */
+  private notesExtra: string[] = [];
+
   async pushServiceOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult> {
+    this.notesExtra = [];
     let page: Page;
     try {
       await this.session.ensureLoggedIn();
@@ -104,7 +108,8 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#service_order_reference_no', payload.referenceNumber);
     await this.setPickerValue('#service-date', payload.planServiceDate);
     await this.setPickerValue('#service-time', payload.planServiceTime);
-    if (payload.notes) await page.fill('#service_order_notes', payload.notes).catch(() => {});
+    const notesCombined = [payload.notes, ...this.notesExtra].filter(Boolean).join('\n');
+    if (notesCombined) await page.fill('#service_order_notes', notesCombined).catch(() => {});
 
     // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
     // Each add must create a NEW row before we search it — otherwise a fast loop
@@ -192,7 +197,7 @@ export class RpaSink implements ServiceOrderSink {
     await page.waitForTimeout(600);
     if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
     await page.waitForTimeout(900);
-    if (payload.vehicleModel) await this.modalSelect2Pick('s2id_vehicle-model-select', payload.vehicleModel);
+    await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
     await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
     if (payload.vehicleColor) await page.fill('#vehicle_color', payload.vehicleColor).catch(() => {});
@@ -339,7 +344,7 @@ export class RpaSink implements ServiceOrderSink {
     await page.waitForTimeout(700);
     if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
     await page.waitForTimeout(900);
-    if (payload.vehicleModel) await this.modalSelect2Pick('s2id_vehicle-model-select', payload.vehicleModel);
+    await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
     await page.fill('#customer_vehicles_attributes_0_odometer', payload.odometer).catch(() => {});
     if (payload.vehicleColor) await page.fill('#customer_vehicles_attributes_0_color', payload.vehicleColor).catch(() => {});
@@ -371,6 +376,35 @@ export class RpaSink implements ServiceOrderSink {
       const err = await this.readInlineError(page).catch(() => null);
       throw new DataError(`new-customer create rejected${err ? `: ${err}` : ' (check make/model match)'}`);
     }
+  }
+
+  /**
+   * ANY-tipe policy: try the exact typed model; if Turboly doesn't have it, pick
+   * the make's FIRST available model as a stand-in and record the typed tipe in
+   * the order notes. Only fails if the make has no models at all.
+   */
+  private async pickModelLoose(containerId: string, typed: string): Promise<void> {
+    const q = (typed ?? '').trim();
+    if (q) {
+      try {
+        await this.modalSelect2Pick(containerId, q);
+        return;
+      } catch { /* fall through to first-model stand-in */ }
+    }
+    const page = this.session.page_();
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(300);
+    await page.locator(`#${containerId} .select2-choice, #${containerId}`).first().click({ timeout: 8000 });
+    await page.waitForTimeout(900);
+    const first = page.locator('.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable').first();
+    if ((await first.count()) === 0) {
+      await page.keyboard.press('Escape').catch(() => {});
+      throw new DataError(`make has no models in Turboly (typed tipe "${q || '—'}")`);
+    }
+    const label = (await first.innerText().catch(() => '')).trim();
+    await first.click({ timeout: 4000 });
+    await page.waitForTimeout(400);
+    this.notesExtra.push(q ? `Tipe diketik "${q}" tidak ada di katalog — model Turboly dipakai: ${label}` : `Tipe kosong — model Turboly dipakai: ${label}`);
   }
 
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */

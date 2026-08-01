@@ -50,9 +50,24 @@ export default function Sheet() {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
   }, []);
 
+  // Models for the chosen make → Tipe datalist (list of available cars).
+  const [models, setModels] = useState<string[]>([]);
+  const [makeKnownInModels, setMakeKnownInModels] = useState(false);
+  useEffect(() => {
+    const m = merk.trim();
+    if (!m) { setModels([]); setMakeKnownInModels(false); return; }
+    let live = true;
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`)
+      .then((r) => r.json())
+      .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnownInModels(!!d.known); } })
+      .catch(() => { if (live) { setModels([]); setMakeKnownInModels(false); } });
+    return () => { live = false; };
+  }, [merk]);
+
   // Live overridable warnings: typing anything is allowed, but flag values that
   // aren't in Turboly's catalog so staff can fix a typo before submitting.
   const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
+  const modelUnknown = tipe.trim() !== '' && makeKnownInModels && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
 
   // Load the real service advisors for the chosen branch (synced from Turboly).
@@ -162,6 +177,7 @@ export default function Sheet() {
       } catch { /* history unavailable — server still checks */ }
     }
     if (makeUnknown) warns.push(`Merk "${merk.trim()}" tidak ada di katalog Turboly (mobil baru akan gagal dibuat)`);
+    if (modelUnknown) warns.push(`Tipe "${tipe.trim()}" tidak ada di daftar model ${merk.trim().toUpperCase()} (mobil baru akan gagal dibuat)`);
     if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
     if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
     if (warns.length > 0) {
@@ -239,7 +255,20 @@ export default function Sheet() {
                 )}
               </div>
             </div>
-            <div className="fld"><label>Tipe</label><input value={tipe} onChange={(e) => setTipe(e.target.value)} /></div>
+            <div className="fld"><label>Tipe</label>
+              <div>
+                <input list="model-list" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder={models.length ? 'pilih dari daftar / ketik' : 'cth: Avanza'} style={modelUnknown ? { borderColor: '#d97706' } : undefined} />
+                <datalist id="model-list">{models.map((m) => <option key={m} value={m} />)}</datalist>
+                {modelUnknown && (
+                  <div className="warn-inline">
+                    ⚠ Tipe tidak ada di daftar model {merk.trim().toUpperCase()} di Turboly — mobil BARU akan gagal dibuat. Pilih dari daftar, atau:
+                    <span style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_models/new`} target="_blank" rel="noreferrer">➕ Tambah Model di Turboly</a>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="fld"><label>No. Polisi</label><input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" /></div>
             <div className="fld"><label>Tahun/Warna</label><div style={{ display: 'flex', gap: 4 }}><input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" /><input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Warna" /></div></div>
             <div className="fld"><label>KM</label><input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" /></div>
