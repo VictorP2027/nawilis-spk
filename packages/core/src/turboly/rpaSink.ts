@@ -77,19 +77,20 @@ export class RpaSink implements ServiceOrderSink {
     // isn't found, create customer+vehicle; if the customer is found but the vehicle isn't,
     // signal NeedAddVehicle so the caller creates it and retries.
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+    const create = payload.customer.create;
     let attached = false;
-    if (payload.customer.existingQuery) {
-      const custOk = await this.tryPickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery);
-      if (custOk) {
+    // Match an existing customer only on EXACT name or matching phone (never a
+    // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
+    const custOk = create?.nama || create?.phone ? await this.tryPickCustomerExact(create?.nama ?? '', create?.phone ?? '') : false;
+    if (custOk) {
+      await page.waitForTimeout(1200);
+      const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
+      if (vehOk) {
+        attached = true;
         await page.waitForTimeout(1200);
-        const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
-        if (vehOk) {
-          attached = true;
-          await page.waitForTimeout(1200);
-          await this.dismissModals();
-        } else {
-          throw new NeedAddVehicleError(`customer "${payload.customer.existingQuery}" found but vehicle ${reg} not in Turboly`);
-        }
+        await this.dismissModals();
+      } else {
+        throw new NeedAddVehicleError(`customer "${create?.nama}" found but vehicle ${reg} not in Turboly`);
       }
     }
     if (!attached) {
@@ -246,6 +247,52 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     try {
       await this.pickSelect2(containerSel, query);
+      return true;
+    } catch {
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(300);
+      return false;
+    }
+  }
+
+  /**
+   * Attach to an existing customer ONLY on an exact name match (or a matching
+   * phone) — never a first/partial result. Prevents "FRANK" wrongly attaching to
+   * an existing "FRANKI". Returns false (→ create a new customer) if none matches.
+   */
+  private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
+    const page = this.session.page_();
+    const query = (phone || nama || '').trim();
+    if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
+    try {
+      await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
+      await page.waitForTimeout(400);
+      await page.locator('#select2-drop input').first().fill(query);
+      for (let i = 0; i < 18; i++) {
+        const st = await page.evaluate(() => {
+          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
+          return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
+        });
+        if (st.sel > 0) break;
+        if (st.txt && !/searching|more characters/i.test(st.txt)) break;
+        await page.waitForTimeout(600);
+      }
+      const idx = await page.evaluate(({ nama, phone }) => {
+        const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+        const digits = (s: string) => s.replace(/\D/g, '');
+        const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
+        for (let i = 0; i < lis.length; i++) {
+          const text = (lis[i] as HTMLElement).innerText || '';
+          const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
+          const nameOk = !!nama && norm(name) === norm(nama);
+          const phoneOk = !!phone && digits(phone).length >= 7 && digits(text).includes(digits(phone));
+          if (nameOk || phoneOk) return i;
+        }
+        return -1;
+      }, { nama, phone });
+      if (idx < 0) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false; }
+      await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
+      await page.waitForTimeout(500);
       return true;
     } catch {
       await page.keyboard.press('Escape').catch(() => {});
