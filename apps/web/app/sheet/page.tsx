@@ -9,6 +9,9 @@ function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
+const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
+
 interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string }
 interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }
 
@@ -225,7 +228,15 @@ export default function Sheet() {
               <div>
                 <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
                 <datalist id="make-list">{makes.map((m) => <option key={m} value={m} />)}</datalist>
-                {makeUnknown && <div className="warn-inline">⚠ Merk tidak ada di katalog Turboly — boleh lanjut, tapi mobil BARU dengan merk ini akan gagal dibuat. Periksa ejaan.</div>}
+                {makeUnknown && (
+                  <div className="warn-inline">
+                    ⚠ Merk tidak ada di katalog Turboly — boleh lanjut, tapi mobil BARU dengan merk ini akan gagal dibuat. Periksa ejaan, atau tambah dulu di Turboly:
+                    <span style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_makes`} target="_blank" rel="noreferrer">➕ Tambah Merk</a>
+                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_models/new`} target="_blank" rel="noreferrer">➕ Tambah Model</a>
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="fld"><label>Tipe</label><input value={tipe} onChange={(e) => setTipe(e.target.value)} /></div>

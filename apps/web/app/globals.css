@@ -105,6 +105,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .sheet .branches input { width: auto; accent-color: var(--nawilis); }
 .sheet .foot { text-align: center; font-size: 9px; font-style: italic; margin-top: 8px; border-top: 1px solid var(--nawilis); padding-top: 4px; color: var(--nawilis); }
 .sheet .warn-inline { font-size: 11px; color: #b45309; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 4px 8px; margin-top: 3px; line-height: 1.35; }
+.sheet .warn-btn { display: inline-block; font-size: 11px; font-weight: 700; color: #92400e; background: #fff; border: 1.5px solid #f59e0b; border-radius: 8px; padding: 4px 10px; text-decoration: none; }
+.sheet .warn-btn:active { background: #fde68a; }
 .sheet-actions { width: 820px; max-width: 100%; margin: 12px auto 0; display: flex; gap: 10px; align-items: center; }
 /* ── Mobile: friendly fill-out mode (keeps the paper look on desktop) ──── */
 @media (max-width: 640px) {
