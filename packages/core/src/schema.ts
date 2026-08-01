@@ -11,6 +11,8 @@ export const JobLineInput = z.object({
   qty: z.number().int().positive().default(1),
   keterangan: z.string().nullable().default(null),
   quotedPrice: z.number().nonnegative().nullable().default(null),
+  /** Operator-chosen Turboly SKU variant (defaults to the service's default at push). */
+  chosenSku: z.string().nullable().default(null),
 });
 
 export const ConditionCheckInput = z.object({

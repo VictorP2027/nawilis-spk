@@ -134,7 +134,8 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
     mk: { mechanicCode: null, source: 'pending_ticket_scan' as const },
     waktu: { minutes: null, source: 'pending_ticket_scan' as const },
     quotedPrice: l.quotedPrice,
-    turbolySku: null, // resolved during pre-push mapping from tb_service_products
+    // Operator-chosen variant wins; else resolveSkus fills the branch default.
+    turbolySku: l.chosenSku ?? null,
   }));
 
   const conditionChecks: ConditionCheck[] = input.conditionChecks.map((c, i) => ({

@@ -9,7 +9,8 @@ function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string }
+interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string }
+interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }
 
 export default function Sheet() {
   const [serial, setSerial] = useState('');
@@ -33,6 +34,12 @@ export default function Sheet() {
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  const [svcOpts, setSvcOpts] = useState<Record<string, SvcOpt>>({});
+
+  // Per-service Turboly variant options (form dropdowns; default pre-selected).
+  useEffect(() => {
+    fetch('/api/service-options').then((r) => r.json()).then((d) => setSvcOpts(d.services ?? {})).catch(() => {});
+  }, []);
 
   // Load the real service advisors for the chosen branch (synced from Turboly).
   useEffect(() => {
@@ -77,7 +84,7 @@ export default function Sheet() {
     const jobLines = SERVICES.filter((s) => pk[s.code]!.order).map((s) => {
       const r = pk[s.code]!;
       const notes = [r.keterangan, r.mk && `MK:${r.mk}`, r.waktu && `Waktu:${r.waktu}`].filter(Boolean).join(' ');
-      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null };
+      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
     });
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
     const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
@@ -193,7 +200,14 @@ export default function Sheet() {
                         <span className={`tick ${r.order ? 'on' : ''}`} onClick={() => setRow(s.code, { order: !r.order })}>{r.order ? '✓' : '▢'}</span>
                         {r.order && <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />}
                       </td>
-                      <td><input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} /></td>
+                      <td>
+                        {r.order && svcOpts[s.code]?.options?.length ? (
+                          <select value={r.sku || svcOpts[s.code]!.defaultSku} onChange={(e) => setRow(s.code, { sku: e.target.value })} style={{ width: '100%', marginBottom: 3, fontSize: 11 }}>
+                            {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
+                          </select>
+                        ) : null}
+                        <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />
+                      </td>
                       <td><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>
                       <td><input type="text" value={r.waktu} onChange={(e) => setRow(s.code, { waktu: e.target.value })} /></td>
                     </tr>

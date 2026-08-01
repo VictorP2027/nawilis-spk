@@ -1,0 +1,502 @@
+{
+  "SPOORING": {
+    "defaultSku": "SPO-NAW-000",
+    "options": [
+      {
+        "sku": "SPO-NAW-000",
+        "label": "SPO-NAW-000 Spooring"
+      },
+      {
+        "sku": "GSM-NAW-LSF",
+        "label": "GSM-NAW-LSF Labour Spooring Full"
+      },
+      {
+        "sku": "JAS-NAW-SPOOR-PROMO-HUT",
+        "label": "JAS-NAW-SPOOR-PROMO-HUT Paket Spooring Promo HUT"
+      },
+      {
+        "sku": "LAI-NAW-SVIPAC",
+        "label": "LAI-NAW-SVIPAC Spooring VIP Additional Charge"
+      },
+      {
+        "sku": "SPO-NAW-VIP",
+        "label": "SPO-NAW-VIP Spooring VIP"
+      }
+    ]
+  },
+  "BALANCING": {
+    "defaultSku": "BAL-NAW-STD",
+    "options": [
+      {
+        "sku": "BAL-NAW-STD",
+        "label": "BAL-NAW-STD Balancing"
+      },
+      {
+        "sku": "BAL-NAW-FREE",
+        "label": "BAL-NAW-FREE Balancing Free"
+      },
+      {
+        "sku": "BAL-NAW-VIP",
+        "label": "BAL-NAW-VIP Balancing VIP"
+      },
+      {
+        "sku": "GSM-NAW-LBR181",
+        "label": "GSM-NAW-LBR181 Labour Balancing R18, 1 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR182",
+        "label": "GSM-NAW-LBR182 Labour Balancing R18, 2 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR183",
+        "label": "GSM-NAW-LBR183 Labour Balancing R18, 3 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR184",
+        "label": "GSM-NAW-LBR184 Labour Balancing R18, 4 Roda"
+      },
+      {
+        "sku": "LAI-NAW-BVIPAC",
+        "label": "LAI-NAW-BVIPAC Balancing VIP Additional Charge"
+      },
+      {
+        "sku": "OTL-NAW-BOTCL",
+        "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
+      },
+      {
+        "sku": "OTL-NAW-BOTLVIP",
+        "label": "OTL-NAW-BOTLVIP Balancing OTC Langsung VIP"
+      }
+    ]
+  },
+  "BALANCING_ON_CAR": {
+    "defaultSku": "BAL-NAW-STD",
+    "options": [
+      {
+        "sku": "BAL-NAW-STD",
+        "label": "BAL-NAW-STD Balancing"
+      },
+      {
+        "sku": "BAL-NAW-FREE",
+        "label": "BAL-NAW-FREE Balancing Free"
+      },
+      {
+        "sku": "BAL-NAW-VIP",
+        "label": "BAL-NAW-VIP Balancing VIP"
+      },
+      {
+        "sku": "GSM-NAW-LBR181",
+        "label": "GSM-NAW-LBR181 Labour Balancing R18, 1 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR182",
+        "label": "GSM-NAW-LBR182 Labour Balancing R18, 2 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR183",
+        "label": "GSM-NAW-LBR183 Labour Balancing R18, 3 Roda"
+      },
+      {
+        "sku": "GSM-NAW-LBR184",
+        "label": "GSM-NAW-LBR184 Labour Balancing R18, 4 Roda"
+      },
+      {
+        "sku": "LAI-NAW-BVIPAC",
+        "label": "LAI-NAW-BVIPAC Balancing VIP Additional Charge"
+      },
+      {
+        "sku": "OTL-NAW-BOTCL",
+        "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
+      },
+      {
+        "sku": "OTL-NAW-BOTLVIP",
+        "label": "OTL-NAW-BOTLVIP Balancing OTC Langsung VIP"
+      }
+    ]
+  },
+  "OLI": {
+    "defaultSku": "JAS-NAW-JGO",
+    "options": [
+      {
+        "sku": "JAS-NAW-JGO",
+        "label": "JAS-NAW-JGO Jasa Ganti Oli"
+      },
+      {
+        "sku": "JAS-DAI-JGOF",
+        "label": "JAS-DAI-JGOF Jasa Ganti Oli Filter"
+      },
+      {
+        "sku": "JAS-NAW-JGOF",
+        "label": "JAS-NAW-JGOF Jasa Ganti Oli Filter"
+      },
+      {
+        "sku": "JAS-NAWJAS-GOMG",
+        "label": "JAS-NAWJAS-GOMG Jasa Ganti Oli Mesin/Gardan Mo"
+      },
+      {
+        "sku": "JAS-NAWJAS-JGO",
+        "label": "JAS-NAWJAS-JGO Jasa Ganti Oli"
+      },
+      {
+        "sku": "JAS-NAWJAS-JGOG",
+        "label": "JAS-NAWJAS-JGOG Jasa Ganti Oli Gardan"
+      },
+      {
+        "sku": "JAS-NAWJAS-JGOM",
+        "label": "JAS-NAWJAS-JGOM Jasa Ganti Oli Mesin"
+      },
+      {
+        "sku": "JAS-NAWJAS-JGOT",
+        "label": "JAS-NAWJAS-JGOT Jasa Ganti Oli Transmisi"
+      },
+      {
+        "sku": "NIT-NAW-GOFN",
+        "label": "NIT-NAW-GOFN Ganti Oli Free Nitrogen"
+      },
+      {
+        "sku": "JAS-NAW-JPSHB",
+        "label": "JAS-NAW-JPSHB Jasa Pasang Shock Hidrolik Bag"
+      }
+    ]
+  },
+  "ENGINE_FLUSH": {
+    "defaultSku": "EFL-NAW-EF",
+    "options": [
+      {
+        "sku": "EFL-NAW-EF",
+        "label": "EFL-NAW-EF Engine Flush"
+      },
+      {
+        "sku": "JAS-NAW-PEF",
+        "label": "JAS-NAW-PEF Engine Flush"
+      },
+      {
+        "sku": "ATF-NAW-ATFP",
+        "label": "ATF-NAW-ATFP Auto Transmission Flush Premium"
+      },
+      {
+        "sku": "ATF-NAW-ATFS",
+        "label": "ATF-NAW-ATFS Auto Transmission Flush Standard"
+      },
+      {
+        "sku": "FLU-NAW-FAC",
+        "label": "FLU-NAW-FAC Flushing AC"
+      },
+      {
+        "sku": "JAS-NAW-FR",
+        "label": "JAS-NAW-FR Flushing Radiator"
+      },
+      {
+        "sku": "PSF-WYN-PSFST",
+        "label": "PSF-WYN-PSFST Power Steering Flush Standart"
+      }
+    ]
+  },
+  "TUNE_UP_CARBON_CLEAN": {
+    "defaultSku": "TUN-NAW-PTU",
+    "options": [
+      {
+        "sku": "TUN-NAW-PTU",
+        "label": "TUN-NAW-PTU Power Tune Up"
+      },
+      {
+        "sku": "TUN-NAW-PTU1",
+        "label": "TUN-NAW-PTU1 Paket Tune Up 1"
+      },
+      {
+        "sku": "TUN-NAW-PTU2",
+        "label": "TUN-NAW-PTU2 Paket Tune Up 2"
+      },
+      {
+        "sku": "TUN-NAW-PTU3",
+        "label": "TUN-NAW-PTU3 Paket Tune Up 3"
+      },
+      {
+        "sku": "TUN-NAW-PTUC",
+        "label": "TUN-NAW-PTUC Paket Tune Up Complete"
+      },
+      {
+        "sku": "TUN-NAW-PTUP",
+        "label": "TUN-NAW-PTUP Performance & Tune Up Plus"
+      },
+      {
+        "sku": "TUN-NAW-TU",
+        "label": "TUN-NAW-TU Tune Up"
+      },
+      {
+        "sku": "TUN-NAW-TU4SIL",
+        "label": "TUN-NAW-TU4SIL Engine Tune Up 4 Silinder"
+      },
+      {
+        "sku": "TUN-NAW-TUM",
+        "label": "TUN-NAW-TUM Tune Up Motor"
+      },
+      {
+        "sku": "CAR-BG-PCC",
+        "label": "CAR-BG-PCC Promo Carbon Clean"
+      },
+      {
+        "sku": "CAR-NAW-CC4SILL",
+        "label": "CAR-NAW-CC4SILL Carbon Clean 4Silinder (2001Cc"
+      },
+      {
+        "sku": "CAR-NAW-CC4SILS",
+        "label": "CAR-NAW-CC4SILS Carbon Clean 4Silinder (1000-2"
+      },
+      {
+        "sku": "CAR-NAW-CC6SIL",
+        "label": "CAR-NAW-CC6SIL Carbon Clean 6Silinder"
+      },
+      {
+        "sku": "CAR-NAW-CC8SIL",
+        "label": "CAR-NAW-CC8SIL Carbon Clean 8Silinder"
+      },
+      {
+        "sku": "CAR-NAW-CCDIES1",
+        "label": "CAR-NAW-CCDIES1 Carbon Clean Diesel (1 Botol)"
+      },
+      {
+        "sku": "CAR-NAW-CCDIES2",
+        "label": "CAR-NAW-CCDIES2 Carbon Clean Diesel (2 Botol)"
+      },
+      {
+        "sku": "CAR-NAW-CCP",
+        "label": "CAR-NAW-CCP Carbon Clean Premium"
+      },
+      {
+        "sku": "GID-GID-CC4S",
+        "label": "GID-GID-CC4S Garasi Carbon Clean 4 Silinder"
+      }
+    ]
+  },
+  "AUTM_TRANS_FLUSH": {
+    "defaultSku": "ATF-NAW-ATFS",
+    "options": [
+      {
+        "sku": "ATF-NAW-ATFS",
+        "label": "ATF-NAW-ATFS Auto Transmission Flush Standard"
+      },
+      {
+        "sku": "ATF-NAW-ATFP",
+        "label": "ATF-NAW-ATFP Auto Transmission Flush Premium"
+      },
+      {
+        "sku": "JAS-NAW-LCTO",
+        "label": "JAS-NAW-LCTO Jasa Change Transmission Oil"
+      },
+      {
+        "sku": "JAS-NAW-SAT",
+        "label": "JAS-NAW-SAT Service Automatic Transmission"
+      },
+      {
+        "sku": "TPI-NAWJAS-LCTO",
+        "label": "TPI-NAWJAS-LCTO Labour Change Transmission Oil"
+      }
+    ]
+  },
+  "KURAS_RADIATOR": {
+    "defaultSku": "JAS-NAW-FR",
+    "options": [
+      {
+        "sku": "JAS-NAW-FR",
+        "label": "JAS-NAW-FR Flushing Radiator"
+      },
+      {
+        "sku": "JAS-NAW-RAD",
+        "label": "JAS-NAW-RAD Jasa Pasang Radiator"
+      },
+      {
+        "sku": "JAS-NAWJAS-JKR",
+        "label": "JAS-NAWJAS-JKR Jasa Service Radiator"
+      }
+    ]
+  },
+  "SERVICE_REM": {
+    "defaultSku": "SER-NAW-SR",
+    "options": [
+      {
+        "sku": "SER-NAW-SR",
+        "label": "SER-NAW-SR Service Rem"
+      },
+      {
+        "sku": "ATF-NAW-ATFP",
+        "label": "ATF-NAW-ATFP Auto Transmission Flush Premium"
+      },
+      {
+        "sku": "BUB-NAW-BUBR",
+        "label": "BUB-NAW-BUBR Bubut Rem"
+      },
+      {
+        "sku": "CAR-NAW-CCP",
+        "label": "CAR-NAW-CCP Carbon Clean Premium"
+      },
+      {
+        "sku": "GSM-NAW-LGKRD",
+        "label": "GSM-NAW-LGKRD Labour Ganti Kanvas Rem Depan"
+      },
+      {
+        "sku": "GSM-NAW-LGLR",
+        "label": "GSM-NAW-LGLR Labour Ganti Lampu Rem"
+      },
+      {
+        "sku": "GSM-NAW-LKMR",
+        "label": "GSM-NAW-LKMR Labour Kuras Minyak Rem"
+      },
+      {
+        "sku": "GSM-NAW-LSR",
+        "label": "GSM-NAW-LSR Labour Service Rem"
+      },
+      {
+        "sku": "JAS-NAW-INSPPREM",
+        "label": "JAS-NAW-INSPPREM Vehicle Inspection Premium"
+      },
+      {
+        "sku": "JAS-NAW-JPGR",
+        "label": "JAS-NAW-JPGR Jasa Pasang Gentongan Rem"
+      },
+      {
+        "sku": "JAS-NAW-JPKRM",
+        "label": "JAS-NAW-JPKRM Jasa Pasang Kanvas Rem Motor"
+      },
+      {
+        "sku": "JAS-NAW-KR",
+        "label": "JAS-NAW-KR Jasa Pasang Kanvas Rem"
+      },
+      {
+        "sku": "JAS-NAW-RE",
+        "label": "JAS-NAW-RE Remap ECU"
+      },
+      {
+        "sku": "JAS-NAWJAS-JGKR",
+        "label": "JAS-NAWJAS-JGKR Jasa Ganti Karet Rem"
+      },
+      {
+        "sku": "JAS-NAWJAS-KRS",
+        "label": "JAS-NAWJAS-KRS Jasa Ganti Kabel Rem/Speedo Me"
+      },
+      {
+        "sku": "JAS-NAWJAS-MCR",
+        "label": "JAS-NAWJAS-MCR Jasa Master Central Rem"
+      },
+      {
+        "sku": "JAS-SCT-SSNCSMALL",
+        "label": "JAS-SCT-SSNCSMALL Scuto Supreme Nano Ceramic S"
+      },
+      {
+        "sku": "KMR-NAW-KMR250",
+        "label": "KMR-NAW-KMR250 Kuras Minyak Rem Standard"
+      },
+      {
+        "sku": "KMR-NAW-KMR500",
+        "label": "KMR-NAW-KMR500 Kuras Minyak Rem Standard Plus"
+      },
+      {
+        "sku": "SER-NAW-PREMIUMBRAKE",
+        "label": "SER-NAW-PREMIUMBRAKE Premium Brake Service"
+      },
+      {
+        "sku": "SER-NAW-SRT",
+        "label": "SER-NAW-SRT Service Rem Tangan"
+      },
+      {
+        "sku": "SER-NAW-SRTB",
+        "label": "SER-NAW-SRTB Service Rem Premium"
+      }
+    ]
+  },
+  "BUBUT_REM": {
+    "defaultSku": "BUB-NAW-BUBR",
+    "options": [
+      {
+        "sku": "BUB-NAW-BUBR",
+        "label": "BUB-NAW-BUBR Bubut Rem"
+      },
+      {
+        "sku": "JAS-NAW-BAG",
+        "label": "JAS-NAW-BAG Bubut As Gigi"
+      }
+    ]
+  },
+  "BAN": {
+    "defaultSku": "BPB-NAW-BPB",
+    "options": [
+      {
+        "sku": "BPB-NAW-BPB",
+        "label": "BPB-NAW-BPB Bongkar Pasang Ban"
+      },
+      {
+        "sku": "BPB-NAW-RB",
+        "label": "BPB-NAW-RB Rotasi Ban"
+      },
+      {
+        "sku": "GSM-NAW-LBPB",
+        "label": "GSM-NAW-LBPB Labour Bongkar Pasang Ban"
+      },
+      {
+        "sku": "GSM-NAW-LRB",
+        "label": "GSM-NAW-LRB Labour Rotasi Ban"
+      },
+      {
+        "sku": "JAS-NAWJAS-BANM",
+        "label": "JAS-NAWJAS-BANM Jasa Ganti Ban Motor"
+      },
+      {
+        "sku": "LAI-NAW-TUB",
+        "label": "LAI-NAW-TUB Tambal Ban Tubless VIP"
+      },
+      {
+        "sku": "NIT-NAW-NIT",
+        "label": "NIT-NAW-NIT Nitrogen Ban Kecil"
+      },
+      {
+        "sku": "NIT-NAW-NITB",
+        "label": "NIT-NAW-NITB Nitrogen Ban Besar"
+      },
+      {
+        "sku": "TAM-NAW-TBT",
+        "label": "TAM-NAW-TBT Tambal Ban Tech"
+      },
+      {
+        "sku": "TAM-NAW-TT",
+        "label": "TAM-NAW-TT Tambal Ban Tip-Top"
+      },
+      {
+        "sku": "TAM-NAW-TUB",
+        "label": "TAM-NAW-TUB Tambal Ban Tubless"
+      }
+    ]
+  },
+  "NITROGEN": {
+    "defaultSku": "NIT-NAW-NF",
+    "options": [
+      {
+        "sku": "NIT-NAW-NF",
+        "label": "NIT-NAW-NF Nitrogen FREE"
+      },
+      {
+        "sku": "LAI-NAW-NPVIP",
+        "label": "LAI-NAW-NPVIP Nitrogen Penambahan VIP"
+      },
+      {
+        "sku": "NIT-NAW-GOFN",
+        "label": "NIT-NAW-GOFN Ganti Oli Free Nitrogen"
+      },
+      {
+        "sku": "NIT-NAW-KN",
+        "label": "NIT-NAW-KN Kuras Nitrogen"
+      },
+      {
+        "sku": "NIT-NAW-NIT",
+        "label": "NIT-NAW-NIT Nitrogen Ban Kecil"
+      },
+      {
+        "sku": "NIT-NAW-NITB",
+        "label": "NIT-NAW-NITB Nitrogen Ban Besar"
+      },
+      {
+        "sku": "NIT-NAW-NITP",
+        "label": "NIT-NAW-NITP Nitrogen Penambahan"
+      }
+    ]
+  }
+}
