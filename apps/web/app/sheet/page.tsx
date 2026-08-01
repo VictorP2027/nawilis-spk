@@ -145,10 +145,22 @@ export default function Sheet() {
     if (makeUnknown) warns.push(`Merk "${merk.trim()}" tidak ada di katalog Turboly (mobil baru akan gagal dibuat)`);
     if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
     if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
-    if (warns.length > 0) {
-      const ok = window.confirm(`⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\nTetap simpan & kirim ke Turboly?`);
-      if (!ok) { setSubmitting(false); return; }
-    }
+    // ALWAYS confirm before sending — a clean SPK shows its summary; a
+    // problematic one shows the warning list. Cancel returns to the form.
+    const branchName = BRANCHES.find((b) => b.code === branch)?.name ?? branch;
+    const jobNames = SERVICES.filter((s) => pk[s.code]!.order).map((s) => s.label).join(', ');
+    const summary = [
+      `Customer : ${nama.trim() || '—'}`,
+      `No. Polisi: ${noPol.trim() || '—'}`,
+      `KM       : ${km.trim() || '—'}`,
+      `Pekerjaan: ${jobNames || '—'} (${jobLines.length})`,
+      `Advisor  : ${menerima.trim() || '—'}`,
+      `Cabang   : ${branchName}`,
+    ].join('\n');
+    const msg = warns.length > 0
+      ? `⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\n${summary}\n\nTetap simpan & kirim ke Turboly?`
+      : `KONFIRMASI KIRIM:\n\n${summary}\n\nSimpan & kirim ke Turboly?`;
+    if (!window.confirm(msg)) { setSubmitting(false); return; }
 
     const res = await submitOrQueue(uploadId, payload);
     if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
