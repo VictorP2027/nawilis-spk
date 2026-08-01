@@ -41,6 +41,12 @@ export default function Sheet() {
     fetch('/api/service-options').then((r) => r.json()).then((d) => setSvcOpts(d.services ?? {})).catch(() => {});
   }, []);
 
+  // Turboly's real vehicle-make catalog → Merk datalist (made-up makes can't push).
+  const [makes, setMakes] = useState<string[]>([]);
+  useEffect(() => {
+    fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
+  }, []);
+
   // Load the real service advisors for the chosen branch (synced from Turboly).
   useEffect(() => {
     if (!branch) { setAdvisors([]); return; }
@@ -168,7 +174,10 @@ export default function Sheet() {
           </div>
           <div className="box">
             <span className="sec-h">INFORMASI KENDARAAN</span>
-            <div className="fld"><label>Merk Mobil</label><input value={merk} onChange={(e) => setMerk(e.target.value)} /></div>
+            <div className="fld"><label>Merk Mobil</label>
+              <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" />
+              <datalist id="make-list">{makes.map((m) => <option key={m} value={m} />)}</datalist>
+            </div>
             <div className="fld"><label>Tipe</label><input value={tipe} onChange={(e) => setTipe(e.target.value)} /></div>
             <div className="fld"><label>No. Polisi</label><input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" /></div>
             <div className="fld"><label>Tahun/Warna</label><div style={{ display: 'flex', gap: 4 }}><input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" /><input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Warna" /></div></div>
