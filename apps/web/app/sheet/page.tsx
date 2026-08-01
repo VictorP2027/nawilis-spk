@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../lib/refdata.client';
 import { submitOrQueue } from '../../lib/outbox';
 
@@ -32,6 +32,18 @@ export default function Sheet() {
   const [branch, setBranch] = useState('');
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
+  const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+
+  // Load the real service advisors for the chosen branch (synced from Turboly).
+  useEffect(() => {
+    if (!branch) { setAdvisors([]); return; }
+    let live = true;
+    fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`)
+      .then((r) => r.json())
+      .then((d) => { if (live) setAdvisors(d.advisors ?? []); })
+      .catch(() => { if (live) setAdvisors([]); });
+    return () => { live = false; };
+  }, [branch]);
 
   const [pk, setPk] = useState<Record<string, PkRow>>(() =>
     Object.fromEntries(SERVICES.map((s) => [s.code, { order: false, qty: 1, keterangan: '', mk: '', waktu: '' }])),
@@ -258,7 +270,14 @@ export default function Sheet() {
         </div>
         <div className="sign">
           <div className="b">Yang menyerahkan,<input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
-          <div className="b">Yang menerima,<input value={menerima} onChange={(e) => setMenerima(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
+          <div className="b">Yang menerima,{advisors.length > 0 ? (
+            <select value={menerima} onChange={(e) => setMenerima(e.target.value)}>
+              <option value="">— pilih advisor —</option>
+              {advisors.map((a) => <option key={a.code} value={a.name}>{a.name}</option>)}
+            </select>
+          ) : (
+            <input value={menerima} onChange={(e) => setMenerima(e.target.value)} placeholder={branch ? 'Nama jelas & tanda tangan' : 'Pilih cabang dulu untuk daftar advisor'} />
+          )}</div>
         </div>
         <div className="two" style={{ marginTop: 6 }}>
           <div className="fld"><label>Kontak Lain</label><input value={kontakLain} onChange={(e) => setKontakLain(e.target.value)} /></div>
