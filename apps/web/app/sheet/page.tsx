@@ -135,6 +135,21 @@ export default function Sheet() {
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
 
+    // Pre-submit warning popup: list every problem, let staff fix or continue anyway.
+    const warns: string[] = [];
+    const plateNorm = noPol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!plateNorm || !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm)) warns.push('No. Polisi tidak valid (contoh: B 1234 XYZ)');
+    if (!nama.trim()) warns.push('Nama customer kosong');
+    if (jobLines.length === 0) warns.push('Belum ada pekerjaan yang dipilih');
+    if (!km.trim() || !/\d/.test(km)) warns.push('KM kosong / tidak terbaca');
+    if (makeUnknown) warns.push(`Merk "${merk.trim()}" tidak ada di katalog Turboly (mobil baru akan gagal dibuat)`);
+    if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
+    if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
+    if (warns.length > 0) {
+      const ok = window.confirm(`⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\nTetap simpan & kirim ke Turboly?`);
+      if (!ok) { setSubmitting(false); return; }
+    }
+
     const res = await submitOrQueue(uploadId, payload);
     if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
     const body = await res.json().catch(() => ({}));
