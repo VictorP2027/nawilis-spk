@@ -97,9 +97,16 @@ export const REF_DAMAGE_ZONES: readonly string[] = [
   'SPAKBOR_KIRI', 'SPAKBOR_KANAN', 'PINTU_KIRI', 'PINTU_KANAN', 'KACA', 'ATAP', 'BODY_DEPAN', 'LIST', 'BAN_SRP',
 ];
 
-/** Common car brands in Indonesia — the controlled vocabulary for fuzzy matching. */
+/** Car brands seen in Indonesia (incl. premium/exotic — Nawilis services them) for fuzzy matching. */
 export const CAR_BRANDS: readonly string[] = [
   'TOYOTA', 'DAIHATSU', 'HONDA', 'SUZUKI', 'MITSUBISHI', 'NISSAN', 'MAZDA', 'ISUZU', 'HYUNDAI',
   'KIA', 'WULING', 'CHERY', 'DFSK', 'MG', 'BMW', 'MERCEDES-BENZ', 'AUDI', 'VOLKSWAGEN', 'LEXUS',
   'FORD', 'CHEVROLET', 'PEUGEOT', 'RENAULT', 'SUBARU', 'DATSUN', 'TATA',
+  // premium / exotic
+  'FERRARI', 'LAMBORGHINI', 'PORSCHE', 'MASERATI', 'BENTLEY', 'ROLLS-ROYCE', 'MCLAREN',
+  'ASTON MARTIN', 'JAGUAR', 'LAND ROVER', 'RANGE ROVER', 'MINI', 'TESLA', 'VOLVO', 'ALFA ROMEO',
+  'LOTUS', 'INFINITI', 'ACURA', 'CADILLAC', 'HUMMER', 'JEEP', 'DODGE', 'GMC',
+  // newer market entrants
+  'BYD', 'VINFAST', 'NETA', 'ORA', 'GWM', 'HAVAL', 'GEELY', 'PROTON', 'SSANGYONG', 'CITROEN',
+  'FIAT', 'SKODA', 'SMART', 'OPEL', 'SEAT', 'MITSUBISHI FUSO', 'HINO',
 ];

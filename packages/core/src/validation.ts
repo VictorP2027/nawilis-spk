@@ -49,7 +49,7 @@ export function validateLayer1(doc: SpkDoc, prior?: VehicleDoc | null): Validati
       rule: 'PLATE_FORMAT',
       severity: 'BLOCK',
       path: 'vehicle.noPolisi',
-      message: 'Format No. Polisi tidak valid.',
+      message: 'Format No. Polisi tidak valid (contoh: B 1234 XYZ — huruf wilayah, angka, huruf).',
     });
   }
   if (doc.vehicle.noPolisi.correctionsApplied.length > 0) {
