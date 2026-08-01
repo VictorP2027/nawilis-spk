@@ -47,6 +47,11 @@ export default function Sheet() {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
   }, []);
 
+  // Live overridable warnings: typing anything is allowed, but flag values that
+  // aren't in Turboly's catalog so staff can fix a typo before submitting.
+  const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
+  const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
+
   // Load the real service advisors for the chosen branch (synced from Turboly).
   useEffect(() => {
     if (!branch) { setAdvisors([]); return; }
@@ -175,8 +180,11 @@ export default function Sheet() {
           <div className="box">
             <span className="sec-h">INFORMASI KENDARAAN</span>
             <div className="fld"><label>Merk Mobil</label>
-              <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" />
-              <datalist id="make-list">{makes.map((m) => <option key={m} value={m} />)}</datalist>
+              <div>
+                <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
+                <datalist id="make-list">{makes.map((m) => <option key={m} value={m} />)}</datalist>
+                {makeUnknown && <div className="warn-inline">⚠ Merk tidak ada di katalog Turboly — boleh lanjut, tapi mobil BARU dengan merk ini akan gagal dibuat. Periksa ejaan.</div>}
+              </div>
             </div>
             <div className="fld"><label>Tipe</label><input value={tipe} onChange={(e) => setTipe(e.target.value)} /></div>
             <div className="fld"><label>No. Polisi</label><input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" /></div>
@@ -320,6 +328,7 @@ export default function Sheet() {
             <datalist id="advisor-list">
               {advisors.map((a) => <option key={a.code} value={a.name} />)}
             </datalist>
+            {advisorUnknown && <div className="warn-inline">⚠ Nama tidak ada di daftar advisor cabang ini — boleh lanjut; order Turboly akan memakai advisor terdaftar sebagai fallback.</div>}
           </div>
         </div>
         <div className="two" style={{ marginTop: 6 }}>
