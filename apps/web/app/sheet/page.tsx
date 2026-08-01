@@ -121,7 +121,12 @@ export default function Sheet() {
     const body = await res.json().catch(() => ({}));
     if (res.ok) {
       const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
-      setResult({ ok: !body.needsReview, text: (body.needsReview ? 'Tersimpan, perlu diperbaiki: ' : `✓ Tersimpan ke MongoDB (${body.state}). `) + notes });
+      const msg = body.needsReview
+        ? 'Tersimpan, perlu diperbaiki: '
+        : body.state === 'queued'
+          ? '✓ Tersimpan & langsung dikirim ke Turboly. '
+          : `✓ Tersimpan ke MongoDB (${body.state}). `;
+      setResult({ ok: !body.needsReview, text: msg + notes });
     } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
     setSubmitting(false);
   }

@@ -1,20 +1,31 @@
 import { NextResponse } from 'next/server';
-import { SpkIntakeInput, collections } from '@spk/core';
+import { SpkIntakeInput, collections, assignMechanic } from '@spk/core';
 import { db } from '../../../lib/db';
 import { ingestSpk } from '../../../lib/ingest';
+import { triggerTurbolyPush } from '../../../lib/triggerPush';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** POST /api/spk — ingest one SPK (typed or photo-extracted). */
 export async function POST(req: Request): Promise<Response> {
-  const json = await req.json().catch(() => null);
+  const json = await req.json().catch(() => null) as { directPush?: boolean } | null;
   const parsed = SpkIntakeInput.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json({ error: 'invalid_input', issues: parsed.error.issues }, { status: 400 });
   }
   try {
     const result = await ingestSpk(parsed.data);
+    // Direct push (default): skip the "awaiting assignment" gate — release straight
+    // to the Turboly queue and kick the push now. Send {directPush:false} to hold it
+    // in awaiting_assignment instead (e.g. a quote that shouldn't be pushed yet).
+    if (json?.directPush !== false && !result.duplicate && result.state === 'awaiting_assignment') {
+      const released = await assignMechanic(result.spkId, { mechanicCode: 'UNASSIGNED', by: 'form-direct', via: 'console' });
+      if (released?.state === 'queued') {
+        result.state = 'queued';
+        await triggerTurbolyPush(result.spkId);
+      }
+    }
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });
   } catch (e) {
     console.error('ingest error', e);
