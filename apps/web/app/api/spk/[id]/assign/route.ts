@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { assignMechanic } from '@spk/core';
 import { db } from '../../../../../lib/db';
+import { triggerTurbolyPush } from '../../../../../lib/triggerPush';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   });
   if (!updated) {
     return NextResponse.json({ error: 'not_assignable', hint: 'SPK not in awaiting_assignment (already assigned, declined, or not yet validated)' }, { status: 409 });
+  }
+  // Released to the push queue → kick the GitHub Actions push NOW (instant),
+  // instead of waiting for the 5-min cron. Best-effort; the cron is the fallback.
+  if (updated.state === 'queued') {
+    await triggerTurbolyPush(updated._id);
   }
   return NextResponse.json({ spkId: updated._id, state: updated.state, queuedForTurboly: updated.state === 'queued' });
 }

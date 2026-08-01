@@ -7,9 +7,11 @@ name: push-to-turboly
 # touch Turboly: the pusher only logs in when there's actually work to do.
 
 on:
+  repository_dispatch:
+    types: [spk-assigned]    # fired by the web app the instant an SPK is assigned → near-instant push
   schedule:
-    - cron: '*/5 * * * *'   # every ~5 minutes
-  workflow_dispatch: {}      # + a manual "Run workflow" button
+    - cron: '*/5 * * * *'    # safety net: catch anything the instant-trigger missed
+  workflow_dispatch: {}       # + a manual "Run workflow" button
 
 # Never let two pushes overlap (belt-and-braces on top of the DB lease/CAS).
 concurrency:
@@ -30,6 +32,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
       - name: Install Chromium (for Playwright RPA)
         run: npx playwright install --with-deps chromium
