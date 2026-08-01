@@ -1,0 +1,49 @@
+name: push-to-turboly
+
+# Runs the Redis-free one-shot pusher on a schedule: it finds every `queued`
+# SPK in Atlas, creates its Turboly Service Order, verifies it, then exits.
+# GitHub's minimum cron interval is 5 min (scheduled runs on busy public repos
+# are often delayed a few extra minutes — that's normal). Empty passes never
+# touch Turboly: the pusher only logs in when there's actually work to do.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every ~5 minutes
+  workflow_dispatch: {}      # + a manual "Run workflow" button
+
+# Never let two pushes overlap (belt-and-braces on top of the DB lease/CAS).
+concurrency:
+  group: turboly-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium (for Playwright RPA)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build core
+        run: npm run build -w @spk/core
+
+      - name: Push queued SPKs to Turboly
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
+          TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
+          PUSH_MODE: rpa
+          PUSH_APPROVE: 'true'
+        run: node --import tsx apps/worker/src/push-once.ts
