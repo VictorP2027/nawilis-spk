@@ -21,6 +21,41 @@ Prereq: push this repo to **GitHub** (private is fine) — both Vercel and the V
 
 ---
 
+## Worker — Option B (ACTIVE): GitHub Actions (no credit card)
+
+The no-card path, and what's currently running. A scheduled Actions workflow runs the
+pusher in GitHub's cloud — no server, no card. Proven live: created & verified
+`SRO/BKS/26080004` from a CI run.
+
+**Already set up in this repo:**
+- `.github/workflows/push.yml` — cron `*/5 * * * *` + a manual **Run workflow** button.
+  Each run executes `push-once`: finds every `queued` SPK, creates+verifies its Turboly
+  Service Order, then exits. Empty passes never log into Turboly.
+- Encrypted Actions **secrets**: `MONGODB_URI`, `TURBOLY_USERNAME`, `TURBOLY_PASSWORD`.
+
+**Public vs private:** public repos get **unlimited** free Actions minutes (→ ~5-min cadence);
+private repos are capped at ~2,000 min/mo (→ run every ~30 min to stay free). Make it public:
+```bash
+gh repo edit VictorP2027/nawilis-spk --visibility public --accept-visibility-change-consequences
+```
+> Public = the code/method is world-readable (secrets stay in the encrypted store, NOT the code).
+> Trade-off accepted for this deploy.
+
+**Manage it:**
+```bash
+gh workflow run push.yml --repo VictorP2027/nawilis-spk   # trigger now
+gh run watch --repo VictorP2027/nawilis-spk               # watch latest
+gh run list  --repo VictorP2027/nawilis-spk               # history
+# rotate/replace a secret:
+gh secret set TURBOLY_PASSWORD --repo VictorP2027/nawilis-spk
+```
+
+**Caveats:** GitHub delays scheduled runs a few min under load (real cadence ~5–15 min);
+scheduled workflows auto-pause after 60 days of repo inactivity (any commit re-arms them);
+this is batch (not sub-second) — fine for 50–500/day. For truly instant, use Option A (VM/device) below.
+
+---
+
 ## 1. Web app → Vercel (5 min)
 
 1. https://vercel.com → **Add New Project** → import your GitHub repo.
