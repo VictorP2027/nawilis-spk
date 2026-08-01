@@ -13,6 +13,13 @@ export interface TurbolyServiceOrderPayload {
   type: string; // default "General"
   customer: { existingQuery: string | null; create: { nama: string; phone: string; alamat: string } | null };
   vehicleRegistration: string; // display plate, matching Turboly spacing
+  /** No-space plate for the create-vehicle form + search, e.g. "B1234SZA". */
+  vehiclePlateFull?: string;
+  /** Details for creating a brand-new vehicle when it isn't already in Turboly. */
+  vehicleMake?: string;
+  vehicleModel?: string;
+  vehicleYear?: string;
+  vehicleColor?: string;
   odometer: string;
   planServiceDate: string; // formatted for the date field, e.g. "31-07-2026"
   planServiceTime: string; // e.g. "09:30"

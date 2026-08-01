@@ -54,15 +54,31 @@ export class RpaSink implements ServiceOrderSink {
       await this.selectByLabelOrFirst('#service-advisor-id', payload.serviceAdvisorName);
       await this.selectByLabelOrFirst('#salesperson-id', payload.salespersonName);
 
-      // 2. Customer (Select2 v3 remote search) — pick existing match.
-      await this.pickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery ?? payload.customer.create?.nama ?? '');
-      await page.waitForTimeout(1200);
-
-      // 3. Vehicle — search by registration WITHOUT spaces (Turboly's index).
-      await this.pickSelect2('#s2id_select2-input-vehicle', payload.vehicleRegistration.replace(/\s/g, ''));
-      await page.waitForTimeout(1200);
-      // Turboly warns "Found in-progress service documents for this vehicle" — dismiss it.
-      await this.dismissModals();
+      // 2-3. Customer + vehicle. Try to attach to existing Turboly records first;
+      // if the customer isn't found, create a new customer + vehicle from the form.
+      const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+      let attached = false;
+      if (payload.customer.existingQuery) {
+        const custOk = await this.tryPickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery);
+        if (custOk) {
+          await page.waitForTimeout(1200);
+          const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
+          if (vehOk) {
+            attached = true;
+            await page.waitForTimeout(1200);
+            await this.dismissModals();
+          } else {
+            // Existing customer but this vehicle isn't in Turboly. The Add-New-Customer
+            // modal would create a DUPLICATE customer, so surface it for a human instead.
+            throw new DataError(`customer "${payload.customer.existingQuery}" found but vehicle ${reg} is not in Turboly (add-vehicle-to-existing is not automated)`);
+          }
+        }
+      }
+      if (!attached) {
+        await this.createCustomerAndVehicle(payload);
+        await page.waitForTimeout(1200);
+        await this.dismissModals();
+      }
 
       // 4. Odometer, reference token, plan date/time.
       await page.fill('#odometer', payload.odometer);
@@ -119,6 +135,7 @@ export class RpaSink implements ServiceOrderSink {
       const shot = await this.snapshot(this.session.page_(), `${payload.spkId}-error`).catch(() => null);
       if (e instanceof LeaseLostError) return { ...fail('transient', e.message), screenshotRef: shot };
       if (e instanceof AuthChallengeError) return { ...fail('auth', e.message), screenshotRef: shot };
+      if (e instanceof DataError) return { ...fail('data', e.message), screenshotRef: shot };
       const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
       if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
       return { ...fail('structural', errMsg(e)), screenshotRef: shot };
@@ -162,6 +179,97 @@ export class RpaSink implements ServiceOrderSink {
       await page.waitForTimeout(600);
     }
     await page.locator('#select2-drop .select2-results li.select2-result-selectable').first().click({ timeout: 4000 });
+  }
+
+  /** Like pickSelect2 but returns false (and closes the drop) instead of throwing on no-match. */
+  private async tryPickSelect2(containerSel: string, query: string): Promise<boolean> {
+    const page = this.session.page_();
+    try {
+      await this.pickSelect2(containerSel, query);
+      return true;
+    } catch {
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(300);
+      return false;
+    }
+  }
+
+  /**
+   * Create a brand-new customer + vehicle via the "Add New Customer" modal, then
+   * let Turboly auto-select them into the Service Order. Store/Service Tax/Country
+   * are pre-filled by Turboly (we picked the store already). Proven live 2026-08-01.
+   */
+  private async createCustomerAndVehicle(payload: TurbolyServiceOrderPayload): Promise<void> {
+    const page = this.session.page_();
+    const c = payload.customer.create;
+    // Open the modal (the control is an <a>/<button>/<input> labelled "Add New Customer").
+    await page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll('a,button,input')).find((n) => /add new customer/i.test(((n as HTMLElement).textContent || (n as HTMLInputElement).value || '').trim()));
+      if (el) (el as HTMLElement).click();
+    });
+    await page.waitForTimeout(2500);
+
+    // Customer
+    await page.fill('#customer_name', c?.nama || 'Customer');
+    if (c?.phone) await page.fill('#customer_phone', c.phone).catch(() => {});
+    if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
+
+    // Vehicle
+    const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+    await page.fill('#customer_vehicles_attributes_0_registration', reg);
+    await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    await page.waitForTimeout(700);
+    if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+    await page.waitForTimeout(900);
+    if (payload.vehicleModel) await this.modalSelect2Pick('s2id_vehicle-model-select', payload.vehicleModel);
+    if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
+    await page.fill('#customer_vehicles_attributes_0_odometer', payload.odometer).catch(() => {});
+    if (payload.vehicleColor) await page.fill('#customer_vehicles_attributes_0_color', payload.vehicleColor).catch(() => {});
+    await page.fill('#customer_vehicles_attributes_0_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
+    // "Month next service default" is a NUMBER of months, not a date.
+    await page.fill('#customer_vehicles_attributes_0_next_service_date_default', '3').catch(() => {});
+
+    // Save the modal (its own submit button, class starts turbo-btn-save-cust*; a
+    // DOM click bypasses the fixed-footer actionability quirk). NOT the SO's save.
+    const clicked = await page.evaluate(() => {
+      const b = Array.from(document.querySelectorAll('input[class*="turbo-btn-save-cust"]')).find((x) => {
+        const r = (x as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && getComputedStyle(x as HTMLElement).display !== 'none';
+      });
+      if (b) { (b as HTMLElement).click(); return true; }
+      return false;
+    });
+    if (!clicked) throw new DataError('could not find the New Customer save button');
+    await page.waitForTimeout(5000);
+
+    // If the modal's save button is still visible, the save was rejected — surface why.
+    const stillOpen = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('input[class*="turbo-btn-save-cust"]')).some((x) => {
+        const r = (x as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }),
+    );
+    if (stillOpen) {
+      const err = await this.readInlineError(page).catch(() => null);
+      throw new DataError(`new-customer create rejected${err ? `: ${err}` : ' (check make/model match)'}`);
+    }
+  }
+
+  /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
+  private async modalSelect2Pick(containerId: string, query: string): Promise<void> {
+    const page = this.session.page_();
+    await page.locator(`#${containerId} .select2-choice`).click({ timeout: 8000 });
+    await page.waitForTimeout(400);
+    await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(query);
+    const results = '.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable';
+    for (let i = 0; i < 20; i++) {
+      if ((await page.locator(results).count()) > 0) break;
+      const txt = await page.locator('.select2-drop:visible .select2-results, #select2-drop:visible .select2-results').first().innerText().catch(() => '');
+      if (txt && !/searching|loading|more characters/i.test(txt)) throw new DataError(`no Turboly match for "${query}"`);
+      await page.waitForTimeout(500);
+    }
+    await page.locator(results).first().click({ timeout: 5000 });
+    await page.waitForTimeout(500);
   }
 
   /** Dismiss any visible Turboly warning/info modal (e.g. in-progress-docs) by clicking OK. */
@@ -346,6 +454,14 @@ export class LeaseLostError extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = 'LeaseLostError';
+  }
+}
+
+/** A data-quality failure (no match, rejected create) — retrying won't help; route to review. */
+export class DataError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'DataError';
   }
 }
 

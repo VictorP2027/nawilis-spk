@@ -77,7 +77,7 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     ? doc.customer.turbolyCustomerId
     : doc.customer.waE164
       ? doc.customer.waE164
-      : null;
+      : doc.customer.nama || null;
 
   return {
     spkId: doc._id,
@@ -85,13 +85,18 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     storeName: store.turbolyStoreName,
     storeTurbolyId: store.turbolyStoreId,
     type: 'General',
-    customer: customerExisting
-      ? { existingQuery: customerExisting, create: null }
-      : {
-          existingQuery: null,
-          create: { nama: doc.customer.nama, phone: doc.customer.waE164 ?? '', alamat: doc.customer.alamat ?? '' },
-        },
+    // existingQuery is tried first; `create` is ALWAYS provided so the sink can
+    // fall back to creating a new customer+vehicle when the search finds nothing.
+    customer: {
+      existingQuery: customerExisting,
+      create: { nama: doc.customer.nama, phone: doc.customer.waE164 ?? '', alamat: doc.customer.alamat ?? '' },
+    },
     vehicleRegistration: doc.vehicle.noPolisi.display,
+    vehiclePlateFull: doc.vehicle.noPolisi.full,
+    vehicleMake: doc.vehicle.merkNormalized ?? doc.vehicle.merkRaw ?? '',
+    vehicleModel: doc.vehicle.tipeNormalized ?? '',
+    vehicleYear: doc.vehicle.tahun != null ? String(doc.vehicle.tahun) : '',
+    vehicleColor: doc.vehicle.warna ?? '',
     odometer: String(doc.vehicle.km.value),
     planServiceDate: planDate,
     planServiceTime: planTime,
