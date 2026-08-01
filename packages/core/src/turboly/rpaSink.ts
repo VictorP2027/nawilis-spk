@@ -173,6 +173,7 @@ export class RpaSink implements ServiceOrderSink {
   private async classifyFailure(e: unknown, spkId: string): Promise<PushResult> {
     const shot = await this.snapshot(this.session.page_(), `${spkId}-error`).catch(() => null);
     if (e instanceof LeaseLostError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
+    if (e instanceof TransientError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
     if (e instanceof AuthChallengeError) return { ...fail('auth', (e as Error).message), screenshotRef: shot };
     if (e instanceof DataError) return { ...fail('data', (e as Error).message), screenshotRef: shot };
     const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
@@ -246,16 +247,23 @@ export class RpaSink implements ServiceOrderSink {
   private async dropPick(query: string): Promise<void> {
     const page = this.session.page_();
     await page.waitForTimeout(400);
-    await page.locator('#select2-drop input').first().fill(query);
-    for (let i = 0; i < 18; i++) {
-      const st = await page.evaluate(() => {
-        const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
-        return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
-      });
-      if (st.sel > 0) break;
-      if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`no Turboly match for "${query}"`);
-      await page.waitForTimeout(600);
+    let ready = false;
+    for (let round = 0; round < 2 && !ready; round++) {
+      // Re-typing the query re-triggers the remote search (round 2 = in-place retry).
+      await page.locator('#select2-drop input').first().fill('');
+      await page.waitForTimeout(150);
+      await page.locator('#select2-drop input').first().fill(query);
+      for (let i = 0; i < 30; i++) { // sandbox remote search can take >15s under load
+        const st = await page.evaluate(() => {
+          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
+          return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
+        });
+        if (st.sel > 0) { ready = true; break; }
+        if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`no Turboly match for "${query}"`);
+        await page.waitForTimeout(700);
+      }
     }
+    if (!ready) throw new TransientError(`Turboly search for "${query}" timed out (still searching)`);
     await page.locator('#select2-drop .select2-results li.select2-result-selectable').first().click({ timeout: 4000 });
   }
 
@@ -395,15 +403,18 @@ export class RpaSink implements ServiceOrderSink {
       } catch { /* fall through to most-similar stand-in */ }
     }
     const page = this.session.page_();
-    // Clearing the old drop's query does NOT re-trigger select2's load — only a
-    // FRESH open does. Close whatever is open, then reopen via a real mousedown
-    // (select2-v3's trigger; also immune to the stale drop intercepting clicks).
-    await page.keyboard.press('Escape').catch(() => {});
-    await page.waitForTimeout(400);
-    await page.evaluate((id) => {
-      const c = document.querySelector(`#${id} .select2-choice`) ?? document.getElementById(id);
-      if (c) c.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    }, containerId);
+    // Reuse the drop the failed search left OPEN: clear its query with REAL
+    // keyboard events (select2-v3 re-queries on keyup — programmatic fill('')
+    // doesn't fire it, and NEVER press Escape here: it closes the whole
+    // Bootstrap modal). Empty-q path: no stale drop, a plain click opens it.
+    const dropInput = page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').last();
+    if (await dropInput.count()) {
+      await dropInput.click({ timeout: 4000 }).catch(() => {});
+      await page.keyboard.press('ControlOrMeta+a').catch(() => {});
+      await page.keyboard.press('Backspace').catch(() => {});
+    } else {
+      await page.locator(`#${containerId} .select2-choice, #${containerId}`).first().click({ timeout: 8000 });
+    }
     // Poll: the model list is a remote fetch — "Searching…" until it lands.
     let items: string[] = [];
     for (let i = 0; i < 16; i++) {
@@ -455,7 +466,7 @@ export class RpaSink implements ServiceOrderSink {
       await page.waitForTimeout(500);
     }
     // Search never resolved (stuck "Searching…") — a data/timeout condition, not a broken page.
-    if (!found) throw new DataError(`Turboly search for "${q}" returned no results (timed out)`);
+    if (!found) throw new TransientError(`Turboly search for "${q}" returned no results (timed out)`);
     await page.locator(results).first().click({ timeout: 5000 });
     await page.waitForTimeout(500);
   }
@@ -660,6 +671,14 @@ export class DataError extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = 'DataError';
+  }
+}
+
+/** A slow/flaky remote search — retry later; the same input may succeed. */
+export class TransientError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'TransientError';
   }
 }
 
