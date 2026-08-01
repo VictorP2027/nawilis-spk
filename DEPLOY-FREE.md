@@ -50,9 +50,30 @@ gh run list  --repo VictorP2027/nawilis-spk               # history
 gh secret set TURBOLY_PASSWORD --repo VictorP2027/nawilis-spk
 ```
 
-**Caveats:** GitHub delays scheduled runs a few min under load (real cadence ~5–15 min);
-scheduled workflows auto-pause after 60 days of repo inactivity (any commit re-arms them);
-this is batch (not sub-second) — fine for 50–500/day. For truly instant, use Option A (VM/device) below.
+### Make it INSTANT (fire on assignment, not on the clock)
+
+The workflow also listens for `repository_dispatch (spk-assigned)`, and the web app fires that
+event the moment an SPK is released to the queue (`apps/web/app/api/spk/[id]/assign/route.ts` →
+`lib/triggerPush.ts`). So a push starts within **seconds** of assignment instead of waiting for
+the 5-min cron. To turn it on:
+
+1. **Create a token:** GitHub → Settings → Developer settings → **Fine-grained tokens** →
+   Generate. Repository access = only `nawilis-spk`; Permissions → **Contents: Read and write**
+   (that's what `repository_dispatch` needs). Copy the token.
+2. **Add it to Vercel:** your project → Settings → Environment Variables →
+   `GH_DISPATCH_TOKEN = <token>` (and optionally `GH_REPO = VictorP2027/nawilis-spk`). Redeploy.
+
+That's it — assign an SPK and the Turboly push kicks off immediately. The 5-min cron stays as a
+safety net, and if the token isn't set the app just skips the kick (cron still covers it).
+
+> **Reality check:** even instant-triggered, each run cold-starts a fresh GitHub runner
+> (~1–2 min to install + build) before it pushes — so "instant" here means ~1–2 min end-to-end,
+> not seconds-to-Turboly. GitHub can't hold a warm process. For **sub-15-second** pushing you need
+> a machine that's already running: Option A (free VM, needs a card) or your own always-on device.
+
+**Caveats:** GitHub delays scheduled runs a few min under load; scheduled workflows auto-pause after
+60 days of repo inactivity (any commit re-arms them); public = code/method world-readable (secrets
+stay encrypted).
 
 ---
 
