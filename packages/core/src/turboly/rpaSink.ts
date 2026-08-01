@@ -42,103 +42,163 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     try {
-      // Verified sequence (proved live 2026-08-01, created SRO/BKS/26080001).
-      await page.goto(`${this.baseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(3000);
-
-      // 1. Header native <select>s (Select2-enhanced; selectOption drives them).
-      await page.selectOption('#order-type', { label: payload.type || 'General' }).catch(() => {});
-      await page.selectOption('#store-id', { value: payload.storeTurbolyId });
-      await page.waitForTimeout(2800); // advisors load after store (AJAX)
-
-      await this.selectByLabelOrFirst('#service-advisor-id', payload.serviceAdvisorName);
-      await this.selectByLabelOrFirst('#salesperson-id', payload.salespersonName);
-
-      // 2-3. Customer + vehicle. Try to attach to existing Turboly records first;
-      // if the customer isn't found, create a new customer + vehicle from the form.
-      const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
-      let attached = false;
-      if (payload.customer.existingQuery) {
-        const custOk = await this.tryPickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery);
-        if (custOk) {
-          await page.waitForTimeout(1200);
-          const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
-          if (vehOk) {
-            attached = true;
-            await page.waitForTimeout(1200);
-            await this.dismissModals();
-          } else {
-            // Existing customer but this vehicle isn't in Turboly. The Add-New-Customer
-            // modal would create a DUPLICATE customer, so surface it for a human instead.
-            throw new DataError(`customer "${payload.customer.existingQuery}" found but vehicle ${reg} is not in Turboly (add-vehicle-to-existing is not automated)`);
-          }
+      return await this.buildAndSaveOrder(payload, ctx);
+    } catch (e) {
+      // Customer exists but the vehicle isn't in Turboly → create the vehicle for that
+      // customer (via /vehicles/new), then rebuild the order (the SO form was navigated away).
+      if (e instanceof NeedAddVehicleError) {
+        try {
+          await this.addVehicleToExistingCustomer(payload);
+          return await this.buildAndSaveOrder(payload, ctx);
+        } catch (e2) {
+          return await this.classifyFailure(e2, payload.spkId);
         }
       }
-      if (!attached) {
-        await this.createCustomerAndVehicle(payload);
+      return await this.classifyFailure(e, payload.spkId);
+    }
+  }
+
+  /** Build the Service Order form and save it. Raises on failure (incl. NeedAddVehicleError). */
+  private async buildAndSaveOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult> {
+    const page = this.session.page_();
+    // Verified sequence (proved live 2026-08-01, created SRO/BKS/26080001).
+    await page.goto(`${this.baseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+
+    // 1. Header native <select>s (Select2-enhanced; selectOption drives them).
+    await page.selectOption('#order-type', { label: payload.type || 'General' }).catch(() => {});
+    await page.selectOption('#store-id', { value: payload.storeTurbolyId });
+    await page.waitForTimeout(2800); // advisors load after store (AJAX)
+
+    await this.selectByLabelOrFirst('#service-advisor-id', payload.serviceAdvisorName);
+    await this.selectByLabelOrFirst('#salesperson-id', payload.salespersonName);
+
+    // 2-3. Customer + vehicle. Attach to existing Turboly records first; if the customer
+    // isn't found, create customer+vehicle; if the customer is found but the vehicle isn't,
+    // signal NeedAddVehicle so the caller creates it and retries.
+    const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+    let attached = false;
+    if (payload.customer.existingQuery) {
+      const custOk = await this.tryPickSelect2('#s2id_select2-input-customer', payload.customer.existingQuery);
+      if (custOk) {
         await page.waitForTimeout(1200);
-        await this.dismissModals();
+        const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
+        if (vehOk) {
+          attached = true;
+          await page.waitForTimeout(1200);
+          await this.dismissModals();
+        } else {
+          throw new NeedAddVehicleError(`customer "${payload.customer.existingQuery}" found but vehicle ${reg} not in Turboly`);
+        }
       }
-
-      // 4. Odometer, reference token, plan date/time.
-      await page.fill('#odometer', payload.odometer);
-      await page.fill('#service_order_reference_no', payload.referenceNumber);
-      await this.setPickerValue('#service-date', payload.planServiceDate);
-      await this.setPickerValue('#service-time', payload.planServiceTime);
-      if (payload.notes) await page.fill('#service_order_notes', payload.notes).catch(() => {});
-
-      // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
+    }
+    if (!attached) {
+      await this.createCustomerAndVehicle(payload);
+      await page.waitForTimeout(1200);
       await this.dismissModals();
-      await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
-      await page.waitForTimeout(700);
-      for (const line of payload.serviceLines) {
-        await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
-        await page.waitForTimeout(900);
-        await this.pickSelect2Locator(page.locator('.select2-container.input-service-product').last(), line.serviceName || line.expectedSku);
-        await page.waitForTimeout(800);
-        await this.setLastServiceRow(page, line.qty, line.description || line.serviceName);
-      }
+    }
 
-      const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
+    // 4. Odometer, reference token, plan date/time.
+    await page.fill('#odometer', payload.odometer);
+    await page.fill('#service_order_reference_no', payload.referenceNumber);
+    await this.setPickerValue('#service-date', payload.planServiceDate);
+    await this.setPickerValue('#service-time', payload.planServiceTime);
+    if (payload.notes) await page.fill('#service_order_notes', payload.notes).catch(() => {});
 
-      // 6. Save — irreversible; re-assert the lease first.
+    // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
+    await this.dismissModals();
+    await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
+    await page.waitForTimeout(700);
+    for (const line of payload.serviceLines) {
+      await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
+      await page.waitForTimeout(900);
+      await this.pickSelect2Locator(page.locator('.select2-container.input-service-product').last(), line.serviceName || line.expectedSku);
+      await page.waitForTimeout(800);
+      await this.setLastServiceRow(page, line.qty, line.description || line.serviceName);
+    }
+
+    const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
+
+    // 6. Save — irreversible; re-assert the lease first.
+    this.assertLease(ctx);
+    await this.dismissModals(); // clear any stray warning before the click can be intercepted
+    await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
+    await page.waitForTimeout(1500);
+    // Because this vehicle may have in-progress docs, Turboly re-prompts a
+    // confirmation modal ON save ("Continue?/Yes"). Affirm it, don't dismiss.
+    await this.confirmModals();
+    await page.waitForTimeout(3500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, `${payload.spkId}-aftersave`);
+
+    // 7. Result: success redirects to the created SO; else an inline error shows.
+    const inlineErr = await this.readInlineError(page).catch(() => null);
+    const onDetailPage = /\/service_orders\/\d+/.test(page.url());
+    const serviceOrderNo = onDetailPage ? await this.captureDocNumber(page) : null;
+    const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
+    const success = onDetailPage || flashOk;
+    if (!success || (inlineErr && !serviceOrderNo)) {
+      return { ...fail('data', inlineErr ?? 'save did not confirm'), screenshotRef };
+    }
+
+    const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;
+    if (ctx.approve && (await exists(page, S.actions.approve, 4000))) {
       this.assertLease(ctx);
-      await this.dismissModals(); // clear any stray warning before the click can be intercepted
-      await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
-      await page.waitForTimeout(1500);
-      // Because this vehicle may have in-progress docs, Turboly re-prompts a
-      // confirmation modal ON save ("Continue?/Yes"). Affirm it, don't dismiss.
-      await this.confirmModals();
-      await page.waitForTimeout(3500);
-      await page.waitForLoadState('networkidle').catch(() => {});
-      await this.snapshot(page, `${payload.spkId}-aftersave`);
+      await resolve(page, S.actions.approve).click().catch(() => {});
+      await page.waitForTimeout(2500);
+    }
+    await this.session.noteJobDone();
+    return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl };
+  }
 
-      // 7. Result: success redirects to the created SO; else an inline error shows.
-      const inlineErr = await this.readInlineError(page).catch(() => null);
-      const onDetailPage = /\/service_orders\/\d+/.test(page.url());
-      const serviceOrderNo = onDetailPage ? await this.captureDocNumber(page) : null;
-      const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
-      const success = onDetailPage || flashOk;
-      if (!success || (inlineErr && !serviceOrderNo)) {
-        return { ...fail('data', inlineErr ?? 'save did not confirm'), screenshotRef };
-      }
+  /** Screenshot + classify a raised error into a typed PushResult. */
+  private async classifyFailure(e: unknown, spkId: string): Promise<PushResult> {
+    const shot = await this.snapshot(this.session.page_(), `${spkId}-error`).catch(() => null);
+    if (e instanceof LeaseLostError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
+    if (e instanceof AuthChallengeError) return { ...fail('auth', (e as Error).message), screenshotRef: shot };
+    if (e instanceof DataError) return { ...fail('data', (e as Error).message), screenshotRef: shot };
+    const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
+    if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
+    return { ...fail('structural', errMsg(e)), screenshotRef: shot };
+  }
 
-      const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;
-      if (ctx.approve && (await exists(page, S.actions.approve, 4000))) {
-        this.assertLease(ctx);
-        await resolve(page, S.actions.approve).click().catch(() => {});
-        await page.waitForTimeout(2500);
-      }
-      await this.session.noteJobDone();
-      return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl };
-    } catch (e) {
-      const shot = await this.snapshot(this.session.page_(), `${payload.spkId}-error`).catch(() => null);
-      if (e instanceof LeaseLostError) return { ...fail('transient', e.message), screenshotRef: shot };
-      if (e instanceof AuthChallengeError) return { ...fail('auth', e.message), screenshotRef: shot };
-      if (e instanceof DataError) return { ...fail('data', e.message), screenshotRef: shot };
-      const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
-      if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
-      return { ...fail('structural', errMsg(e)), screenshotRef: shot };
+  /**
+   * Add a new vehicle to an EXISTING customer via /vehicles/new — Turboly has no
+   * inline add-vehicle on the SO form. Proven live 2026-08-01. The caller then
+   * rebuilds the order so customer + vehicle attach normally.
+   */
+  private async addVehicleToExistingCustomer(payload: TurbolyServiceOrderPayload): Promise<void> {
+    const page = this.session.page_();
+    const q = payload.customer.existingQuery;
+    if (!q) throw new DataError('cannot add vehicle: no customer identifier');
+    await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
+    const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+    await page.fill('#vehicle_registration', reg);
+    await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    await page.waitForTimeout(600);
+    if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+    await page.waitForTimeout(900);
+    if (payload.vehicleModel) await this.modalSelect2Pick('s2id_vehicle-model-select', payload.vehicleModel);
+    if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
+    await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
+    if (payload.vehicleColor) await page.fill('#vehicle_color', payload.vehicleColor).catch(() => {});
+    await page.fill('#vehicle_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
+    await page.fill('#vehicle_next_service_date_default', '3').catch(() => {});
+    const clicked = await page.evaluate(() => {
+      const b = Array.from(document.querySelectorAll('input[type=submit], button')).find((x) => {
+        const r = (x as HTMLElement).getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && /save|simpan/i.test(((x as HTMLInputElement).value || (x as HTMLElement).textContent || ''));
+      });
+      if (b) { (b as HTMLElement).click(); return true; }
+      return false;
+    });
+    if (!clicked) throw new DataError('new-vehicle save button not found');
+    await page.waitForTimeout(4500);
+    if (/\/vehicles\/new/.test(page.url())) {
+      const err = await this.readInlineError(page).catch(() => null);
+      throw new DataError(`add-vehicle-to-customer failed${err ? `: ${err}` : ' (check make/model match)'}`);
     }
   }
 
@@ -258,7 +318,7 @@ export class RpaSink implements ServiceOrderSink {
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
   private async modalSelect2Pick(containerId: string, query: string): Promise<void> {
     const page = this.session.page_();
-    await page.locator(`#${containerId} .select2-choice`).click({ timeout: 8000 });
+    await page.locator(`#${containerId} .select2-choice, #${containerId} .select2-choices, #${containerId}`).first().click({ timeout: 8000 });
     await page.waitForTimeout(400);
     await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(query);
     const results = '.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable';
@@ -462,6 +522,14 @@ export class DataError extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = 'DataError';
+  }
+}
+
+/** Control-flow signal: customer exists but the vehicle doesn't → add it, then rebuild. */
+export class NeedAddVehicleError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'NeedAddVehicleError';
   }
 }
 
