@@ -4,6 +4,7 @@ import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControl
 import { TurbolySession, AuthChallengeError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload } from './sink.js';
 import type { SpkDoc } from '../types.js';
+import { jaroWinkler } from '../indonesia.js';
 
 /**
  * W2 — browser automation against the real Turboly Service Order UI.
@@ -380,8 +381,10 @@ export class RpaSink implements ServiceOrderSink {
 
   /**
    * ANY-tipe policy: try the exact typed model; if Turboly doesn't have it, pick
-   * the make's FIRST available model as a stand-in and record the typed tipe in
-   * the order notes. Only fails if the make has no models at all.
+   * the make's MOST SIMILAR model as a stand-in (Jaro-Winkler + containment
+   * boost) and record the typed tipe in the order notes. The model list loads
+   * remotely, so the fallback polls until it resolves. Only fails if the make
+   * truly has no models.
    */
   private async pickModelLoose(containerId: string, typed: string): Promise<void> {
     const q = (typed ?? '').trim();
@@ -389,22 +392,45 @@ export class RpaSink implements ServiceOrderSink {
       try {
         await this.modalSelect2Pick(containerId, q);
         return;
-      } catch { /* fall through to first-model stand-in */ }
+      } catch { /* fall through to most-similar stand-in */ }
     }
     const page = this.session.page_();
     await page.keyboard.press('Escape').catch(() => {});
     await page.waitForTimeout(300);
     await page.locator(`#${containerId} .select2-choice, #${containerId}`).first().click({ timeout: 8000 });
-    await page.waitForTimeout(900);
-    const first = page.locator('.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable').first();
-    if ((await first.count()) === 0) {
+    // Poll: the model list is a remote fetch — "Searching…" until it lands.
+    let items: string[] = [];
+    for (let i = 0; i < 16; i++) {
+      await page.waitForTimeout(500);
+      const st = await page.evaluate(() => {
+        const lis = Array.from(document.querySelectorAll('.select2-drop .select2-results li, #select2-drop .select2-results li'));
+        return {
+          searching: lis.some((l) => l.classList.contains('select2-searching')),
+          texts: lis.filter((l) => l.classList.contains('select2-result-selectable')).map((l) => (l as HTMLElement).innerText.trim()),
+        };
+      });
+      if (!st.searching && st.texts.length) { items = st.texts; break; }
+      if (!st.searching && i > 3) break; // resolved to empty
+    }
+    if (!items.length) {
       await page.keyboard.press('Escape').catch(() => {});
       throw new DataError(`make has no models in Turboly (typed tipe "${q || '—'}")`);
     }
-    const label = (await first.innerText().catch(() => '')).trim();
-    await first.click({ timeout: 4000 });
+    // Most-similar: containment (either direction) outranks fuzzy distance.
+    const norm = (s: string) => s.toUpperCase().replace(/\s+/g, ' ').trim();
+    const nq = norm(q);
+    let bestIdx = 0;
+    let bestScore = -1;
+    items.forEach((it, i) => {
+      const ni = norm(it);
+      const contain = nq && (ni.includes(nq) || nq.includes(ni)) ? 0.95 : 0;
+      const score = Math.max(contain, nq ? jaroWinkler(nq, ni) : 0);
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    });
+    const label = items[bestIdx] ?? items[0]!;
+    await page.locator('.select2-drop .select2-results li.select2-result-selectable, #select2-drop .select2-results li.select2-result-selectable').nth(bestIdx).click({ timeout: 4000 });
     await page.waitForTimeout(400);
-    this.notesExtra.push(q ? `Tipe diketik "${q}" tidak ada di katalog — model Turboly dipakai: ${label}` : `Tipe kosong — model Turboly dipakai: ${label}`);
+    this.notesExtra.push(q ? `Tipe diketik "${q}" tidak ada di katalog — model paling mirip dipakai: ${label}` : `Tipe kosong — model Turboly dipakai: ${label}`);
   }
 
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
