@@ -275,6 +275,23 @@ export function normalizeBrand(raw: string, vocab: readonly string[]): BrandMatc
   return { normalized: bestScore >= 0.92 ? best : null, score: bestScore, raw };
 }
 
+/**
+ * Canonical phone identity key: digits only, country code (62) stripped, leading
+ * 0 stripped. "0223456789", "223456789", "+62223456789", "62223456789" → "223456789".
+ */
+export function canonPhoneKey(raw: string): string {
+  let d = (raw ?? '').replace(/\D/g, '');
+  if (d.startsWith('62')) d = d.slice(2);
+  if (d.startsWith('0')) d = d.slice(1);
+  return d;
+}
+
+/** Display/storage form: canonical key with the leading 0 (Indonesian local). */
+export function localPhone(raw: string): string {
+  const k = canonPhoneKey(raw);
+  return k ? '0' + k : '';
+}
+
 /** Asia/Jakarta calendar day (YYYY-MM-DD) for a given instant. */
 export function jakartaBusinessDate(iso: string): string {
   const d = new Date(iso);

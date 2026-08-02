@@ -4,7 +4,7 @@ import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControl
 import { TurbolySession, AuthChallengeError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload } from './sink.js';
 import type { SpkDoc } from '../types.js';
-import { jaroWinkler } from '../indonesia.js';
+import { jaroWinkler, canonPhoneKey, localPhone } from '../indonesia.js';
 
 /**
  * W2 — browser automation against the real Turboly Service Order UI.
@@ -225,10 +225,9 @@ export class RpaSink implements ServiceOrderSink {
    */
   private async addVehicleToExistingCustomer(payload: TurbolyServiceOrderPayload): Promise<void> {
     const page = this.session.page_();
-    // Identity-first query: phone in LOCAL 08-format (Turboly's stored form), else name.
-    const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
+    // Identity-first query: canonical phone key (matches 0/62/bare stored forms), else name.
     const cr = payload.customer.create;
-    const q = (cr?.phone && local(cr.phone).length >= 8 ? local(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    const q = (cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
@@ -336,9 +335,8 @@ export class RpaSink implements ServiceOrderSink {
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const page = this.session.page_();
     // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
-    // Normalize +62… ↔ 08… so formats match Turboly's stored numbers.
-    const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
-    const phoneKey = phone && local(phone).length >= 8 ? local(phone) : '';
+    // Canonical key: 0223456789 / 223456789 / +62223456789 are all the SAME person.
+    const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
     const query = (phoneKey || nama || '').trim();
     if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
     try {
@@ -356,13 +354,12 @@ export class RpaSink implements ServiceOrderSink {
       }
       const idx = await page.evaluate(({ nama, phoneKey }) => {
         const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-        const local = (s: string) => { const d = s.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
         const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
         for (let i = 0; i < lis.length; i++) {
           const text = (lis[i] as HTMLElement).innerText || '';
           if (phoneKey) {
-            // Identity = phone ONLY. A same-name/different-phone person is a DIFFERENT customer.
-            if (local(text).includes(phoneKey)) return i;
+            // Identity = phone ONLY (canonical: contains works for 0/62/bare forms).
+            if (text.replace(/\D/g, '').includes(phoneKey)) return i;
           } else {
             // No phone typed → fall back to exact-name matching (as before).
             const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
@@ -399,10 +396,7 @@ export class RpaSink implements ServiceOrderSink {
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
-    if (c?.phone) {
-      const d = c.phone.replace(/\D/g, '');
-      await page.fill('#customer_phone', d.startsWith('62') ? '0' + d.slice(2) : d).catch(() => {});
-    }
+    if (c?.phone) await page.fill('#customer_phone', localPhone(c.phone)).catch(() => {});
     if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
 
     // Vehicle

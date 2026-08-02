@@ -207,8 +207,7 @@ export default function Sheet() {
     // Branch routes the Turboly store; WA is REQUIRED (customer identity key).
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
-    const waD = wa.replace(/\D/g, '');
-    if (waD.length < 9 || !(waD.startsWith('0') || waD.startsWith('62'))) { setResult({ ok: false, text: 'Nomor WhatsApp wajib & harus format Indonesia (08… atau +62…).' }); setSubmitting(false); return; }
+    if (wa.replace(/\D/g, '').length < 9) { setResult({ ok: false, text: 'Nomor WhatsApp wajib diisi — min. 9 digit.' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.

@@ -1,7 +1,7 @@
 import { collections } from './mongo.js';
 import { canTransition, IllegalTransitionError } from './states.js';
 import { newSpkId, correlationToken, vehicleRef } from './ids.js';
-import { parsePlate, plateVariants, parseKm, parseWa, normalizeBrand, jakartaBusinessDate } from './indonesia.js';
+import { parsePlate, plateVariants, parseKm, parseWa, normalizeBrand, jakartaBusinessDate, localPhone } from './indonesia.js';
 import { CAR_BRANDS, REF_BRANCHES } from './refdata.js';
 import type { SpkDoc, PipelineState, SpkEvent, JobLine, ConditionCheck, FieldMetaEntry, BranchType } from './types.js';
 import type { SpkIntakeInputT } from './schema.js';
@@ -172,7 +172,7 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
       nama: input.customer.nama,
       // Identity key must never be silently lost: if strict parsing rejects the
       // format, keep the normalized raw digits (0-prefixed) — WA_FORMAT still warns.
-      waE164: wa.e164 ?? (() => { const d = (input.customer.wa ?? '').replace(/\D/g, ''); const l = d.startsWith('62') ? '0' + d.slice(2) : d; return l.length >= 9 ? l : null; })(),
+      waE164: wa.e164 ?? (() => { const l = localPhone(input.customer.wa ?? ''); return l.length >= 9 ? l : null; })(),
       alamat: input.customer.alamat,
       kontakLain: input.customer.kontakLain,
       turbolyCustomerId: input.customer.turbolyCustomerId,
