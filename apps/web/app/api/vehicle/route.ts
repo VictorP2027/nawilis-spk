@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { collections } from '@spk/core';
+import { collections, localPhone } from '@spk/core';
 import { db } from '../../../lib/db';
 
 export const runtime = 'nodejs';
@@ -16,9 +16,8 @@ export async function GET(req: Request): Promise<Response> {
   const lastSpk = await collections
     .spk()
     .findOne({ 'vehicle.plateVariants': key }, { sort: { createdAt: -1 }, projection: { customer: 1 } });
-  const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
   const customer = lastSpk?.customer
-    ? { nama: lastSpk.customer.nama, wa: lastSpk.customer.waE164 ? local(lastSpk.customer.waE164) : null, alamat: lastSpk.customer.alamat ?? null }
+    ? { nama: lastSpk.customer.nama, wa: lastSpk.customer.waE164 ? localPhone(lastSpk.customer.waE164) : null, alamat: lastSpk.customer.alamat ?? null }
     : null;
   return NextResponse.json({ vehicle, customer });
 }

@@ -5,6 +5,9 @@ export const metadata = {
   title: 'Nawilis SPK',
   description: 'Intake SPK → MongoDB → Turboly',
   manifest: '/manifest.webmanifest',
+  // Browser page-translation rewrites the DOM and crashes React interactivity
+  // (and mangles service names) — block it; the form is intentionally Indonesian.
+  other: { google: 'notranslate' },
 };
 
 export const viewport = {
@@ -16,7 +19,7 @@ export const viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="id">
+    <html lang="id" translate="no">
       <body>{children}</body>
     </html>
   );
