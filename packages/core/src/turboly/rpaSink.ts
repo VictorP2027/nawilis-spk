@@ -213,7 +213,10 @@ export class RpaSink implements ServiceOrderSink {
    */
   private async addVehicleToExistingCustomer(payload: TurbolyServiceOrderPayload): Promise<void> {
     const page = this.session.page_();
-    const q = payload.customer.existingQuery;
+    // Identity-first query: phone in LOCAL 08-format (Turboly's stored form), else name.
+    const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
+    const cr = payload.customer.create;
+    const q = (cr?.phone && local(cr.phone).length >= 8 ? local(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
@@ -320,7 +323,11 @@ export class RpaSink implements ServiceOrderSink {
    */
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const page = this.session.page_();
-    const query = (phone || nama || '').trim();
+    // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
+    // Normalize +62… ↔ 08… so formats match Turboly's stored numbers.
+    const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
+    const phoneKey = phone && local(phone).length >= 8 ? local(phone) : '';
+    const query = (phoneKey || nama || '').trim();
     if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
@@ -335,19 +342,23 @@ export class RpaSink implements ServiceOrderSink {
         if (st.txt && !/searching|more characters/i.test(st.txt)) break;
         await page.waitForTimeout(600);
       }
-      const idx = await page.evaluate(({ nama, phone }) => {
+      const idx = await page.evaluate(({ nama, phoneKey }) => {
         const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-        const digits = (s: string) => s.replace(/\D/g, '');
+        const local = (s: string) => { const d = s.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
         const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
         for (let i = 0; i < lis.length; i++) {
           const text = (lis[i] as HTMLElement).innerText || '';
-          const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
-          const nameOk = !!nama && norm(name) === norm(nama);
-          const phoneOk = !!phone && digits(phone).length >= 7 && digits(text).includes(digits(phone));
-          if (nameOk || phoneOk) return i;
+          if (phoneKey) {
+            // Identity = phone ONLY. A same-name/different-phone person is a DIFFERENT customer.
+            if (local(text).includes(phoneKey)) return i;
+          } else {
+            // No phone typed → fall back to exact-name matching (as before).
+            const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
+            if (!!nama && norm(name) === norm(nama)) return i;
+          }
         }
         return -1;
-      }, { nama, phone });
+      }, { nama, phoneKey });
       if (idx < 0) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false; }
       await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
       await page.waitForTimeout(500);
@@ -376,7 +387,10 @@ export class RpaSink implements ServiceOrderSink {
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
-    if (c?.phone) await page.fill('#customer_phone', c.phone).catch(() => {});
+    if (c?.phone) {
+      const d = c.phone.replace(/\D/g, '');
+      await page.fill('#customer_phone', d.startsWith('62') ? '0' + d.slice(2) : d).catch(() => {});
+    }
     if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
 
     // Vehicle

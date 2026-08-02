@@ -256,7 +256,12 @@ export default function Sheet() {
             </div>
             <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
-            <div className="fld"><label>Nomor WA</label><input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" /></div>
+            <div className="fld"><label>Nomor WA</label>
+              <div>
+                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08… (identitas pelanggan)" />
+                {nama.trim() !== '' && !wa.trim() && <div className="warn-inline">⚠ Tanpa No. WA, identitas dicocokkan pakai nama — bisa tertukar jika ada nama sama.</div>}
+              </div>
+            </div>
           </div>
           <div className="box">
             <span className="sec-h">INFORMASI KENDARAAN</span>
