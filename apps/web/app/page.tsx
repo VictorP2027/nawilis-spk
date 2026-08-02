@@ -220,7 +220,7 @@ export default function Intake() {
         <span className="branch">{BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'}</span>
       </div>
       <div className="wrap">
-        {(!branch || !operator) && (
+        {!branch && (
           <div className="card">
             <div className="label">Cabang</div>
             <select value={branch} onChange={(e) => setBranch(e.target.value)}>
@@ -229,8 +229,8 @@ export default function Intake() {
                 <option key={b.code} value={b.code}>{b.name}</option>
               ))}
             </select>
-            <div className="label" style={{ marginTop: 12 }}>Operator (PIN / nama)</div>
-            <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="mis. Rina" />
+            <div className="label" style={{ marginTop: 12 }}>Nama petugas (opsional)</div>
+            <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="mis. Rina — diingat di perangkat ini" />
           </div>
         )}
 
