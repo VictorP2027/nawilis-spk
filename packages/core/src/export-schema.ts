@@ -1,4 +1,5 @@
 import type { SpkDoc } from './types.js';
+import { canonPhoneKey } from './indonesia.js';
 import { REF_BRANCHES } from './refdata.js';
 
 /**
@@ -17,6 +18,8 @@ export const NAWILIS_COLUMNS = [
   'merek_oli_sebelumnya', 'tipe_oli_sebelumnya', 'bengkel_sebelumnya', 'km_ganti_oli_sebelumnya',
   'dashboard', 'body', 'kaca_spion', 'velg', 'baut_roda', 'dop_velg', 'tutup_pentil', 'ban_serep',
   'nama_customer_menyerahkan', 'nama_cs', 'kontak_lainnya',
+  // appended (not part of the original Nawilis 70): the phone-number identity key
+  'pkey_phone',
 ] as const;
 
 export type NawilisColumn = (typeof NAWILIS_COLUMNS)[number];
@@ -84,6 +87,7 @@ export function toNawilisRow(doc: SpkDoc): Record<NawilisColumn, string | number
   row.nopol = doc.vehicle.noPolisi.display;
   row.nama_customer = doc.customer.nama;
   row.nomor_WA = doc.customer.waE164 ?? '';
+  row.pkey_phone = doc.customer.phoneKey ?? canonPhoneKey(doc.customer.waE164 ?? '');
   row.alamat = doc.customer.alamat ?? '';
   row.merek = doc.vehicle.merkNormalized ?? doc.vehicle.merkRaw ?? '';
   row.tipe = doc.vehicle.tipeNormalized ?? '';

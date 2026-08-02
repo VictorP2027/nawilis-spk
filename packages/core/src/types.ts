@@ -104,6 +104,8 @@ export interface CaptureInfo {
 export interface CustomerInfo {
   nama: string;
   waE164: string | null;
+  /** Canonical phone identity key (digits, 62/0 stripped) — the person's pkey. */
+  phoneKey?: string | null;
   alamat: string | null;
   kontakLain?: string | null;
   /** Resolved during push; null until the customer exists in Turboly. */
