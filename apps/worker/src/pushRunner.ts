@@ -1,5 +1,5 @@
 import { collections, transition, loadMirror } from '@spk/core';
-import { buildTurbolyPayload, planFromNowWib } from '@spk/core/turboly';
+import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib } from '@spk/core/turboly';
 import type { BranchSinks } from './sessions.js';
 import { config } from './config.js';
 
@@ -76,7 +76,12 @@ export async function pushQueued(
       if (!mirror.advisorByName.get(norm(typedAdvisor))) {
         log(`  · advisor "${typedAdvisor}" not in mirror — letting Turboly pick a matching/first advisor`);
       }
-      const plan = planFromNowWib(30); // Turboly requires plan time > server "now"
+      // Plan Service Date/Time: a FUTURE appointment (scheduledAt) wins; else
+      // walk-in semantics = now+30min WIB (Turboly requires plan time > "now").
+      const sched = claimed.scheduledAt && Date.parse(claimed.scheduledAt) > Date.now() + 5 * 60_000 ? claimed.scheduledAt : null;
+      const plan = sched
+        ? { date: formatDateWib(sched), time: formatTimeWib(sched) }
+        : planFromNowWib(30);
       const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson: advisor, planServiceDate: plan.date, planServiceTime: plan.time });
 
       const res = await branchSinks.withSink(claimed.branchCode, (sink) =>

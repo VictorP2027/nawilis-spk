@@ -294,6 +294,9 @@ export interface SpkDoc {
   push: PushInfo;
   turboly: TurbolyReadback;
 
+  /** Optional appointment time (ISO). Future value drives Turboly's plan date/time. */
+  scheduledAt?: string | null;
+
   /** Legal hold flag — deletion job must honour this. */
   legalHold?: boolean;
 

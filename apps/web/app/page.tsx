@@ -21,6 +21,7 @@ interface JobSel {
   label: string;
   qty: number;
   price: string;
+  sku?: string;
 }
 
 function uuid(): string {
@@ -44,6 +45,33 @@ export default function Intake() {
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
   const [outbox, setOutbox] = useState(0);
+  const [tglJadwal, setTglJadwal] = useState('');
+  const [jamJadwal, setJamJadwal] = useState('');
+  const [makes, setMakes] = useState<string[]>([]);
+  const [models, setModels] = useState<string[]>([]);
+  const [makeKnown, setMakeKnown] = useState(false);
+  const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
+
+  useEffect(() => {
+    fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
+    fetch('/api/service-options').then((r) => r.json()).then((d) => setSvcOpts(d.services ?? {})).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const m = merk.trim();
+    if (!m) { setModels([]); setMakeKnown(false); return; }
+    let live = true;
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`).then((r) => r.json())
+      .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnown(!!d.known); } }).catch(() => {});
+    return () => { live = false; };
+  }, [merk]);
+  useEffect(() => {
+    if (!branch) { setAdvisors([]); return; }
+    let live = true;
+    fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`).then((r) => r.json())
+      .then((d) => { if (live) setAdvisors(d.advisors ?? []); }).catch(() => {});
+    return () => { live = false; };
+  }, [branch]);
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -128,7 +156,8 @@ export default function Intake() {
         km,
       },
       complaint: keluhan || null,
-      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null })),
+      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null, chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
+      scheduledAt: tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
       salespersonName: advisor || null,
       signatures: { menyerahkanPresent: false, menerimaPresent: !!advisor, menerimaNamaJelas: advisor || null },
@@ -149,7 +178,7 @@ export default function Intake() {
         // Still SAVED in Mongo — just needs a fix/verify before it can proceed.
         setResult({ ok: false, text: `Tersimpan, perlu diperbaiki: ${notes}`, token: body.correlationToken });
       } else {
-        setResult({ ok: true, text: `✓ Tersimpan ke MongoDB. Menunggu ditugaskan ke mekanik.${notes ? ` (Catatan: ${notes})` : ''}`, token: body.correlationToken });
+        setResult({ ok: true, text: `✓ Tersimpan & dikirim ke Turboly.${notes ? ` (Catatan: ${notes})` : ''}`, token: body.correlationToken });
         resetForm();
       }
     } else {
@@ -173,8 +202,15 @@ export default function Intake() {
     setJobs({});
   }
 
-  // Advisor is a push-time field, not required to capture into MongoDB.
-  const canSubmit = branch && plate && km && Object.keys(jobs).length > 0 && nama && !submitting;
+  // Warn-only policy: only the branch is mechanically required (routes the store).
+  const canSubmit = !!branch && !submitting;
+  const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
+  const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
+  const kmBelowPrev = hist?.lastKm != null && !Number.isNaN(kmValQ) && kmValQ < hist.lastKm;
+  const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
+  const modelUnknown = tipe.trim() !== '' && makeKnown && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
+  const advisorUnknown = advisor.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === advisor.trim().toUpperCase());
 
   return (
     <>
@@ -199,7 +235,8 @@ export default function Intake() {
 
         <div className="card">
           <div className="label">No. Polisi</div>
-          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA" autoCapitalize="characters" />
+          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA" autoCapitalize="characters" style={plateBad ? { borderColor: '#d97706' } : undefined} />
+          {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
           {hist && (
             <div className="hist" style={{ marginTop: 10 }}>
               {hist.merk} {hist.tipe} {hist.tahun ?? ''} {hist.warna ?? ''} · terakhir {hist.lastKm?.toLocaleString('id-ID')} km · {hist.visitCount}× kunjungan
@@ -211,7 +248,8 @@ export default function Intake() {
           <div className="row">
             <div>
               <div className="label">KM</div>
-              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" />
+              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" style={kmBelowPrev ? { borderColor: '#d97706' } : undefined} />
+              {kmBelowPrev && <div className="warn-note">⚠ Lebih kecil dari kunjungan sebelumnya ({Number(hist!.lastKm).toLocaleString('id-ID')}) — boleh lanjut.</div>}
             </div>
             <div>
               <div className="label">Tahun / Warna</div>
@@ -225,11 +263,15 @@ export default function Intake() {
             <div className="row" style={{ marginTop: 10 }}>
               <div>
                 <div className="label">Merk</div>
-                <input value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota" />
+                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
+                <datalist id="make-list-q">{makes.map((m) => <option key={m} value={m} />)}</datalist>
+                {makeUnknown && <div className="warn-note">⚠ Merk tidak ada di katalog Turboly — boleh lanjut.</div>}
               </div>
               <div>
                 <div className="label">Tipe</div>
-                <input value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza" />
+                <input list="model-list-q" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza" style={modelUnknown ? { borderColor: '#d97706' } : undefined} />
+                <datalist id="model-list-q">{models.map((m) => <option key={m} value={m} />)}</datalist>
+                {modelUnknown && <div className="warn-note">⚠ Tipe tidak ada di daftar {merk.trim().toUpperCase()} — dipetakan ke model paling mirip saat kirim.</div>}
               </div>
             </div>
           )}
@@ -243,6 +285,16 @@ export default function Intake() {
               return (
                 <button key={s.code} type="button" className={`tile ${on ? 'on' : ''}`} onClick={() => toggleJob(s.code, s.label)}>
                   {s.label}
+                  {on && svcOpts[s.code]?.options?.length ? (
+                    <select
+                      value={jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: e.target.value } }))}
+                      style={{ marginTop: 6, fontSize: 13, padding: '8px 10px' }}
+                    >
+                      {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
+                    </select>
+                  ) : null}
                   {on && (
                     <input
                       className="price"
@@ -268,9 +320,22 @@ export default function Intake() {
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat (opsional)" />
           </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
-          <input value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder="Nama advisor" />
+          <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />
+          <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
+          {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — order memakai advisor terdaftar sebagai fallback.</div>}
           <div className="label" style={{ marginTop: 12 }}>Keluhan</div>
           <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
+        </div>
+
+        <div className="card">
+          <div className="label">Jadwal servis (opsional — kosongkan untuk langsung/walk-in)</div>
+          <div className="row">
+            <input type="date" value={tglJadwal} onChange={(e) => setTglJadwal(e.target.value)} />
+            <input type="time" value={jamJadwal} onChange={(e) => setJamJadwal(e.target.value)} />
+          </div>
+          {tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() && (
+            <div className="ok-note">✓ Akan dijadwalkan di Turboly: {tglJadwal} {jamJadwal}</div>
+          )}
         </div>
 
         {result && (

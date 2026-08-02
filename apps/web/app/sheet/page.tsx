@@ -18,6 +18,7 @@ interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[]
 export default function Sheet() {
   const [serial, setSerial] = useState('');
   const [tanggal, setTanggal] = useState('');
+  const [jam, setJam] = useState(''); // optional time — future date+time becomes Turboly's plan schedule
   const [nama, setNama] = useState('');
   const [alamat, setAlamat] = useState('');
   const [wa, setWa] = useState('');
@@ -160,7 +161,9 @@ export default function Sheet() {
       deviceBindingVerified: true,
       spkNumber: serial || null,
       capturedAt: new Date().toISOString(),
-      arrivalTime: tanggal ? new Date(tanggal).toISOString() : undefined,
+      arrivalTime: tanggal ? new Date(jam ? `${tanggal}T${jam}` : tanggal).toISOString() : undefined,
+      // Future appointment → Turboly Plan Service Date/Time; else push uses now+30m.
+      scheduledAt: tanggal && jam && Date.parse(`${tanggal}T${jam}`) > Date.now() ? new Date(`${tanggal}T${jam}`).toISOString() : undefined,
       customer: { nama, wa: wa || null, alamat: alamat || null, kontakLain: kontakLain || null },
       vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km, createMakeConfirmed: makeUnknown && createMakeOk },
       complaint,
@@ -230,7 +233,7 @@ export default function Sheet() {
         <div className="two">
           <div className="box">
             <span className="sec-h">INFORMASI CUSTOMER</span>
-            <div className="fld"><label>Tanggal</label><input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} /></div>
+            <div className="fld"><label>Tanggal / Jam</label><div style={{ display: 'flex', gap: 4 }}><input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} /><input type="time" value={jam} onChange={(e) => setJam(e.target.value)} title="Opsional — isi untuk jadwal booking (dipakai sebagai Plan Service Time Turboly)" /></div></div>
             <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
             <div className="fld"><label>Nomor WA</label><input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" /></div>

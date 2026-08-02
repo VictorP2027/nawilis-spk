@@ -34,6 +34,8 @@ export const SpkIntakeInput = z.object({
   qrPayload: z.string().nullable().default(null),
 
   arrivalTime: z.string().datetime().optional(),
+  /** Optional appointment: if in the future, becomes Turboly's Plan Service Date/Time. */
+  scheduledAt: z.string().datetime().optional(),
   capturedAt: z.string().datetime(),
 
   customer: z.object({

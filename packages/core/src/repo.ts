@@ -210,6 +210,7 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
     lifecycle: 'open',
     amendments: [],
     assignment: null,
+    scheduledAt: input.scheduledAt ?? null,
     state: 'captured',
     push: {
       correlationToken: correlationToken(_id),

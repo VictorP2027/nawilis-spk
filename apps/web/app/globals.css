@@ -198,3 +198,9 @@ th { color: var(--muted); font-weight: 600; }
 /* Confirmed-action inline note (e.g. new make will be auto-created) */
 .sheet .ok-inline { font-size: 11px; color: #166534; background: #dcfce7; border: 1px solid #86efac; border-radius: 6px; padding: 4px 8px; margin-top: 3px; line-height: 1.35; }
 .sheet .warn-btn.confirm-make { border-color: #16a34a; color: #166534; }
+
+/* Quick-intake ("/") inline notes */
+.warn-note { font-size: 12.5px; color: #b45309; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 8px; padding: 6px 10px; margin-top: 6px; line-height: 1.4; }
+.ok-note { font-size: 12.5px; color: #166534; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 6px 10px; margin-top: 8px; }
+.tile select { width: 100%; }
+.tile .price { margin-top: 6px; }
