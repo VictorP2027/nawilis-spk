@@ -46,20 +46,45 @@ export class RpaSink implements ServiceOrderSink {
       return fail('infra', errMsg(e));
     }
 
+    return this.runPush(payload, ctx, 0);
+  }
+
+  /**
+   * Build with bounded self-recovery: NeedAddVehicle → create the vehicle then
+   * rebuild; NeedCreateMake (operator-confirmed) → create the make (+first model)
+   * then rebuild. Each fix navigates away, so the order form is rebuilt fresh.
+   */
+  private async runPush(payload: TurbolyServiceOrderPayload, ctx: PushContext, depth: number): Promise<PushResult> {
     try {
       return await this.buildAndSaveOrder(payload, ctx);
     } catch (e) {
-      // Customer exists but the vehicle isn't in Turboly → create the vehicle for that
-      // customer (via /vehicles/new), then rebuild the order (the SO form was navigated away).
+      if (depth >= 3) return this.classifyFailure(e, payload.spkId);
+      if (e instanceof NeedCreateMakeError) {
+        try {
+          await this.ensureMakeExists(payload.vehicleMake ?? '', payload.vehicleModel ?? '');
+        } catch (e2) {
+          return this.classifyFailure(e2, payload.spkId);
+        }
+        return this.runPush(payload, ctx, depth + 1);
+      }
       if (e instanceof NeedAddVehicleError) {
         try {
           await this.addVehicleToExistingCustomer(payload);
-          return await this.buildAndSaveOrder(payload, ctx);
         } catch (e2) {
-          return await this.classifyFailure(e2, payload.spkId);
+          if (e2 instanceof NeedCreateMakeError) {
+            try {
+              await this.ensureMakeExists(payload.vehicleMake ?? '', payload.vehicleModel ?? '');
+              await this.addVehicleToExistingCustomer(payload);
+            } catch (e3) {
+              return this.classifyFailure(e3, payload.spkId);
+            }
+          } else {
+            return this.classifyFailure(e2, payload.spkId);
+          }
         }
+        return this.runPush(payload, ctx, depth + 1);
       }
-      return await this.classifyFailure(e, payload.spkId);
+      return this.classifyFailure(e, payload.spkId);
     }
   }
 
@@ -197,7 +222,15 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#vehicle_registration', reg);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
     await page.waitForTimeout(600);
-    if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+    if (payload.vehicleMake) {
+      try {
+        await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+      } catch (e) {
+        // Operator confirmed on the form: create the new make, then rebuild.
+        if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
+        throw e;
+      }
+    }
     await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
@@ -351,7 +384,15 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
     await page.waitForTimeout(700);
-    if (payload.vehicleMake) await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+    if (payload.vehicleMake) {
+      try {
+        await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+      } catch (e) {
+        // Operator confirmed on the form: create the new make, then rebuild.
+        if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
+        throw e;
+      }
+    }
     await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
@@ -384,6 +425,49 @@ export class RpaSink implements ServiceOrderSink {
     if (stillOpen) {
       const err = await this.readInlineError(page).catch(() => null);
       throw new DataError(`new-customer create rejected${err ? `: ${err}` : ' (check make/model match)'}`);
+    }
+  }
+
+  /**
+   * Create a NEW vehicle make in Turboly (operator-confirmed on the form), plus a
+   * first model named after the typed tipe so the vehicle can be created at all.
+   * Fails with a clear DataError if the Turboly account lacks the permission
+   * ("Sorry you can't view that page") — grant it under Users & Permissions.
+   */
+  private async ensureMakeExists(makeName: string, firstModel: string): Promise<void> {
+    const page = this.session.page_();
+    const name = makeName.trim().toUpperCase();
+    // 1. Create the make.
+    await page.goto(`${this.baseUrl}/vehicle_makes/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+    if (!/vehicle_makes\/new/.test(page.url())) {
+      throw new DataError(`akun Turboly tidak punya izin membuat Vehicle Make baru ("${name}") — aktifkan izin di Setup → Users & Permissions, atau tambah manual`);
+    }
+    const nameInput = page.locator('#vehicle_make_name, input[name="vehicle_make[name]"]').first();
+    if ((await nameInput.count()) === 0) throw new DataError(`form Vehicle Make tidak dikenali — tambah merk "${name}" manual di Turboly`);
+    await nameInput.fill(name);
+    // A vehicle-type select may exist — pick Car when present.
+    await page.selectOption('#vehicle-type-select, select[name*="vehicle_type"]', { label: 'Car' }).catch(() => {});
+    await page.locator('input[name=commit], input[type=submit]').first().click();
+    await page.waitForTimeout(2500);
+    if (/vehicle_makes\/new/.test(page.url())) {
+      const err = await this.readInlineError(page).catch(() => null);
+      throw new DataError(`gagal membuat merk "${name}"${err ? `: ${err}` : ''}`);
+    }
+    this.notesExtra.push(`Merk baru dibuat di Turboly: ${name}`);
+    // 2. A brand-new make has zero models — create a first model (the typed tipe).
+    const modelName = (firstModel || 'STANDARD').trim().toUpperCase();
+    await page.goto(`${this.baseUrl}/vehicle_models/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2200);
+    await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const picked = await page.selectOption('#vehicle-make-select', { label: name }).then(() => true).catch(() => false);
+    if (picked) {
+      await page.waitForTimeout(400);
+      await page.fill('#vehicle_model_name', modelName).catch(() => {});
+      await page.locator('input[name=commit], input[type=submit]').first().click().catch(() => {});
+      await page.waitForTimeout(2500);
+      if (!/vehicle_models\/new/.test(page.url())) this.notesExtra.push(`Model baru dibuat: ${name} ${modelName}`);
     }
   }
 
@@ -679,6 +763,14 @@ export class TransientError extends Error {
   constructor(msg: string) {
     super(msg);
     this.name = 'TransientError';
+  }
+}
+
+/** Control-flow signal: operator-confirmed NEW make must be created, then rebuild. */
+export class NeedCreateMakeError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'NeedCreateMakeError';
   }
 }
 

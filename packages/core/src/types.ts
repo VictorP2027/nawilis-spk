@@ -136,6 +136,8 @@ export interface VehicleInfo {
   tahun: number | null;
   warna: string | null;
   km: Odometer;
+  /** Operator confirmed on the form: create this NEW make in Turboly at push. */
+  createMakeConfirmed?: boolean;
   /** Stable per-vehicle ref (cross-branch), e.g. "veh_B1234SZA". */
   vehicleRef: string | null;
   /** Why we bound to an existing vehicle doc — requires two independent signals. */

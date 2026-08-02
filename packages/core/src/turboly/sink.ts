@@ -20,6 +20,8 @@ export interface TurbolyServiceOrderPayload {
   vehicleModel?: string;
   vehicleYear?: string;
   vehicleColor?: string;
+  /** Operator confirmed on the form: create the NEW make (+ a first model) in Turboly if missing. */
+  createMakeConfirmed?: boolean;
   odometer: string;
   planServiceDate: string; // formatted for the date field, e.g. "31-07-2026"
   planServiceTime: string; // e.g. "09:30"

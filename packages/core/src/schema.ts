@@ -51,6 +51,8 @@ export const SpkIntakeInput = z.object({
     tahun: z.number().int().nullable().default(null),
     warna: z.string().nullable().default(null),
     km: z.string(), // raw as written; parsed server-side
+    /** Operator clicked the on-form confirm: create this NEW make in Turboly at push. */
+    createMakeConfirmed: z.boolean().default(false),
   }),
 
   complaint: z.string().nullable().default(null),

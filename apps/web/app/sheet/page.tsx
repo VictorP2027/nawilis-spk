@@ -64,6 +64,10 @@ export default function Sheet() {
     return () => { live = false; };
   }, [merk]);
 
+  /** Operator confirmation: this is a genuinely NEW make — create it in Turboly at push. */
+  const [createMakeOk, setCreateMakeOk] = useState(false);
+  useEffect(() => { setCreateMakeOk(false); }, [merk]); // re-confirm if the make text changes
+
   // Live overridable warnings: typing anything is allowed, but flag values that
   // aren't in Turboly's catalog so staff can fix a typo before submitting.
   const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
@@ -158,7 +162,7 @@ export default function Sheet() {
       capturedAt: new Date().toISOString(),
       arrivalTime: tanggal ? new Date(tanggal).toISOString() : undefined,
       customer: { nama, wa: wa || null, alamat: alamat || null, kontakLain: kontakLain || null },
-      vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km },
+      vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km, createMakeConfirmed: makeUnknown && createMakeOk },
       complaint,
       jobLines,
       conditionChecks,
@@ -237,13 +241,19 @@ export default function Sheet() {
               <div>
                 <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
                 <datalist id="make-list">{makes.map((m) => <option key={m} value={m} />)}</datalist>
-                {makeUnknown && (
+                {makeUnknown && !createMakeOk && (
                   <div className="warn-inline">
-                    ⚠ Merk tidak ada di katalog Turboly — boleh lanjut, tapi mobil BARU dengan merk ini akan gagal dibuat. Periksa ejaan, atau tambah dulu di Turboly:
-                    <span style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_makes`} target="_blank" rel="noreferrer">➕ Tambah Merk</a>
-                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_models/new`} target="_blank" rel="noreferrer">➕ Tambah Model</a>
+                    ⚠ Merk tidak ada di katalog Turboly. Periksa ejaan — atau konfirmasi bahwa ini merk BARU dan sistem akan membuatnya otomatis saat kirim:
+                    <span style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                      <button type="button" className="warn-btn confirm-make" onClick={() => setCreateMakeOk(true)}>✓ KONFIRMASI: buat merk baru &quot;{merk.trim().toUpperCase()}&quot;</button>
+                      <a className="warn-btn" href={`${TURBOLY_URL}/vehicle_makes`} target="_blank" rel="noreferrer">➕ Tambah manual</a>
                     </span>
+                  </div>
+                )}
+                {makeUnknown && createMakeOk && (
+                  <div className="ok-inline">
+                    ✓ Merk baru &quot;{merk.trim().toUpperCase()}&quot; akan DIBUAT otomatis di Turboly saat kirim.
+                    <button type="button" className="warn-btn" style={{ marginLeft: 8 }} onClick={() => setCreateMakeOk(false)}>Batal</button>
                   </div>
                 )}
               </div>
