@@ -45,6 +45,7 @@ export default function Intake() {
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
   const [outbox, setOutbox] = useState(0);
+  const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
   const [jadwalOn, setJadwalOn] = useState(false);
   const [tglJadwal, setTglJadwal] = useState('');
   const [jamJadwal, setJamJadwal] = useState('');
@@ -217,13 +218,15 @@ export default function Intake() {
     <>
       <div className="topbar">
         <span className="brand">NAWILIS · SPK</span>
-        <span className="branch">{BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'}</span>
+        <button type="button" className="branch" style={{ border: 'none', cursor: 'pointer', font: 'inherit' }} onClick={() => setShowSetup((v) => !v)} title="Ganti cabang / petugas">
+          {BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'} ▾
+        </button>
       </div>
       <div className="wrap">
-        {!branch && (
+        {(!branch || showSetup) && (
           <div className="card">
             <div className="label">Cabang</div>
-            <select value={branch} onChange={(e) => setBranch(e.target.value)}>
+            <select value={branch} onChange={(e) => { setBranch(e.target.value); if (e.target.value) setShowSetup(false); }}>
               <option value="">— pilih cabang —</option>
               {BRANCHES.map((b) => (
                 <option key={b.code} value={b.code}>{b.name}</option>
