@@ -68,6 +68,33 @@ export default function Sheet() {
   // aren't in Turboly's catalog so staff can fix a typo before submitting.
   const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
   const modelUnknown = tipe.trim() !== '' && makeKnownInModels && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
+
+  // Live field checks (warn at the field itself — the person filling can see and
+  // simply continue; there is NO submit-time gate).
+  const plateNorm = noPol.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const plateBad = noPol.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
+  const kmVal = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '').replace(/,/g, '')) : NaN;
+  const kmWarn = km.trim() === '' ? null
+    : Number.isNaN(kmVal) ? 'KM tidak terbaca'
+    : kmVal < 0 ? 'KM negatif'
+    : kmVal > 2_000_000 ? `KM ${kmVal.toLocaleString('id-ID')} sangat tinggi — periksa` : null;
+  const yearNow = new Date().getFullYear();
+  const tahunWarn = tahun !== '' && (Number(tahun) < 1950 || Number(tahun) > yearNow + 1) ? `Tahun di luar batas wajar (1950–${yearNow + 1})` : null;
+
+  // KM vs previous visit — fetched live when the plate resolves to a known vehicle.
+  const [prevVisitKm, setPrevVisitKm] = useState<number | null>(null);
+  useEffect(() => {
+    if (!plateNorm || plateBad) { setPrevVisitKm(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      fetch(`/api/vehicle?plate=${encodeURIComponent(plateNorm)}`)
+        .then((r) => r.json())
+        .then((d) => { if (live) setPrevVisitKm(d?.vehicle?.lastKm ?? null); })
+        .catch(() => { if (live) setPrevVisitKm(null); });
+    }, 500);
+    return () => { live = false; clearTimeout(t); };
+  }, [plateNorm, plateBad]);
+  const kmBelowPrev = prevVisitKm != null && !Number.isNaN(kmVal) && kmVal < prevVisitKm;
   const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
 
   // Load the real service advisors for the chosen branch (synced from Turboly).
@@ -100,8 +127,6 @@ export default function Sheet() {
   const [dmg, setDmg] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  /** Pending override: warnings + the ready-to-send payload behind the SIMPAN PAKSA button. */
-  const [override, setOverride] = useState<{ warns: string[]; summary: string; uploadId: string; payload: unknown } | null>(null);
 
   const setRow = (code: string, patch: Partial<PkRow>) => setPk((p) => ({ ...p, [code]: { ...p[code]!, ...patch } }));
   const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
@@ -155,51 +180,8 @@ export default function Sheet() {
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
 
-    // Pre-submit checks. The confirm popup appears ONLY when something is off —
-    // a value outside its expected boundary or another warning. Clean SPKs send silently.
-    const warns: string[] = [];
-    const plateNorm = noPol.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (!plateNorm || !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm)) warns.push('No. Polisi tidak valid (contoh: B 1234 XYZ)');
-    if (!nama.trim()) warns.push('Nama customer kosong');
-    if (jobLines.length === 0) warns.push('Belum ada pekerjaan yang dipilih');
-    // Number boundaries
-    const kmVal = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '').replace(/,/g, '')) : NaN;
-    if (!km.trim() || Number.isNaN(kmVal)) warns.push('KM kosong / tidak terbaca');
-    else if (kmVal < 0) warns.push('KM negatif');
-    else if (kmVal > 2_000_000) warns.push(`KM ${kmVal.toLocaleString('id-ID')} sangat tinggi — periksa`);
-    const yearNow = new Date().getFullYear();
-    if (tahun && (Number(tahun) < 1950 || Number(tahun) > yearNow + 1)) warns.push(`Tahun ${tahun} di luar batas wajar (1950–${yearNow + 1})`);
-    // KM vs previous visit (expected boundary: never lower than last recorded)
-    if (plateNorm && !Number.isNaN(kmVal)) {
-      try {
-        const v = await fetch(`/api/vehicle?plate=${encodeURIComponent(plateNorm)}`).then((r) => r.json());
-        if (v?.vehicle?.lastKm != null && kmVal < v.vehicle.lastKm) {
-          warns.push(`KM ${kmVal.toLocaleString('id-ID')} LEBIH KECIL dari kunjungan sebelumnya (${Number(v.vehicle.lastKm).toLocaleString('id-ID')})`);
-        }
-      } catch { /* history unavailable — server still checks */ }
-    }
-    if (makeUnknown) warns.push(`Merk "${merk.trim()}" tidak ada di katalog Turboly (mobil baru akan gagal dibuat)`);
-    if (modelUnknown) warns.push(`Tipe "${tipe.trim()}" tidak ada di daftar model ${merk.trim().toUpperCase()} (mobil baru akan gagal dibuat)`);
-    if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
-    if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
-    if (warns.length > 0) {
-      // Show the in-page override panel: staff either fix the form or explicitly
-      // click "SIMPAN PAKSA" — any input can always be saved via that button.
-      const branchName = BRANCHES.find((b) => b.code === branch)?.name ?? branch;
-      const jobNames = SERVICES.filter((s) => pk[s.code]!.order).map((s) => s.label).join(', ');
-      const summary = [
-        `Customer : ${nama.trim() || '—'}`,
-        `No. Polisi: ${noPol.trim() || '—'}`,
-        `KM       : ${km.trim() || '—'}`,
-        `Pekerjaan: ${jobNames || '—'} (${jobLines.length})`,
-        `Advisor  : ${menerima.trim() || '—'}`,
-        `Cabang   : ${branchName}`,
-      ].join('\n');
-      setOverride({ warns, summary, uploadId, payload });
-      setSubmitting(false);
-      return;
-    }
-
+    // NO submit-time gate: warnings live at the fields themselves (the person
+    // filling out sees them and simply continues) — Simpan sends immediately.
     await send(uploadId, payload);
   }
 
@@ -280,9 +262,25 @@ export default function Sheet() {
                 )}
               </div>
             </div>
-            <div className="fld"><label>No. Polisi</label><input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" /></div>
-            <div className="fld"><label>Tahun/Warna</label><div style={{ display: 'flex', gap: 4 }}><input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" /><input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Warna" /></div></div>
-            <div className="fld"><label>KM</label><input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" /></div>
+            <div className="fld"><label>No. Polisi</label>
+              <div>
+                <input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" style={plateBad ? { borderColor: '#d97706' } : undefined} />
+                {plateBad && <div className="warn-inline">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
+              </div>
+            </div>
+            <div className="fld"><label>Tahun/Warna</label>
+              <div>
+                <div style={{ display: 'flex', gap: 4 }}><input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" style={tahunWarn ? { borderColor: '#d97706' } : undefined} /><input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Warna" /></div>
+                {tahunWarn && <div className="warn-inline">⚠ {tahunWarn} — boleh lanjut.</div>}
+              </div>
+            </div>
+            <div className="fld"><label>KM</label>
+              <div>
+                <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" style={kmWarn || kmBelowPrev ? { borderColor: '#d97706' } : undefined} />
+                {kmWarn && <div className="warn-inline">⚠ {kmWarn} — boleh lanjut.</div>}
+                {!kmWarn && kmBelowPrev && <div className="warn-inline">⚠ KM LEBIH KECIL dari kunjungan sebelumnya ({Number(prevVisitKm).toLocaleString('id-ID')}) — boleh lanjut.</div>}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -452,27 +450,6 @@ export default function Sheet() {
         </div>
       )}
 
-      {/* Override panel: any input can be saved — but only via the explicit button. */}
-      {override && (
-        <div className="ovr-overlay" onClick={() => setOverride(null)}>
-          <div className="ovr-card" onClick={(e) => e.stopPropagation()}>
-            <div className="ovr-title">⚠ PERIKSA DULU</div>
-            <ul className="ovr-list">
-              {override.warns.map((w, i) => <li key={i}>{w}</li>)}
-            </ul>
-            <pre className="ovr-summary">{override.summary}</pre>
-            <div className="ovr-actions">
-              <button className="btn ghost" onClick={() => setOverride(null)}>← Perbaiki dulu</button>
-              <button
-                className="btn ovr-force"
-                onClick={() => { const o = override; setOverride(null); void send(o.uploadId, o.payload); }}
-              >
-                ⚠ SIMPAN PAKSA (Override)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
