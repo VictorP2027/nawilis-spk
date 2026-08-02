@@ -89,16 +89,33 @@ export default function Sheet() {
   const yearNow = new Date().getFullYear();
   const tahunWarn = tahun !== '' && (Number(tahun) < 1950 || Number(tahun) > yearNow + 1) ? `Tahun di luar batas wajar (1950–${yearNow + 1})` : null;
 
-  // KM vs previous visit — fetched live when the plate resolves to a known vehicle.
+  // Plate → history: KM check + returning-customer prefill (fills EMPTY fields only).
   const [prevVisitKm, setPrevVisitKm] = useState<number | null>(null);
+  const [returning, setReturning] = useState<string | null>(null);
   useEffect(() => {
-    if (!plateNorm || plateBad) { setPrevVisitKm(null); return; }
+    if (!plateNorm || plateBad) { setPrevVisitKm(null); setReturning(null); return; }
     let live = true;
     const t = setTimeout(() => {
       fetch(`/api/vehicle?plate=${encodeURIComponent(plateNorm)}`)
         .then((r) => r.json())
-        .then((d) => { if (live) setPrevVisitKm(d?.vehicle?.lastKm ?? null); })
-        .catch(() => { if (live) setPrevVisitKm(null); });
+        .then((d) => {
+          if (!live) return;
+          setPrevVisitKm(d?.vehicle?.lastKm ?? null);
+          const v = d?.vehicle, cu = d?.customer;
+          if (v) {
+            setMerk((x) => x || v.merk || '');
+            setTipe((x) => x || v.tipe || '');
+            setTahun((x) => x || (v.tahun ? String(v.tahun) : ''));
+            setWarna((x) => x || v.warna || '');
+          }
+          if (cu) {
+            setNama((x) => x || cu.nama || '');
+            setWa((x) => x || cu.wa || '');
+            setAlamat((x) => x || cu.alamat || '');
+            setReturning(`${cu.nama}${cu.wa ? ` · ${cu.wa}` : ''}${v?.lastKm != null ? ` · terakhir ${Number(v.lastKm).toLocaleString('id-ID')} km` : ''}`);
+          } else setReturning(null);
+        })
+        .catch(() => { if (live) { setPrevVisitKm(null); setReturning(null); } });
     }, 500);
     return () => { live = false; clearTimeout(t); };
   }, [plateNorm, plateBad]);
@@ -307,6 +324,7 @@ export default function Sheet() {
               <div>
                 <input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" style={plateBad ? { borderColor: '#d97706' } : undefined} />
                 {plateBad && <div className="warn-inline">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
+                {returning && <div className="ok-inline">↩ Pelanggan lama: {returning} — data terisi otomatis.</div>}
               </div>
             </div>
             <div className="fld"><label>Tahun/Warna</label>

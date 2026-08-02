@@ -12,5 +12,13 @@ export async function GET(req: Request): Promise<Response> {
   if (!plate) return NextResponse.json({ vehicle: null });
   const key = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const vehicle = await collections.vehicles().findOne({ plateVariants: key });
-  return NextResponse.json({ vehicle });
+  // Returning-customer prefill: the person from this plate's most recent SPK.
+  const lastSpk = await collections
+    .spk()
+    .findOne({ 'vehicle.plateVariants': key }, { sort: { createdAt: -1 }, projection: { customer: 1 } });
+  const local = (p: string) => { const d = p.replace(/\D/g, ''); return d.startsWith('62') ? '0' + d.slice(2) : d; };
+  const customer = lastSpk?.customer
+    ? { nama: lastSpk.customer.nama, wa: lastSpk.customer.waE164 ? local(lastSpk.customer.waE164) : null, alamat: lastSpk.customer.alamat ?? null }
+    : null;
+  return NextResponse.json({ vehicle, customer });
 }

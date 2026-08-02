@@ -106,7 +106,7 @@ export default function Intake() {
     const t = setTimeout(async () => {
       try {
         const res = await fetch(`/api/vehicle?plate=${encodeURIComponent(key)}`);
-        const { vehicle } = await res.json();
+        const { vehicle, customer } = await res.json();
         if (vehicle) {
           setHist(vehicle);
           setMerk((m) => m || vehicle.merk || '');
@@ -114,6 +114,11 @@ export default function Intake() {
           setTahun((y) => y || (vehicle.tahun ? String(vehicle.tahun) : ''));
           setWarna((w) => w || vehicle.warna || '');
         } else setHist(null);
+        if (customer) {
+          setNama((x) => x || customer.nama || '');
+          setWa((x) => x || customer.wa || '');
+          setAlamat((x) => x || customer.alamat || '');
+        }
       } catch {
         /* offline — ignore */
       }
