@@ -186,9 +186,10 @@ export default function Sheet() {
       },
     };
 
-    // Only the branch is mechanically required (it routes the Turboly store).
+    // Branch routes the Turboly store; WA is REQUIRED (customer identity key).
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
+    if (wa.replace(/\D/g, '').length < 9) { setResult({ ok: false, text: 'No. WA wajib diisi — identitas pelanggan (min. 9 digit).' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -258,8 +259,8 @@ export default function Sheet() {
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
             <div className="fld"><label>Nomor WA</label>
               <div>
-                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08… (identitas pelanggan)" />
-                {nama.trim() !== '' && !wa.trim() && <div className="warn-inline">⚠ Tanpa No. WA, identitas dicocokkan pakai nama — bisa tertukar jika ada nama sama.</div>}
+                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08… — WAJIB (identitas pelanggan)" style={wa.replace(/\D/g, '').length < 9 ? { borderColor: '#d97706' } : undefined} />
+                {wa.replace(/\D/g, '').length < 9 && <div className="warn-inline">⚠ No. WA <b>wajib</b> — identitas pelanggan (min. 9 digit).</div>}
               </div>
             </div>
           </div>
