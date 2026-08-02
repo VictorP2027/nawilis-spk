@@ -12,7 +12,7 @@ function uuid(): string {
 /** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
 const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
 
-interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string }
+interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string; harga?: string }
 interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }
 
 export default function Sheet() {
@@ -148,7 +148,8 @@ export default function Sheet() {
     const jobLines = SERVICES.filter((s) => pk[s.code]!.order).map((s) => {
       const r = pk[s.code]!;
       const notes = [r.keterangan, r.mk && `MK:${r.mk}`, r.waktu && `Waktu:${r.waktu}`].filter(Boolean).join(' ');
-      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
+      const harga = r.harga ? Number(r.harga.replace(/[^\d]/g, '')) : NaN;
+      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: Number.isFinite(harga) && harga > 0 ? harga : null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
     });
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
     const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
@@ -189,7 +190,8 @@ export default function Sheet() {
     // Branch routes the Turboly store; WA is REQUIRED (customer identity key).
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
-    if (wa.replace(/\D/g, '').length < 9) { setResult({ ok: false, text: 'Nomor WhatsApp wajib diisi — identitas pelanggan (min. 9 digit).' }); setSubmitting(false); return; }
+    const waD = wa.replace(/\D/g, '');
+    if (waD.length < 9 || !(waD.startsWith('0') || waD.startsWith('62'))) { setResult({ ok: false, text: 'Nomor WhatsApp wajib & harus format Indonesia (08… atau +62…).' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -354,6 +356,7 @@ export default function Sheet() {
                           </select>
                         ) : null}
                         {r.order && <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
+                        {r.order && <input type="text" value={r.harga ?? ''} onChange={(e) => setRow(s.code, { harga: e.target.value })} inputMode="numeric" placeholder="Harga (Rp)" style={{ marginTop: 3 }} />}
                         {!r.order && <input className="ket-idle" type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
                       </td>
                       <td className="col-mk"><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>

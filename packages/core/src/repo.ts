@@ -170,7 +170,9 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
     },
     customer: {
       nama: input.customer.nama,
-      waE164: wa.e164 ?? null,
+      // Identity key must never be silently lost: if strict parsing rejects the
+      // format, keep the normalized raw digits (0-prefixed) — WA_FORMAT still warns.
+      waE164: wa.e164 ?? (() => { const d = (input.customer.wa ?? '').replace(/\D/g, ''); const l = d.startsWith('62') ? '0' + d.slice(2) : d; return l.length >= 9 ? l : null; })(),
       alamat: input.customer.alamat,
       kontakLain: input.customer.kontakLain,
       turbolyCustomerId: input.customer.turbolyCustomerId,

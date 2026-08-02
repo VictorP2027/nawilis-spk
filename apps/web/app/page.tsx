@@ -206,7 +206,7 @@ export default function Intake() {
 
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
   const waDigits = wa.replace(/\D/g, '');
-  const waOk = waDigits.length >= 9;
+  const waOk = waDigits.length >= 9 && (waDigits.startsWith('0') || waDigits.startsWith('62'));
   const canSubmit = !!branch && waOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
@@ -325,7 +325,7 @@ export default function Intake() {
             <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB (08…)" />
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat (opsional)" />
           </div>
-          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp <b>wajib</b> — identitas pelanggan (min. 9 digit, cth 08123456789).</div>}
+          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp <b>wajib</b>, format Indonesia — cth 08123456789.</div>}
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
