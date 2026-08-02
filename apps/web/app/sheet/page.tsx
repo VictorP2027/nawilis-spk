@@ -18,7 +18,10 @@ interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[]
 export default function Sheet() {
   const [serial, setSerial] = useState('');
   const [tanggal, setTanggal] = useState('');
-  const [jam, setJam] = useState(''); // optional time — future date+time becomes Turboly's plan schedule
+  // Opt-in scheduling: hidden by default; walk-ins keep Turboly plan = now+30m.
+  const [jadwalOn, setJadwalOn] = useState(false);
+  const [tglJadwal, setTglJadwal] = useState('');
+  const [jamJadwal, setJamJadwal] = useState('');
   const [nama, setNama] = useState('');
   const [alamat, setAlamat] = useState('');
   const [wa, setWa] = useState('');
@@ -161,9 +164,9 @@ export default function Sheet() {
       deviceBindingVerified: true,
       spkNumber: serial || null,
       capturedAt: new Date().toISOString(),
-      arrivalTime: tanggal ? new Date(jam ? `${tanggal}T${jam}` : tanggal).toISOString() : undefined,
-      // Future appointment → Turboly Plan Service Date/Time; else push uses now+30m.
-      scheduledAt: tanggal && jam && Date.parse(`${tanggal}T${jam}`) > Date.now() ? new Date(`${tanggal}T${jam}`).toISOString() : undefined,
+      arrivalTime: tanggal ? new Date(tanggal).toISOString() : undefined,
+      // Opt-in appointment → Turboly Plan Service Date/Time; else push uses now+30m.
+      scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       customer: { nama, wa: wa || null, alamat: alamat || null, kontakLain: kontakLain || null },
       vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km, createMakeConfirmed: makeUnknown && createMakeOk },
       complaint,
@@ -233,7 +236,24 @@ export default function Sheet() {
         <div className="two">
           <div className="box">
             <span className="sec-h">INFORMASI CUSTOMER</span>
-            <div className="fld"><label>Tanggal / Jam</label><div style={{ display: 'flex', gap: 4 }}><input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} /><input type="time" value={jam} onChange={(e) => setJam(e.target.value)} title="Opsional — isi untuk jadwal booking (dipakai sebagai Plan Service Time Turboly)" /></div></div>
+            <div className="fld"><label>Tanggal</label>
+              <div>
+                <input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+                {!jadwalOn && <button type="button" className="warn-btn" style={{ marginTop: 3, borderColor: '#b9c6de', color: '#33415c' }} onClick={() => setJadwalOn(true)}>🕐 Jadwalkan servis (opsional)</button>}
+                {jadwalOn && (
+                  <div style={{ marginTop: 4 }}>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <input type="date" value={tglJadwal} onChange={(e) => setTglJadwal(e.target.value)} />
+                      <input type="time" value={jamJadwal} onChange={(e) => setJamJadwal(e.target.value)} />
+                      <button type="button" className="warn-btn" style={{ borderColor: '#b9c6de', color: '#33415c' }} onClick={() => { setJadwalOn(false); setTglJadwal(''); setJamJadwal(''); }}>✕</button>
+                    </div>
+                    {tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now()
+                      ? <div className="ok-inline">✓ Plan Service Turboly: {tglJadwal} {jamJadwal}</div>
+                      : <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>Isi tanggal + jam (masa depan) — kosong = langsung (now+30 menit).</div>}
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
             <div className="fld"><label>Nomor WA</label><input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" /></div>

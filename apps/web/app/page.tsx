@@ -45,6 +45,7 @@ export default function Intake() {
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
   const [outbox, setOutbox] = useState(0);
+  const [jadwalOn, setJadwalOn] = useState(false);
   const [tglJadwal, setTglJadwal] = useState('');
   const [jamJadwal, setJamJadwal] = useState('');
   const [makes, setMakes] = useState<string[]>([]);
@@ -157,7 +158,7 @@ export default function Intake() {
       },
       complaint: keluhan || null,
       jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null, chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
-      scheduledAt: tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
+      scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
       salespersonName: advisor || null,
       signatures: { menyerahkanPresent: false, menerimaPresent: !!advisor, menerimaNamaJelas: advisor || null },
@@ -327,16 +328,21 @@ export default function Intake() {
           <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
         </div>
 
-        <div className="card">
-          <div className="label">Jadwal servis (opsional — kosongkan untuk langsung/walk-in)</div>
-          <div className="row">
-            <input type="date" value={tglJadwal} onChange={(e) => setTglJadwal(e.target.value)} />
-            <input type="time" value={jamJadwal} onChange={(e) => setJamJadwal(e.target.value)} />
+        {!jadwalOn ? (
+          <button type="button" className="btn ghost" style={{ width: '100%', marginBottom: 14 }} onClick={() => setJadwalOn(true)}>🕐 Jadwalkan servis (opsional)</button>
+        ) : (
+          <div className="card">
+            <div className="label">Jadwal servis — kosongkan / tutup untuk langsung (walk-in)</div>
+            <div className="row">
+              <input type="date" value={tglJadwal} onChange={(e) => setTglJadwal(e.target.value)} />
+              <input type="time" value={jamJadwal} onChange={(e) => setJamJadwal(e.target.value)} />
+            </div>
+            {tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() && (
+              <div className="ok-note">✓ Akan dijadwalkan di Turboly: {tglJadwal} {jamJadwal}</div>
+            )}
+            <button type="button" className="btn ghost" style={{ width: '100%', marginTop: 10 }} onClick={() => { setJadwalOn(false); setTglJadwal(''); setJamJadwal(''); }}>✕ Batal jadwal (langsung)</button>
           </div>
-          {tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() && (
-            <div className="ok-note">✓ Akan dijadwalkan di Turboly: {tglJadwal} {jamJadwal}</div>
-          )}
-        </div>
+        )}
 
         {result && (
           <div className="card">
