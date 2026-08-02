@@ -36,7 +36,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .btn:disabled { opacity: .5; }
 
 .row { display: flex; gap: 10px; }
-.row > * { flex: 1; }
+.row > * { flex: 1; min-width: 0; } /* date/time inputs must shrink on phones */
 
 .finding { padding: 8px 10px; border-radius: 8px; margin-top: 6px; font-size: 14px; }
 .finding.BLOCK { background: #fdecea; color: var(--block); }
