@@ -153,7 +153,7 @@ export class RpaSink implements ServiceOrderSink {
       await page.waitForTimeout(400);
       await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
       await page.waitForTimeout(600);
-      await this.setLastServiceRow(page, line.qty, line.description || line.serviceName);
+      await this.setLastServiceRow(page, line.qty, line.description || line.serviceName, line.priceIncTax);
     }
     const rowCount = await page.locator(rowSel).count();
     if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
@@ -593,17 +593,24 @@ export class RpaSink implements ServiceOrderSink {
     await page.evaluate(({ sel, value }) => { const el = document.querySelector(sel) as HTMLInputElement | null; if (el) { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); } }, { sel, value });
   }
 
-  /** Set qty + description on the most recently added service row (both required). */
-  private async setLastServiceRow(page: Page, qty: number, description: string): Promise<void> {
-    await page.evaluate(({ qty, description }) => {
+  /** Set qty + description (+ quoted price when given) on the newest service row. */
+  private async setLastServiceRow(page: Page, qty: number, description: string, priceIncTax?: number | null): Promise<void> {
+    await page.evaluate(({ qty, description, priceIncTax }) => {
       const rows = Array.from(document.querySelectorAll('tr.additional-line-item-row'));
       const row = rows[rows.length - 1];
       if (!row) return;
+      const fire = (el: HTMLInputElement, v: string) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
       const q = row.querySelector('input[name*="[quantity]"]') as HTMLInputElement | null;
-      if (q) { q.value = String(qty || 1); q.dispatchEvent(new Event('input', { bubbles: true })); q.dispatchEvent(new Event('change', { bubbles: true })); }
+      if (q) fire(q, String(qty || 1));
       const d = row.querySelector('input[name*="[description]"], textarea[name*="[description]"], input[name*="[notes]"]') as HTMLInputElement | null;
-      if (d) { d.value = description || 'Service'; d.dispatchEvent(new Event('input', { bubbles: true })); d.dispatchEvent(new Event('change', { bubbles: true })); }
-    }, { qty, description });
+      if (d) fire(d, description || 'Service');
+      // Quoted price from the form (harga Rp) → Price Inc Tax; skip when not quoted
+      // so Turboly's catalog price stays (never overwrite a real price with 0).
+      if (priceIncTax != null && priceIncTax > 0) {
+        const price = Array.from(row.querySelectorAll('input')).find((i) => /price/i.test(i.getAttribute('name') || '') && !/discount/i.test(i.getAttribute('name') || '')) as HTMLInputElement | undefined;
+        if (price) fire(price, String(priceIncTax));
+      }
+    }, { qty, description, priceIncTax: priceIncTax ?? null });
   }
 
   async verifyByToken(doc: SpkDoc): Promise<VerifyResult> {
