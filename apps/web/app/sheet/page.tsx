@@ -157,6 +157,14 @@ export default function Sheet() {
   const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
 
   const orderedCount = useMemo(() => Object.values(pk).filter((r) => r.order).length, [pk]);
+  const estTotal = useMemo(
+    () => Object.values(pk).reduce((sum, r) => {
+      if (!r.order) return sum;
+      const h = Number((r.harga ?? '').replace(/[^\d]/g, ''));
+      return sum + (Number.isFinite(h) ? h : 0) * (r.qty || 1);
+    }, 0),
+    [pk],
+  );
 
   async function submit() {
     setSubmitting(true);
@@ -497,9 +505,14 @@ export default function Sheet() {
         <div className="foot">Pioneering wheel alignment and balancing for more than 50 years</div>
       </div>
 
+      {estTotal > 0 && (
+        <div className="sheet-actions">
+          <div className="est-total">Estimasi biaya: <b>Rp {estTotal.toLocaleString('id-ID')}</b> ({orderedCount} pekerjaan)</div>
+        </div>
+      )}
       <div className="sheet-actions">
         <button className="btn primary" style={{ flex: 1 }} disabled={submitting} onClick={submit}>
-          {submitting ? 'Menyimpan…' : `Simpan SPK ke MongoDB (${orderedCount} pekerjaan)`}
+          {submitting ? 'Menyimpan…' : `Simpan SPK${estTotal > 0 ? ` — Rp ${estTotal.toLocaleString('id-ID')}` : ''} (${orderedCount} pekerjaan)`}
         </button>
         <a className="btn ghost" href="/admin">Dashboard</a>
       </div>

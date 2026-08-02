@@ -204,3 +204,6 @@ th { color: var(--muted); font-weight: 600; }
 .ok-note { font-size: 12.5px; color: #166534; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 6px 10px; margin-top: 8px; }
 .tile select { width: 100%; }
 .tile .price { margin-top: 6px; }
+
+/* Sheet running cost estimate */
+.est-total { flex: 1; background: #fff; border: 1.5px solid var(--nawilis); border-radius: 10px; padding: 10px 14px; font-size: 15px; color: #14213d; }
