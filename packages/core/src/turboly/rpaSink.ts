@@ -164,6 +164,18 @@ export class RpaSink implements ServiceOrderSink {
 
     // 6. Save — irreversible; re-assert the lease first.
     this.assertLease(ctx);
+    // Re-assert plan date/time LAST — widget re-renders (new-customer modal flow)
+    // can overwrite them with a stale "today"; verify and force once if needed.
+    for (let i = 0; i < 2; i++) {
+      await this.setPickerValue('#service-date', payload.planServiceDate);
+      await this.setPickerValue('#service-time', payload.planServiceTime);
+      await page.waitForTimeout(300);
+      const got = await page.evaluate(() => ({
+        d: (document.querySelector('#service-date') as HTMLInputElement | null)?.value,
+        t: (document.querySelector('#service-time') as HTMLInputElement | null)?.value,
+      }));
+      if (got.d === payload.planServiceDate && got.t === payload.planServiceTime) break;
+    }
     await this.dismissModals(); // clear any stray warning before the click can be intercepted
     await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
     await page.waitForTimeout(1500);
@@ -601,10 +613,23 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
-  /** Set a datepicker/timepicker input by value + dispatch change (typed fill mangles it). */
+  /** Set a datepicker/timepicker input by value + dispatch change (typed fill mangles it).
+   *  Also updates the jQuery datepicker's INTERNAL state — otherwise a later widget
+   *  re-render (e.g. after the new-customer modal saves) writes its stale "today"
+   *  back over our value (bit us across the WIB/UTC midnight window). */
   private async setPickerValue(sel: string, value: string): Promise<void> {
     const page = this.session.page_();
-    await page.evaluate(({ sel, value }) => { const el = document.querySelector(sel) as HTMLInputElement | null; if (el) { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); } }, { sel, value });
+    await page.evaluate(({ sel, value }) => {
+      const el = document.querySelector(sel) as HTMLInputElement | null;
+      if (!el) return;
+      el.value = value;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      const w = window as unknown as { jQuery?: (s: string) => { data: (k: string) => unknown; datepicker: (m: string, v: string) => void; val: (v?: string) => string } };
+      try {
+        const $el = w.jQuery ? w.jQuery(sel) : null;
+        if ($el && $el.data('datepicker')) $el.datepicker('update', value);
+      } catch { /* widget API absent — value+change already set */ }
+    }, { sel, value });
   }
 
   /** Set qty + description (+ quoted price when given) on the newest service row. */
