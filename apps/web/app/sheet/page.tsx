@@ -100,6 +100,8 @@ export default function Sheet() {
   const [dmg, setDmg] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Pending override: warnings + the ready-to-send payload behind the SIMPAN PAKSA button. */
+  const [override, setOverride] = useState<{ warns: string[]; summary: string; uploadId: string; payload: unknown } | null>(null);
 
   const setRow = (code: string, patch: Partial<PkRow>) => setPk((p) => ({ ...p, [code]: { ...p[code]!, ...patch } }));
   const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
@@ -181,6 +183,8 @@ export default function Sheet() {
     if (advisorUnknown) warns.push(`Advisor "${menerima.trim()}" tidak ada di daftar cabang (akan pakai advisor terdaftar)`);
     if (!menerima.trim()) warns.push('Advisor / Yang menerima kosong');
     if (warns.length > 0) {
+      // Show the in-page override panel: staff either fix the form or explicitly
+      // click "SIMPAN PAKSA" — any input can always be saved via that button.
       const branchName = BRANCHES.find((b) => b.code === branch)?.name ?? branch;
       const jobNames = SERVICES.filter((s) => pk[s.code]!.order).map((s) => s.label).join(', ');
       const summary = [
@@ -191,10 +195,17 @@ export default function Sheet() {
         `Advisor  : ${menerima.trim() || '—'}`,
         `Cabang   : ${branchName}`,
       ].join('\n');
-      const ok = window.confirm(`⚠ PERIKSA DULU:\n\n${warns.map((w) => `• ${w}`).join('\n')}\n\n${summary}\n\nTetap simpan & kirim ke Turboly?`);
-      if (!ok) { setSubmitting(false); return; }
+      setOverride({ warns, summary, uploadId, payload });
+      setSubmitting(false);
+      return;
     }
 
+    await send(uploadId, payload);
+  }
+
+  /** Actually save + push (used by the clean path and the SIMPAN PAKSA override button). */
+  async function send(uploadId: string, payload: unknown) {
+    setSubmitting(true);
     const res = await submitOrQueue(uploadId, payload);
     if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
     const body = await res.json().catch(() => ({}));
@@ -438,6 +449,28 @@ export default function Sheet() {
       {result && (
         <div className="sheet-actions">
           <div className={`finding ${result.ok ? 'CONFIRM' : 'BLOCK'}`} style={result.ok ? { background: '#e6f4ea', color: '#157a3c', flex: 1 } : { flex: 1 }}>{result.text}</div>
+        </div>
+      )}
+
+      {/* Override panel: any input can be saved — but only via the explicit button. */}
+      {override && (
+        <div className="ovr-overlay" onClick={() => setOverride(null)}>
+          <div className="ovr-card" onClick={(e) => e.stopPropagation()}>
+            <div className="ovr-title">⚠ PERIKSA DULU</div>
+            <ul className="ovr-list">
+              {override.warns.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+            <pre className="ovr-summary">{override.summary}</pre>
+            <div className="ovr-actions">
+              <button className="btn ghost" onClick={() => setOverride(null)}>← Perbaiki dulu</button>
+              <button
+                className="btn ovr-force"
+                onClick={() => { const o = override; setOverride(null); void send(o.uploadId, o.payload); }}
+              >
+                ⚠ SIMPAN PAKSA (Override)
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
