@@ -1,0 +1,34 @@
+name: pipeline-monitor
+
+# Alert system: every 15 minutes, check Atlas for failed or stuck pushes.
+# When something NEW is broken the job exits 1 → the run turns red and GitHub
+# emails the repo owner (Settings → Notifications → Actions controls this).
+# Each problem alerts exactly once — the doc is marked alertedAt so a standing
+# failure doesn't email every 15 minutes; an admin retry that fails again DOES
+# re-alert.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for failed / stuck pushes
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+        run: node scripts/monitor.mjs
