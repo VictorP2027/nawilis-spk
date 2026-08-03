@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { SERVICES, BRANCHES } from '../lib/refdata.client';
+import { SERVICES, BRANCHES, DAMAGE_ZONES } from '../lib/refdata.client';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
 interface VehicleHist {
@@ -44,6 +44,8 @@ export default function Intake() {
   const [advisor, setAdvisor] = useState('');
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
+  const [dmg, setDmg] = useState<Set<string>>(new Set());
+  const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
   const [jadwalOn, setJadwalOn] = useState(false);
@@ -162,7 +164,7 @@ export default function Intake() {
         warna: warna || null,
         km,
       },
-      complaint: keluhan || null,
+      complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
       jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null, chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
@@ -207,6 +209,7 @@ export default function Intake() {
     setAlamat('');
     setKeluhan('');
     setJobs({});
+    setDmg(new Set());
   }
 
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
@@ -386,6 +389,36 @@ export default function Intake() {
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — order memakai advisor terdaftar sebagai fallback.</div>}
           <div className="label" style={{ marginTop: 12 }}>Keluhan</div>
           <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
+        </div>
+
+        <div className="card">
+          <div className="label">Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
+          <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
+            {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
+              <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
+            ))}
+            <rect x="80" y="8" width="200" height="500" rx="34" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
+            {DAMAGE_ZONES.map((z) => {
+              const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
+              const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
+              const on = dmg.has(z.code);
+              return (
+                <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
+                  {z.shape === 'circle' ? (
+                    <circle className={`zone ${on ? 'on' : ''}`} cx={z.cx} cy={z.cy} r={z.r}><title>{z.label}</title></circle>
+                  ) : (
+                    <rect className={`zone ${on ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="2"><title>{z.label}</title></rect>
+                  )}
+                  <text x={cx} y={cy + 3} textAnchor="middle" fontSize="8" fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
+                  {on && <text x={cx} y={cy + 6} textAnchor="middle" fontSize="17" fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
+                </g>
+              );
+            })}
+            <text x="180" y="518" textAnchor="middle" fontSize="10" fill="#888" pointerEvents="none">↑ DEPAN</text>
+          </svg>
+          {dmg.size > 0 && (
+            <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
+          )}
         </div>
 
         {!jadwalOn ? (

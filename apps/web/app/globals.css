@@ -207,3 +207,7 @@ th { color: var(--muted); font-weight: 600; }
 
 /* Sheet running cost estimate */
 .est-total { flex: 1; background: #fff; border: 1.5px solid var(--nawilis); border-radius: 10px; padding: 10px 14px; font-size: 15px; color: #14213d; }
+
+/* Damage diagram zones (used by both / and /sheet) */
+svg.car .zone { fill: transparent; stroke: #6b82ad; stroke-width: 1; cursor: pointer; }
+svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-width: 1.5; }
