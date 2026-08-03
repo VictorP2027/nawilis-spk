@@ -28,7 +28,7 @@ export const TRANSITIONS: Record<PipelineState, readonly PipelineState[]> = {
   validated: ['awaiting_assignment', 'needs_review', 'manual_intervention'],
   awaiting_assignment: ['queued', 'manual_intervention', 'voided', 'superseded'],
   queued: ['pushing', 'manual_intervention', 'failed'],
-  pushing: ['pushed', 'failed', 'manual_intervention'],
+  pushing: ['pushed', 'failed', 'manual_intervention', 'queued'], // → queued = orphan reclaim (runner died mid-push)
   pushed: ['confirmed', 'failed', 'manual_intervention'],
   confirmed: ['amend_pending'],
   failed: ['queued', 'manual_intervention', 'voided'],
