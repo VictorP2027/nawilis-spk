@@ -331,7 +331,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA" autoCapitalize="characters" style={plateBad ? { borderColor: '#d97706' } : undefined} />
           {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
           {ownerMismatch && plateOwner && (
-            <div className="warn-note">⚠ Plat ini terdaftar milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) di Turboly — WA berbeda. Mobil pindah tangan? Lanjutkan saja: kendaraan otomatis didaftarkan ke pemilik baru. Salah ketik plat/WA? Periksa dulu.</div>
+            <div className="warn-note">⚠ Plat ini milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Order Turboly <b>tetap atas nama {plateOwner.nama}</b>; orang di form ini dicatat sebagai pembawa kendaraan di Notes.</div>
           )}
           {hist && (
             <div className="hist" style={{ marginTop: 10 }}>

@@ -414,7 +414,7 @@ export default function Sheet() {
               <div>
                 <input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" style={plateBad ? { borderColor: '#d97706' } : undefined} />
                 {plateBad && <div className="warn-inline">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
-                {ownerMismatch && plateOwner && <div className="warn-inline">⚠ Plat terdaftar milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Pindah tangan? Lanjutkan: kendaraan otomatis didaftarkan ke pemilik baru.</div>}
+                {ownerMismatch && plateOwner && <div className="warn-inline">⚠ Plat milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — order tetap atas nama pemilik asli; orang di form dicatat sebagai pembawa.</div>}
                 {returning && <div className="ok-inline">↩ Pelanggan lama: {returning} — data terisi otomatis.</div>}
               </div>
             </div>

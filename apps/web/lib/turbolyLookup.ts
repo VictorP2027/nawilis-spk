@@ -122,11 +122,12 @@ export async function turbolyVehicleByPlate(plate: string): Promise<TbVehicle | 
     );
     if (res.status === 200 && (res.headers.get('content-type') ?? '').includes('json')) {
       const j = (await res.json()) as { vehicles?: TbVehicle[] };
-      // Duplicate plates are possible (one vehicle row per owner). The NEWEST
-      // registration (highest id) is the current owner — a sold car must
-      // prefill the buyer, not the previous keeper.
+      // Duplicate plates are possible (one vehicle row per owner), but THE
+      // ORIGINAL registration (lowest id) owns the car — the form prefills the
+      // original person, and the push links the SO to them; anyone else
+      // bringing the car in is recorded as the carrier in the notes.
       const matches = (j.vehicles ?? []).filter((v) => String(v.registration ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '') === key);
-      return matches.sort((a, b) => ((b as { id?: number }).id ?? 0) - ((a as { id?: number }).id ?? 0))[0] ?? null;
+      return matches.sort((a, b) => ((a as { id?: number }).id ?? 0) - ((b as { id?: number }).id ?? 0))[0] ?? null;
     }
     cookie = await login();
   }

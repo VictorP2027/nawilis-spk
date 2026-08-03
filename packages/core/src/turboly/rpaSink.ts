@@ -109,9 +109,28 @@ export class RpaSink implements ServiceOrderSink {
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     const create = payload.customer.create;
     let attached = false;
+    // THE CAR STAYS WITH ITS ORIGINAL PERSON: if this plate already exists in
+    // Turboly, the SO attaches to the ORIGINAL registration's owner — even when
+    // someone else (sister, driver) brings it in. The carrier becomes a notes
+    // line, never a second owner.
+    let effNama = create?.nama ?? '';
+    let effPhone = create?.phone ?? '';
+    const owner = await this.resolveVehicleOriginalOwner(reg);
+    if (owner && (owner.phone || owner.name)) {
+      const typedKey = effPhone ? canonPhoneKey(effPhone) : '';
+      const ownerKey = owner.phone ? canonPhoneKey(owner.phone) : '';
+      const differs = ownerKey
+        ? typedKey !== '' && typedKey !== ownerKey
+        : effNama.trim().toUpperCase() !== owner.name.trim().toUpperCase();
+      if (differs) {
+        this.notesExtra.push(`Dibawa oleh: ${effNama || '-'} (${effPhone ? localPhone(effPhone) : '-'}) — kendaraan tetap atas nama ${owner.name}`);
+      }
+      effNama = owner.name;
+      if (owner.phone) effPhone = owner.phone;
+    }
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
-    const custOk = create?.nama || create?.phone ? await this.tryPickCustomerExact(create?.nama ?? '', create?.phone ?? '') : false;
+    const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone) : false;
     if (custOk) {
       await page.waitForTimeout(1200);
       const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
@@ -391,6 +410,29 @@ export class RpaSink implements ServiceOrderSink {
       return mine[0] ?? null;
     } catch {
       return undefined; // endpoint hiccup — caller falls back to select2 search
+    }
+  }
+
+  /** The ORIGINAL registration owns the car: lowest vehicle id among exact
+   * plate matches, with that row's owner name/phone (inline in the JSON). */
+  private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string } | null> {
+    const page = this.session.page_();
+    try {
+      const raw = await page.evaluate(async (q: string) => {
+        const r = await fetch(`/lookup/vehicles.json?search_term=${encodeURIComponent(q)}&page_limit=30&page=1`, { headers: { accept: 'application/json' } });
+        if (!r.ok) return [] as Array<{ id: number; registration: string; name: string; phone: string }>;
+        const j = await r.json();
+        return (j.vehicles ?? []).map((v: { id: number; registration?: string; customer_name?: string; customer_phone?: string }) => ({
+          id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? ''),
+        }));
+      }, reg);
+      const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const mine = (raw as Array<{ id: number; registration: string; name: string; phone: string }>)
+        .filter((v) => norm(v.registration) === norm(reg))
+        .sort((a, b) => a.id - b.id);
+      return mine[0] ? { name: mine[0].name, phone: mine[0].phone } : null;
+    } catch {
+      return null; // lookup hiccup — fall back to the typed identity
     }
   }
 
