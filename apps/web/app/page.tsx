@@ -507,15 +507,17 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         )}
 
         <div className="card">
-          <div className="label">Pengecekan awal kendaraan — semua item WAJIB dicek (OK default, ketuk jika ada temuan)</div>
-          {CONDITION_ITEMS.map((c) => (
-            <div key={c.code} className="chk-row">
-              <span className="chk-label">{c.label}</span>
-              {['OK', ...c.marks].map((m) => (
-                <button key={m} type="button" className={`chk-chip ${condQ[c.code] === m ? (m === 'OK' ? 'ok' : 'bad') : ''}`} onClick={() => setCondQ((prev) => ({ ...prev, [c.code]: m }))}>{m}</button>
-              ))}
-            </div>
-          ))}
+          <div className="label">Pengecekan awal — ketuk jika ada temuan</div>
+          <div className="chk-grid">
+            {CONDITION_ITEMS.map((c) => (
+              <div key={c.code} className="chk-row">
+                <span className="chk-label">{c.label}</span>
+                {['OK', ...c.marks].map((m) => (
+                  <button key={m} type="button" className={`chk-chip ${condQ[c.code] === m ? (m === 'OK' ? 'ok' : 'bad') : ''}`} onClick={() => setCondQ((prev) => ({ ...prev, [c.code]: m }))}>{m}</button>
+                ))}
+              </div>
+            ))}
+          </div>
           <div className="label" style={{ marginTop: 12 }}>Estimasi waktu pekerjaan (menit) — WAJIB</div>
           <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="60" style={!estimasiOk ? { borderColor: '#dc2626', maxWidth: 140 } : { maxWidth: 140 }} />
           {!estimasiOk && <div className="req-note">⚠ wajib — angka menit, contoh 60</div>}
