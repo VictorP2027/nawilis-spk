@@ -100,8 +100,8 @@ export class RpaSink implements ServiceOrderSink {
     await page.selectOption('#store-id', { value: payload.storeTurbolyId });
     await page.waitForTimeout(2800); // advisors load after store (AJAX)
 
-    await this.selectByLabelOrFirst('#service-advisor-id', payload.serviceAdvisorName);
-    await this.selectByLabelOrFirst('#salesperson-id', payload.salespersonName);
+    await this.selectByLabelExact('#service-advisor-id', payload.serviceAdvisorName);
+    await this.selectByLabelExact('#salesperson-id', payload.salespersonName);
 
     // 2-3. Customer + vehicle. Attach to existing Turboly records first; if the customer
     // isn't found, create customer+vehicle; if the customer is found but the vehicle isn't,
@@ -288,12 +288,16 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** Select an <option> by (normalized) label; fall back to the first real option. */
-  private async selectByLabelOrFirst(sel: string, label: string): Promise<void> {
+  /** Select ONLY on an exact label match; otherwise leave the field exactly as
+   * Turboly rendered it — never auto-pick a first/random option (a wrong
+   * advisor gets sales credit; Turboly's own default is the honest state). */
+  private async selectByLabelExact(sel: string, label: string): Promise<void> {
+    if (!label.trim()) return;
     const page = this.session.page_();
     const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
     const opts = await page.$$eval(`${sel} option`, (els) => els.map((e) => ({ v: (e as HTMLOptionElement).value, t: (e.textContent ?? '').trim() })).filter((o) => o.v));
     const hit = opts.find((o) => norm(o.t) === norm(label));
-    await page.selectOption(sel, { value: (hit ?? opts[0])?.v }).catch(() => {});
+    if (hit) await page.selectOption(sel, { value: hit.v }).catch(() => {});
   }
 
   /** Open a Select2-v3 widget by container selector, type, and pick first selectable result. */
@@ -817,11 +821,13 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   private async readInlineError(page: Page): Promise<string | null> {
-    for (const sel of ['.alert-danger', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
+    // Turboly's validation banner is Bootstrap-2 era (.alert-error), e.g.
+    // "Can't create Service Order: Error — Service Advisor can't be blank".
+    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
       const loc = page.locator(sel);
       if ((await loc.count()) > 0) {
-        const t = (await loc.first().textContent().catch(() => ''))?.trim();
-        if (t) return t;
+        const t = (await loc.first().innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
+        if (t && !/success/i.test(t)) return t;
       }
     }
     return null;

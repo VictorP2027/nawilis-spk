@@ -266,6 +266,7 @@ export default function Sheet() {
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
     if (wa.replace(/\D/g, '').length < 9) { setResult({ ok: false, text: 'Nomor WhatsApp wajib diisi — min. 9 digit.' }); setSubmitting(false); return; }
+    if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.

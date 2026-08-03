@@ -226,12 +226,18 @@ export default function Intake() {
     setDmg(new Set());
     sigCust.current?.clear();
     sigAdv.current?.clear();
+    // Advisor must be a deliberate choice per SPK — never carried over from the
+    // previous customer (wrong person would get the sales credit).
+    setAdvisor('');
   }
 
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
   const waDigits = wa.replace(/\D/g, '');
   const waOk = waDigits.length >= 9; // any form — canonicalized server-side (0/62/bare = same person)
-  const canSubmit = !!branch && waOk && !submitting;
+  // Advisor wajib: Turboly menolak Service Order tanpa Service Advisor, dan
+  // kita tidak pernah memilih advisor otomatis (kredit penjualan salah orang).
+  const advisorOk = advisor.trim() !== '';
+  const canSubmit = !!branch && waOk && advisorOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -402,7 +408,8 @@ export default function Intake() {
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
-          {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — order memakai advisor terdaftar sebagai fallback.</div>}
+          {!advisorOk && <div className="warn-note">⚠ Service Advisor <b>wajib</b> — Turboly menolak order tanpa advisor (tidak dipilih otomatis).</div>}
+          {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
           <div className="label" style={{ marginTop: 12 }}>Keluhan</div>
           <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
         </div>

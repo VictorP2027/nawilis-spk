@@ -80,16 +80,16 @@ export async function pushQueued(
     try {
       const mirror = await loadMirror(claimed.branchCode);
       if (!mirror.store) throw new Error(`store ${claimed.branchCode} not in mirror (run seed:turboly)`);
-      // Advisor: prefer a mirror match; otherwise DON'T fail — pass the typed name
-      // through so the RPA tries it as a Turboly label and falls back to the first
-      // real advisor if it isn't an exact match. Keeps any form input pushable.
+      // Advisor: exact mirror match wins; otherwise pass the TYPED name through so
+      // the RPA tries it as a Turboly label. NEVER auto-pick a random advisor —
+      // with no/unknown name the SO field is left at Turboly's own default
+      // (misattributed sales credit is worse than an unfilled field).
       const typedAdvisor = (claimed.signatures.menerima.namaJelas ?? '').trim();
       const advisor =
         mirror.advisorByName.get(norm(typedAdvisor)) ??
-        [...mirror.advisorByName.values()][0] ??
-        { _id: 'unmatched', mechanicCode: 'unmatched', name: typedAdvisor || 'Advisor', storeCode: null, role: 'advisor', syncedAt: '' };
+        { _id: 'unmatched', mechanicCode: 'unmatched', name: typedAdvisor, storeCode: null, role: 'advisor', syncedAt: '' };
       if (!mirror.advisorByName.get(norm(typedAdvisor))) {
-        log(`  · advisor "${typedAdvisor}" not in mirror — letting Turboly pick a matching/first advisor`);
+        log(`  · advisor "${typedAdvisor || '(kosong)'}" not matched — leaving Turboly's advisor field untouched`);
       }
       // Plan Service Date/Time: a FUTURE appointment (scheduledAt) wins; else
       // walk-in semantics = now+30min WIB (Turboly requires plan time > "now").
