@@ -95,6 +95,7 @@ export default function Sheet() {
 
   // Plate → history: KM check + returning-customer prefill (fills EMPTY fields only).
   const [prevVisitKm, setPrevVisitKm] = useState<number | null>(null);
+  const [plateOwner, setPlateOwner] = useState<{ nama: string; wa: string | null } | null>(null);
   const [returning, setReturning] = useState<string | null>(null);
   useEffect(() => {
     if (!plateNorm || plateBad) { setPrevVisitKm(null); setReturning(null); return; }
@@ -105,6 +106,7 @@ export default function Sheet() {
         .then((d) => {
           if (!live) return;
           setPrevVisitKm(d?.vehicle?.lastKm ?? null);
+          setPlateOwner(d?.customer ?? null);
           const v = d?.vehicle, cu = d?.customer;
           if (v) {
             setMerk((x) => x || v.merk || '');
@@ -124,6 +126,8 @@ export default function Sheet() {
     return () => { live = false; clearTimeout(t); };
   }, [plateNorm, plateBad]);
   const kmBelowPrev = prevVisitKm != null && !Number.isNaN(kmVal) && kmVal < prevVisitKm;
+  const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+  const ownerMismatch = !!plateOwner?.wa && canonK(wa).length >= 8 && canonK(plateOwner.wa) !== canonK(wa);
 
   // PHONE-FIRST lookup: typing the WhatsApp number auto-populates the person and
   // their car(s); vehicles stay fully editable, chips switch between their cars.
@@ -410,6 +414,7 @@ export default function Sheet() {
               <div>
                 <input value={noPol} onChange={(e) => setNoPol(e.target.value.toUpperCase())} placeholder="B 1234 XYZ" style={plateBad ? { borderColor: '#d97706' } : undefined} />
                 {plateBad && <div className="warn-inline">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
+                {ownerMismatch && plateOwner && <div className="warn-inline">⚠ Plat terdaftar milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Pindah tangan? Lanjutkan: kendaraan otomatis didaftarkan ke pemilik baru.</div>}
                 {returning && <div className="ok-inline">↩ Pelanggan lama: {returning} — data terisi otomatis.</div>}
               </div>
             </div>

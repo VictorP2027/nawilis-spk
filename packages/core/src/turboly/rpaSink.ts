@@ -277,6 +277,17 @@ export class RpaSink implements ServiceOrderSink {
     });
     if (!clicked) throw new DataError('new-vehicle save button not found');
     await page.waitForTimeout(4500);
+    // Registering a plate that exists under ANOTHER customer makes Turboly show
+    // a bare "rejected (422)" page on the post-save redirect — but the vehicle
+    // IS created (proven live: duplicate registrations are allowed, one per
+    // customer). Classify transient: the retry finds the new vehicle and
+    // attaches normally; a genuinely failed create just 422s again to the cap.
+    const bodyText = (await page.textContent('body').catch(() => '')) ?? '';
+    if (/rejected \(422\)|already been taken/i.test(bodyText)) {
+      throw new TransientError(
+        `422 page after add-vehicle for ${reg} (duplicate-plate redirect quirk; creation usually succeeded) — retrying to attach`,
+      );
+    }
     if (/\/vehicles\/new/.test(page.url())) {
       const err = await this.readInlineError(page).catch(() => null);
       throw new DataError(`add-vehicle-to-customer failed${err ? `: ${err}` : ' (check make/model match)'}`);

@@ -34,6 +34,8 @@ export default function Intake() {
   const [operator, setOperator] = useState<string>('');
   const [plate, setPlate] = useState('');
   const [hist, setHist] = useState<VehicleHist | null>(null);
+  // Registered owner of the typed plate (from Turboly) — one plate = one owner.
+  const [plateOwner, setPlateOwner] = useState<{ nama: string; wa: string | null } | null>(null);
   const [km, setKm] = useState('');
   const [merk, setMerk] = useState('');
   const [tipe, setTipe] = useState('');
@@ -106,6 +108,7 @@ export default function Intake() {
     const key = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (key.length < 4) {
       setHist(null);
+      setPlateOwner(null);
       return;
     }
     const t = setTimeout(async () => {
@@ -119,6 +122,7 @@ export default function Intake() {
           setTahun((y) => y || (vehicle.tahun ? String(vehicle.tahun) : ''));
           setWarna((w) => w || vehicle.warna || '');
         } else setHist(null);
+        setPlateOwner(customer ?? null);
         if (customer) {
           setNama((x) => x || customer.nama || '');
           setWa((x) => x || customer.wa || '');
@@ -234,6 +238,11 @@ export default function Intake() {
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
   const waDigits = wa.replace(/\D/g, '');
   const waOk = waDigits.length >= 9; // any form — canonicalized server-side (0/62/bare = same person)
+const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+  // Plat boleh terdaftar di lebih dari satu pemilik (mobil pindah tangan):
+  // sistem otomatis mendaftarkan kendaraan ke pemilik baru saat push. Warning
+  // ini hanya mengingatkan bila WA berbeda dari pemilik terdaftar terakhir.
+  const ownerMismatch = !!plateOwner?.wa && canonK(wa).length >= 8 && canonK(plateOwner.wa) !== canonK(wa);
   // Advisor wajib: Turboly menolak Service Order tanpa Service Advisor, dan
   // kita tidak pernah memilih advisor otomatis (kredit penjualan salah orang).
   const advisorOk = advisor.trim() !== '';
@@ -321,6 +330,9 @@ export default function Intake() {
           <div className="label">No. Polisi</div>
           <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA" autoCapitalize="characters" style={plateBad ? { borderColor: '#d97706' } : undefined} />
           {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
+          {ownerMismatch && plateOwner && (
+            <div className="warn-note">⚠ Plat ini terdaftar milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) di Turboly — WA berbeda. Mobil pindah tangan? Lanjutkan saja: kendaraan otomatis didaftarkan ke pemilik baru. Salah ketik plat/WA? Periksa dulu.</div>
+          )}
           {hist && (
             <div className="hist" style={{ marginTop: 10 }}>
               {hist.merk} {hist.tipe} {hist.tahun ?? ''} {hist.warna ?? ''} · terakhir {hist.lastKm?.toLocaleString('id-ID')} km · {hist.visitCount}× kunjungan
