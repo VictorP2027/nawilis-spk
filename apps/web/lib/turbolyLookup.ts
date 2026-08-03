@@ -99,6 +99,36 @@ export async function turbolyDebugProbe(phone: string): Promise<unknown> {
   return steps;
 }
 
+export interface TbVehicle {
+  registration: string;
+  vehicle_make?: string | null;
+  vehicle_model?: string | null;
+  year?: number | string | null;
+  color?: string | null;
+  customer_id?: number;
+  customer_name?: string | null;
+  customer_phone?: string | null;
+}
+
+/** Find a vehicle (with its owner inline) by exact registration — LIVE from Turboly. */
+export async function turbolyVehicleByPlate(plate: string): Promise<TbVehicle | null> {
+  const key = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (key.length < 4) return null;
+  let cookie = (await cachedCookie()) ?? (await login());
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(
+      `${BASE}/lookup/vehicles.json?search_term=${encodeURIComponent(key)}&page_limit=10&page=1`,
+      { headers: { cookie, accept: 'application/json' }, redirect: 'manual' },
+    );
+    if (res.status === 200 && (res.headers.get('content-type') ?? '').includes('json')) {
+      const j = (await res.json()) as { vehicles?: TbVehicle[] };
+      return (j.vehicles ?? []).find((v) => String(v.registration ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '') === key) ?? null;
+    }
+    cookie = await login();
+  }
+  return null;
+}
+
 /**
  * Search Turboly customers by phone; auto re-login once on an invalid session.
  * Turboly's search is PREFIX-based on the stored string, and the same person can
