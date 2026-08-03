@@ -125,6 +125,7 @@ export default function Sheet() {
   // their car(s); vehicles stay fully editable, chips switch between their cars.
   const [custVehicles, setCustVehicles] = useState<Array<{ plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }>>([]);
   const [custHint, setCustHint] = useState<string | null>(null);
+  const [regName, setRegName] = useState<string | null>(null); // name originally linked to the phone
   useEffect(() => {
     const digits = wa.replace(/\D/g, '');
     if (digits.length < 9) { setCustVehicles([]); setCustHint(null); return; }
@@ -135,7 +136,9 @@ export default function Sheet() {
         .then((d) => {
           if (!live) return;
           if (d?.customer) {
-            setNama((x) => x || d.customer.nama || '');
+            // The phone's ORIGINAL registered name wins (identity = phone).
+            setRegName(d.customer.nama || null);
+            if (d.customer.nama) setNama(d.customer.nama);
             setAlamat((x) => x || d.customer.alamat || '');
             const vs = d.vehicles ?? [];
             setCustVehicles(vs);
@@ -145,9 +148,9 @@ export default function Sheet() {
               setNoPol(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? '');
               setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
             }
-          } else { setCustVehicles([]); setCustHint(null); }
+          } else { setCustVehicles([]); setCustHint(null); setRegName(null); }
         })
-        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); } });
+        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); setRegName(null); } });
     }, 500);
     return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -336,7 +339,14 @@ export default function Sheet() {
                 )}
               </div>
             </div>
-            <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
+            <div className="fld"><label>Nama</label>
+              <div>
+                <input value={nama} onChange={(e) => setNama(e.target.value)} />
+                {regName && nama.trim() !== '' && nama.trim().toUpperCase() !== regName.toUpperCase() && (
+                  <div className="warn-inline">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
+                )}
+              </div>
+            </div>
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
 
           </div>

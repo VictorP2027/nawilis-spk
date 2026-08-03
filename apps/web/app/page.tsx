@@ -220,6 +220,7 @@ export default function Intake() {
   // PHONE-FIRST: typing the WA auto-populates person + car(s); chips switch cars.
   const [custVehicles, setCustVehicles] = useState<Array<{ plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }>>([]);
   const [custHint, setCustHint] = useState<string | null>(null);
+  const [regName, setRegName] = useState<string | null>(null);
   useEffect(() => {
     if (waDigits.length < 9) { setCustVehicles([]); setCustHint(null); return; }
     let live = true;
@@ -229,14 +230,15 @@ export default function Intake() {
         .then((d) => {
           if (!live) return;
           if (d?.customer) {
-            setNama((x) => x || d.customer.nama || '');
+            setRegName(d.customer.nama || null);
+            if (d.customer.nama) setNama(d.customer.nama); // original name linked to the phone wins
             setAlamat((x) => x || d.customer.alamat || '');
             const vs = d.vehicles ?? [];
             setCustVehicles(vs);
             setCustHint(`${d.customer.nama} — ${vs.length} kendaraan`);
             const v = vs[0];
             if (v && !plate && !merk) { setPlate(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? ''); setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? ''); }
-          } else { setCustVehicles([]); setCustHint(null); }
+          } else { setCustVehicles([]); setCustHint(null); setRegName(null); }
         })
         .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); } });
     }, 500);
@@ -372,6 +374,9 @@ export default function Intake() {
         <div className="card">
           <div className="label">Customer</div>
           <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama" />
+          {regName && nama.trim() !== '' && nama.trim().toUpperCase() !== regName.toUpperCase() && (
+            <div className="warn-note">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
+          )}
           <div className="row" style={{ marginTop: 10 }}>
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat (opsional)" />
           </div>
