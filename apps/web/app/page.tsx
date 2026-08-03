@@ -253,7 +253,15 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   // Alamat wajib: linked to the person (prefilled from Turboly) and required
   // so every registration carries a reachable address.
   const alamatOk = alamat.trim() !== '';
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && !submitting;
+  // Required set mirrors the reference intake app: plate, nama, WA, alamat,
+  // merk, warna, KM, tahun (Tipe stays optional).
+  const plateOk = plate.trim() !== '';
+  const namaOk = nama.trim() !== '';
+  const merkOk = merk.trim() !== '';
+  const warnaOk = warna.trim() !== '';
+  const kmOk = km.trim() !== '';
+  const tahunOk = tahun.trim() !== '';
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -336,7 +344,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">No. Polisi</div>
-          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA" autoCapitalize="characters" style={plateBad ? { borderColor: '#d97706' } : undefined} />
+          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA — WAJIB" autoCapitalize="characters" style={plateBad || !plateOk ? { borderColor: '#d97706' } : undefined} />
+          {!plateOk && <div className="warn-note">⚠ Wajib diisi.</div>}
           {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
           {ownerMismatch && plateOwner && (
             <div className="warn-note">⚠ Plat ini milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Order Turboly <b>tetap atas nama {plateOwner.nama}</b>; orang di form ini dicatat sebagai pembawa kendaraan di Notes.</div>
@@ -352,14 +361,21 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <div className="row">
             <div>
               <div className="label">KM</div>
-              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230" style={kmBelowPrev ? { borderColor: '#d97706' } : undefined} />
+              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230 — WAJIB" style={kmBelowPrev || !kmOk ? { borderColor: '#d97706' } : undefined} />
+              {!kmOk && <div className="warn-note">⚠ Wajib diisi.</div>}
               {kmBelowPrev && <div className="warn-note">⚠ Lebih kecil dari kunjungan sebelumnya ({Number(hist!.lastKm).toLocaleString('id-ID')}) — boleh lanjut.</div>}
             </div>
             <div>
               <div className="label">Tahun / Warna</div>
               <div className="row">
-                <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019" />
-                <input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Silver" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019 — WAJIB" style={!tahunOk ? { borderColor: '#d97706' } : undefined} />
+                  {!tahunOk && <div className="warn-note">⚠ Wajib diisi.</div>}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Silver — WAJIB" style={!warnaOk ? { borderColor: '#d97706' } : undefined} />
+                  {!warnaOk && <div className="warn-note">⚠ Wajib diisi.</div>}
+                </div>
               </div>
             </div>
           </div>
@@ -367,7 +383,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             <div className="row" style={{ marginTop: 10 }}>
               <div>
                 <div className="label">Merk</div>
-                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
+                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={makeUnknown || !merkOk ? { borderColor: '#d97706' } : undefined} />
+                {!merkOk && <div className="warn-note">⚠ Wajib diisi.</div>}
                 <datalist id="make-list-q">{makes.map((m) => <option key={m} value={m} />)}</datalist>
                 {makeUnknown && <div className="warn-note">⚠ Merk tidak ada di katalog Turboly — boleh lanjut.</div>}
               </div>
@@ -418,7 +435,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Customer</div>
-          <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama" />
+          <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama — WAJIB" style={!namaOk ? { borderColor: '#d97706' } : undefined} />
+          {!namaOk && <div className="warn-note">⚠ Wajib diisi.</div>}
           {regName && nama.trim() !== '' && nama.trim().toUpperCase() !== regName.toUpperCase() && (
             <div className="warn-note">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
           )}

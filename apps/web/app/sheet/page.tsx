@@ -273,6 +273,9 @@ export default function Sheet() {
     if (!/^8\d{8,11}$/.test(waNatS)) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
     if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
+    const requiredSheet: Array<[string, string]> = [[noPol, 'Nomor Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun'], [menyerahkan, 'Yang menyerahkan (nama customer)']];
+    const missing = requiredSheet.filter(([v]) => !String(v).trim()).map(([, label]) => label);
+    if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -569,7 +572,7 @@ export default function Sheet() {
         <div className="sign">
           <div className="b">Yang menyerahkan,
             <SignaturePad ref={sigMenyerahkan} />
-            <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas" />
+            <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas — WAJIB" style={!menyerahkan.trim() ? { borderColor: '#d97706' } : undefined} />
           </div>
           <div className="b">Yang menerima,
             <SignaturePad ref={sigMenerima} />
