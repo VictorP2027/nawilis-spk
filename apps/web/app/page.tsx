@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { SignaturePad, type SigHandle } from './components/SignaturePad';
 import { SERVICES, BRANCHES, DAMAGE_ZONES } from '../lib/refdata.client';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
@@ -45,6 +46,8 @@ export default function Intake() {
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
   const [dmg, setDmg] = useState<Set<string>>(new Set());
+  const sigCust = useRef<SigHandle>(null);
+  const sigAdv = useRef<SigHandle>(null);
   const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
@@ -169,7 +172,14 @@ export default function Intake() {
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
       salespersonName: advisor || null,
-      signatures: { menyerahkanPresent: false, menerimaPresent: !!advisor, menerimaNamaJelas: advisor || null },
+      signatures: {
+        menyerahkanPresent: !!sigCust.current?.get(),
+        menyerahkanNamaJelas: nama || null,
+        menerimaPresent: !!advisor || !!sigAdv.current?.get(),
+        menerimaNamaJelas: advisor || null,
+        menyerahkanImage: sigCust.current?.get() ?? null,
+        menerimaImage: sigAdv.current?.get() ?? null,
+      },
     };
 
     const res = await submitOrQueue(uploadId, payload);
@@ -214,6 +224,8 @@ export default function Intake() {
     setKeluhan('');
     setJobs({});
     setDmg(new Set());
+    sigCust.current?.clear();
+    sigAdv.current?.clear();
   }
 
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
@@ -423,6 +435,14 @@ export default function Intake() {
           {dmg.size > 0 && (
             <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
           )}
+        </div>
+
+        <div className="card">
+          <div className="label">Tanda tangan (opsional)</div>
+          <div className="label" style={{ fontSize: 11, marginTop: 6 }}>Yang menyerahkan (customer)</div>
+          <SignaturePad ref={sigCust} />
+          <div className="label" style={{ fontSize: 11, marginTop: 10 }}>Yang menerima (Service Advisor)</div>
+          <SignaturePad ref={sigAdv} />
         </div>
 
         {!jadwalOn ? (
