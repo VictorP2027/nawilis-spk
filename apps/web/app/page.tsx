@@ -447,7 +447,7 @@ export default function Intake() {
         )}
 
         <button className="btn primary" disabled={!canSubmit} onClick={submit}>
-          {submitting ? 'Menyimpan…' : 'Simpan SPK & Cetak Tiket'}
+          {submitting ? 'Menyimpan…' : 'Simpan & Kirim ke Turboly'}
         </button>
 
         <div className="sync" style={{ marginTop: 12, textAlign: 'center', color: 'var(--muted)' }}>
