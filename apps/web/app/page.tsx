@@ -55,6 +55,7 @@ export default function Intake() {
   // tap to mark the exception.
   const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
   const [estimasi, setEstimasi] = useState('');
+  const [optOpen, setOptOpen] = useState(false); // optional fields collapsed = neat form
   const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
@@ -461,12 +462,19 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
-          <div className="label" style={{ marginTop: 12 }}>Keluhan</div>
-          <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
         </div>
 
+        {/* Optional fields collapsed behind one toggle — keeps the form neat. */}
+        <button type="button" className="btn ghost" style={{ width: '100%', marginBottom: 14 }} onClick={() => setOptOpen((o) => !o)}>
+          {optOpen ? '▾' : '▸'} Opsional: keluhan, kerusakan bodi, TTD advisor
+          {!optOpen && (keluhan.trim() || dmg.size > 0) ? ` — terisi: ${[keluhan.trim() && 'keluhan', dmg.size > 0 && `${dmg.size} kerusakan`].filter(Boolean).join(', ')}` : ''}
+        </button>
+
+        {optOpen && (
         <div className="card">
-          <div className="label">Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
+          <div className="label">Keluhan</div>
+          <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
+          <div className="label" style={{ marginTop: 12 }}>Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
           <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
             {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
               <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
@@ -493,7 +501,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {dmg.size > 0 && (
             <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
           )}
+          <div className="label" style={{ marginTop: 12 }}>Tanda tangan Yang menerima (Service Advisor) — opsional</div>
+          <SignaturePad ref={sigAdv} />
         </div>
+        )}
 
         <div className="card">
           <div className="label">Pengecekan awal kendaraan — semua item WAJIB dicek (OK default, ketuk jika ada temuan)</div>
@@ -511,12 +522,9 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         </div>
 
         <div className="card">
-          <div className="label">Tanda tangan</div>
-          <div className="label" style={{ fontSize: 11, marginTop: 6 }}>Yang menyerahkan (customer) — WAJIB</div>
+          <div className="label">Tanda tangan customer (Yang menyerahkan) — WAJIB</div>
           <SignaturePad ref={sigCust} onInk={setCustSigned} />
           {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib (persetujuan pengerjaan)</div>}
-          <div className="label" style={{ fontSize: 11, marginTop: 10 }}>Yang menerima (Service Advisor) — opsional</div>
-          <SignaturePad ref={sigAdv} />
         </div>
 
         {!jadwalOn ? (
