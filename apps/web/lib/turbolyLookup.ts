@@ -89,20 +89,28 @@ export async function turbolyDebugProbe(phone: string): Promise<unknown> {
   return steps;
 }
 
-/** Search Turboly customers by phone; auto re-login once on an invalid session. */
+/**
+ * Search Turboly customers by phone; auto re-login once on an invalid session.
+ * Turboly's search is PREFIX-based on the stored string, and the same person can
+ * exist under different stored forms (0812…, 812…, 62812…, +62812…) — so every
+ * variant is queried and results merged. Sorted by id ASC: the lowest id is the
+ * oldest registration, and the ORIGINAL record owns the name.
+ */
 export async function turbolyCustomersByPhone(phone: string): Promise<TbCustomer[]> {
   const key = canonPhoneKey(phone);
   if (key.length < 8) return [];
   let cookie = (await cachedCookie()) ?? (await login());
   for (let attempt = 0; attempt < 2; attempt++) {
-    // Try local 0-form first (Turboly's common stored form), then the bare key.
-    for (const term of ['0' + key, key]) {
+    const byId = new Map<number, TbCustomer>();
+    let sessionDead = false;
+    for (const term of [key, '0' + key, '62' + key, '+62' + key]) {
       const out = await search(term, cookie);
-      if (out === null) { cookie = await login(); break; } // session invalid → re-login, retry
-      const hits = out.filter((c) => canonPhoneKey(String(c.phone ?? '')) === key);
-      if (hits.length) return hits;
-      if (term === key) return []; // both forms tried, genuinely no match
+      if (out === null) { cookie = await login(); sessionDead = true; break; } // re-login, restart all terms
+      for (const c of out) {
+        if (canonPhoneKey(String(c.phone ?? '')) === key) byId.set(c.id, c);
+      }
     }
+    if (!sessionDead) return [...byId.values()].sort((a, b) => a.id - b.id);
   }
   return [];
 }

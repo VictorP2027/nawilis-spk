@@ -225,9 +225,16 @@ export class RpaSink implements ServiceOrderSink {
    */
   private async addVehicleToExistingCustomer(payload: TurbolyServiceOrderPayload): Promise<void> {
     const page = this.session.page_();
-    // Identity-first query: canonical phone key (matches 0/62/bare stored forms), else name.
+    // Identity-first query: the ORIGINAL record's exact stored phone (Turboly's
+    // search is prefix-based, so only the stored form is guaranteed to match),
+    // else 0-form phone, else name.
     const cr = payload.customer.create;
-    const q = (cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    const phoneKey = cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '';
+    let q = (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    if (phoneKey) {
+      const orig = await this.resolveOriginalCustomer(phoneKey);
+      if (orig) q = orig.phone.trim();
+    }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
@@ -332,12 +339,49 @@ export class RpaSink implements ServiceOrderSink {
    * phone) — never a first/partial result. Prevents "FRANK" wrongly attaching to
    * an existing "FRANKI". Returns false (→ create a new customer) if none matches.
    */
+  /**
+   * Resolve the ORIGINAL Turboly customer for a phone via the in-session JSON
+   * lookup (`/lookup/customers.json`). Turboly's search is PREFIX-based on the
+   * stored string, so every stored form (0812…, 812…, 62812…, +62812…) is
+   * queried; among matches the LOWEST id (oldest registration) wins — the
+   * original record owns the person. Returns the record's exact stored phone
+   * (the only search term guaranteed to find it) or null when the phone is not
+   * in Turboly at all. Throws nothing — a lookup hiccup returns undefined.
+   */
+  private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
+    const page = this.session.page_();
+    try {
+      const raw = await page.evaluate(async (terms: string[]) => {
+        const all: Array<{ id: number; name: string; phone: string }> = [];
+        for (const t of terms) {
+          const r = await fetch(`/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`, { headers: { accept: 'application/json' } });
+          if (r.ok) {
+            const j = await r.json();
+            for (const c of j.customers ?? []) all.push({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+          }
+        }
+        return all;
+      }, ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]);
+      const mine = raw
+        .filter((c) => canonPhoneKey(c.phone) === phoneKey)
+        .sort((a, b) => a.id - b.id);
+      return mine[0] ?? null;
+    } catch {
+      return undefined; // endpoint hiccup — caller falls back to select2 search
+    }
+  }
+
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const page = this.session.page_();
     // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
     // Canonical key: 0223456789 / 223456789 / +62223456789 are all the SAME person.
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
-    const query = (phoneKey || nama || '').trim();
+    let query = (phoneKey ? localPhone(phone) : nama || '').trim();
+    if (phoneKey) {
+      const orig = await this.resolveOriginalCustomer(phoneKey);
+      if (orig === null) return false; // phone not in Turboly → create new (stored 0-form)
+      if (orig) query = orig.phone.trim(); // exact stored form — prefix search will find it
+    }
     if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();

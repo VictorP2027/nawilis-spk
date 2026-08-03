@@ -23,9 +23,13 @@ export async function GET(req: Request): Promise<Response> {
   // 1) LIVE Turboly — name, address and every registered vehicle come from the ERP.
   try {
     const hits = await turbolyCustomersByPhone(key);
-    const c = hits[0];
+    const c = hits[0]; // lowest id = oldest registration = original name wins
     if (c) {
-      const vs = (c.vehicles ?? [])
+      // Same person may be split across records (phone stored as 0812… vs 812…):
+      // union the vehicles of ALL matching records, deduped by plate.
+      const seenPlate = new Set<string>();
+      const vs = hits
+        .flatMap((h) => h.vehicles ?? [])
         .map((v) => {
           const r = v as Record<string, unknown>;
           return {
@@ -36,7 +40,7 @@ export async function GET(req: Request): Promise<Response> {
             warna: (r.color ?? null) as string | null,
           };
         })
-        .filter((v) => v.plate);
+        .filter((v) => v.plate && !seenPlate.has(v.plate) && (seenPlate.add(v.plate), true));
       return NextResponse.json({
         customer: {
           nama: c.name,
