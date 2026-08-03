@@ -424,7 +424,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       value={jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: e.target.value } }))}
-                      style={{ marginTop: 6, fontSize: 13, padding: '8px 10px' }}
+                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px' }}
                     >
                       {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                     </select>
