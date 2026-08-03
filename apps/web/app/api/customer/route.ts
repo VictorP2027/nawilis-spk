@@ -25,11 +25,19 @@ export async function GET(req: Request): Promise<Response> {
     .toArray();
   if (docs.length === 0) return NextResponse.json({ customer: null, vehicles: [] });
 
+  // The ORIGINAL registration owns the name: oldest record with this phone key
+  // (a later visit typed as a different name must not rename the person).
+  const original = await collections
+    .spk()
+    .findOne(
+      { $or: [{ 'customer.phoneKey': key }, { 'customer.waE164': { $in: [key, '0' + key, '62' + key, '+62' + key] } }] },
+      { sort: { createdAt: 1 }, projection: { customer: 1 } },
+    );
   const latest = docs[0]!;
   const customer = {
-    nama: latest.customer.nama,
-    wa: latest.customer.waE164 ? localPhone(latest.customer.waE164) : null,
-    alamat: latest.customer.alamat ?? null,
+    nama: original?.customer.nama ?? latest.customer.nama,
+    wa: (original?.customer.waE164 ?? latest.customer.waE164) ? localPhone(original?.customer.waE164 ?? latest.customer.waE164 ?? '') : null,
+    alamat: latest.customer.alamat ?? original?.customer.alamat ?? null,
   };
   // Distinct vehicles, newest first.
   const seen = new Set<string>();
