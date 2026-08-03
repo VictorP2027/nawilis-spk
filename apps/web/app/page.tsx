@@ -50,6 +50,7 @@ export default function Intake() {
   const [dmg, setDmg] = useState<Set<string>>(new Set());
   const sigCust = useRef<SigHandle>(null);
   const sigAdv = useRef<SigHandle>(null);
+  const [custSigned, setCustSigned] = useState(false);
   const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
@@ -261,7 +262,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const warnaOk = warna.trim() !== '';
   const kmOk = km.trim() !== '';
   const tahunOk = tahun.trim() !== '';
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && custSigned && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -484,10 +485,11 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         </div>
 
         <div className="card">
-          <div className="label">Tanda tangan (opsional)</div>
-          <div className="label" style={{ fontSize: 11, marginTop: 6 }}>Yang menyerahkan (customer)</div>
-          <SignaturePad ref={sigCust} />
-          <div className="label" style={{ fontSize: 11, marginTop: 10 }}>Yang menerima (Service Advisor)</div>
+          <div className="label">Tanda tangan</div>
+          <div className="label" style={{ fontSize: 11, marginTop: 6 }}>Yang menyerahkan (customer) — WAJIB</div>
+          <SignaturePad ref={sigCust} onInk={setCustSigned} />
+          {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib (persetujuan pengerjaan)</div>}
+          <div className="label" style={{ fontSize: 11, marginTop: 10 }}>Yang menerima (Service Advisor) — opsional</div>
           <SignaturePad ref={sigAdv} />
         </div>
 

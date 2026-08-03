@@ -13,7 +13,7 @@ export interface SigHandle {
  * pad can never paint a stray "signature"); tracks ONE pointer (palm/second
  * finger ignored); DPR-crisp; survives rotation/resize by rescaling the ink.
  */
-export const SignaturePad = forwardRef<SigHandle>(function SignaturePad(_props, ref) {
+export const SignaturePad = forwardRef<SigHandle, { onInk?: (has: boolean) => void }>(function SignaturePad(props, ref) {
   const cv = useRef<HTMLCanvasElement>(null);
   const inked = useRef(false);
   const pathLen = useRef(0); // require real movement before counting as signed
@@ -64,6 +64,7 @@ export const SignaturePad = forwardRef<SigHandle>(function SignaturePad(_props, 
     pathLen.current = 0;
     activePtr.current = null;
     setHasInk(false);
+    props.onInk?.(false);
   };
 
   useImperativeHandle(ref, () => ({
@@ -103,7 +104,7 @@ export const SignaturePad = forwardRef<SigHandle>(function SignaturePad(_props, 
           pathLen.current += Math.hypot(p.x - last.current.x, p.y - last.current.y);
           last.current = p;
           // A dot or micro-smudge is not a signature — require real ink.
-          if (!inked.current && pathLen.current > 12) { inked.current = true; setHasInk(true); }
+          if (!inked.current && pathLen.current > 12) { inked.current = true; setHasInk(true); props.onInk?.(true); }
         }}
         onPointerUp={endStroke}
         onPointerCancel={endStroke}
