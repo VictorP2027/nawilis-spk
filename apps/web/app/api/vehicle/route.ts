@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { collections, localPhone } from '@spk/core';
-import { turbolyVehicleByPlate } from '../../../lib/turbolyLookup';
+import { turbolyVehicleByPlate, turbolyCustomersByPhone } from '../../../lib/turbolyLookup';
 import { db } from '../../../lib/db';
 
 export const runtime = 'nodejs';
@@ -35,9 +35,29 @@ export async function GET(req: Request): Promise<Response> {
           lastBranch: cached?.lastBranch ?? null,
           visitCount: cached?.visitCount ?? 0,
         },
-        customer: tv.customer_name
-          ? { nama: tv.customer_name, wa: tv.customer_phone ? localPhone(String(tv.customer_phone)) : null, alamat: null }
-          : null,
+        // PHONE IS THE PRIMARY KEY: the plate only identifies the car; the
+        // person resolves through their phone number (oldest Turboly record
+        // wins the name — a plate sitting on a duplicate must not resurface
+        // the duplicate's identity). Vehicle-row name is only the fallback
+        // when the record has no phone.
+        customer: await (async () => {
+          if (tv.customer_phone) {
+            try {
+              const hits = await turbolyCustomersByPhone(String(tv.customer_phone));
+              const c = hits[0];
+              if (c) {
+                return {
+                  nama: c.name,
+                  wa: c.phone ? localPhone(String(c.phone)) : localPhone(String(tv.customer_phone)),
+                  alamat: (c.address ?? '').replace(/, Indonesia$/, '') || null,
+                };
+              }
+            } catch { /* phone resolve failed — use the vehicle-row owner below */ }
+          }
+          return tv.customer_name
+            ? { nama: tv.customer_name, wa: tv.customer_phone ? localPhone(String(tv.customer_phone)) : null, alamat: null }
+            : null;
+        })(),
         source: 'turboly',
       });
     }
