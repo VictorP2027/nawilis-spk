@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SignaturePad, type SigHandle } from './components/SignaturePad';
-import { SERVICES, BRANCHES, DAMAGE_ZONES } from '../lib/refdata.client';
+import { SERVICES, BRANCHES, DAMAGE_ZONES, CONDITION_ITEMS } from '../lib/refdata.client';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
 interface VehicleHist {
@@ -51,6 +51,10 @@ export default function Intake() {
   const sigCust = useRef<SigHandle>(null);
   const sigAdv = useRef<SigHandle>(null);
   const [custSigned, setCustSigned] = useState(false);
+  // Pengecekan awal (paper section, required): every item answered; OK default,
+  // tap to mark the exception.
+  const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
+  const [estimasi, setEstimasi] = useState('');
   const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
@@ -174,6 +178,8 @@ export default function Intake() {
       },
       complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
       jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null, chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
+      conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] === 'OK' ? [] : [condQ[c.code]!] })),
+      estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
       salespersonName: advisor || null,
@@ -229,6 +235,8 @@ export default function Intake() {
     setKeluhan('');
     setJobs({});
     setDmg(new Set());
+    setCondQ(Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
+    setEstimasi('');
     sigCust.current?.clear();
     sigAdv.current?.clear();
     // Advisor must be a deliberate choice per SPK — never carried over from the
@@ -262,7 +270,9 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const warnaOk = warna.trim() !== '';
   const kmOk = km.trim() !== '';
   const tahunOk = tahun.trim() !== '';
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && custSigned && !submitting;
+  const tipeOk = tipe.trim() !== '';
+  const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && custSigned && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -391,7 +401,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               </div>
               <div>
                 <div className="label">Tipe</div>
-                <input list="model-list-q" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza" style={modelUnknown ? { borderColor: '#d97706' } : undefined} />
+                <input list="model-list-q" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza — WAJIB" style={!tipeOk ? { borderColor: '#dc2626' } : modelUnknown ? { borderColor: '#d97706' } : undefined} />
+                {!tipeOk && <div className="req-note">⚠ wajib diisi</div>}
                 <datalist id="model-list-q">{models.map((m) => <option key={m} value={m} />)}</datalist>
                 {modelUnknown && <div className="warn-note">⚠ Tipe tidak ada di daftar {merk.trim().toUpperCase()} — dipetakan ke model paling mirip saat kirim.</div>}
               </div>
@@ -482,6 +493,21 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {dmg.size > 0 && (
             <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
           )}
+        </div>
+
+        <div className="card">
+          <div className="label">Pengecekan awal kendaraan — semua item WAJIB dicek (OK default, ketuk jika ada temuan)</div>
+          {CONDITION_ITEMS.map((c) => (
+            <div key={c.code} className="chk-row">
+              <span className="chk-label">{c.label}</span>
+              {['OK', ...c.marks].map((m) => (
+                <button key={m} type="button" className={`chk-chip ${condQ[c.code] === m ? (m === 'OK' ? 'ok' : 'bad') : ''}`} onClick={() => setCondQ((prev) => ({ ...prev, [c.code]: m }))}>{m}</button>
+              ))}
+            </div>
+          ))}
+          <div className="label" style={{ marginTop: 12 }}>Estimasi waktu pekerjaan (menit) — WAJIB</div>
+          <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="60" style={!estimasiOk ? { borderColor: '#dc2626', maxWidth: 140 } : { maxWidth: 140 }} />
+          {!estimasiOk && <div className="req-note">⚠ wajib — angka menit, contoh 60</div>}
         </div>
 
         <div className="card">
