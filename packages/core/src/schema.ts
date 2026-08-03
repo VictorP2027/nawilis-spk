@@ -77,8 +77,12 @@ export const SpkIntakeInput = z.object({
     .object({
       menyerahkanPresent: z.boolean().default(false),
       menyerahkanInkDensity: z.number().nullable().default(null),
+      menyerahkanNamaJelas: z.string().nullable().default(null),
       menerimaPresent: z.boolean().default(false),
       menerimaNamaJelas: z.string().nullable().default(null),
+      /** On-glass drawn signatures: small-canvas PNG data URLs (size-capped). */
+      menyerahkanImage: z.string().max(300_000).nullable().default(null),
+      menerimaImage: z.string().max(300_000).nullable().default(null),
     })
     .default({}),
 

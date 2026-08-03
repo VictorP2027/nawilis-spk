@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../lib/refdata.client';
 import { submitOrQueue } from '../../lib/outbox';
 
@@ -8,6 +8,122 @@ import { submitOrQueue } from '../../lib/outbox';
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+export interface SigHandle {
+  /** PNG data URL when something was drawn, else null. */
+  get: () => string | null;
+  clear: () => void;
+}
+
+/**
+ * On-glass signature pad. Armed by an explicit tap (so a scroll swipe over the
+ * pad can never paint a stray "signature"); tracks ONE pointer (palm/second
+ * finger ignored); DPR-crisp; survives rotation/resize by rescaling the ink.
+ */
+const SignaturePad = forwardRef<SigHandle>(function SignaturePad(_props, ref) {
+  const cv = useRef<HTMLCanvasElement>(null);
+  const inked = useRef(false);
+  const pathLen = useRef(0); // require real movement before counting as signed
+  const activePtr = useRef<number | null>(null);
+  const last = useRef<{ x: number; y: number } | null>(null);
+  const [hasInk, setHasInk] = useState(false);
+  const [armed, setArmed] = useState(false);
+
+  // Size the backing store to CSS size × devicePixelRatio; on any resize
+  // (rotation, split-screen) re-fit and rescale the existing ink so strokes
+  // always land under the finger.
+  const fit = () => {
+    const c = cv.current;
+    if (!c || !c.offsetWidth) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const w = Math.round(c.offsetWidth * dpr);
+    const h = Math.round(c.offsetHeight * dpr);
+    if (c.width === w && c.height === h) return;
+    let snap: HTMLCanvasElement | null = null;
+    if (inked.current && c.width > 0) {
+      snap = document.createElement('canvas');
+      snap.width = c.width;
+      snap.height = c.height;
+      snap.getContext('2d')!.drawImage(c, 0, 0);
+    }
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d')!;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.lineWidth = 2;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.strokeStyle = '#1a2b6d';
+    if (snap) g.drawImage(snap, 0, 0, snap.width, snap.height, 0, 0, c.offsetWidth, c.offsetHeight);
+  };
+  useEffect(() => {
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(cv.current!);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const doClear = () => {
+    const c = cv.current;
+    if (c) c.getContext('2d')!.clearRect(0, 0, c.width, c.height);
+    inked.current = false;
+    pathLen.current = 0;
+    activePtr.current = null;
+    setHasInk(false);
+  };
+
+  useImperativeHandle(ref, () => ({
+    get: () => (inked.current && cv.current ? cv.current.toDataURL('image/png') : null),
+    clear: doClear,
+  }));
+
+  const pos = (e: React.PointerEvent) => {
+    const r = cv.current!.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const endStroke = (e: React.PointerEvent) => {
+    if (e.pointerId !== activePtr.current) return; // palm lift must not cut the pen stroke
+    activePtr.current = null;
+    last.current = null;
+  };
+  return (
+    <div className="sigpad">
+      <canvas
+        ref={cv}
+        style={{ touchAction: armed ? 'none' : 'auto' }}
+        onPointerDown={(e) => {
+          if (!armed || activePtr.current !== null) return; // one pointer draws; palm ignored
+          e.preventDefault();
+          cv.current!.setPointerCapture(e.pointerId);
+          activePtr.current = e.pointerId;
+          last.current = pos(e);
+        }}
+        onPointerMove={(e) => {
+          if (!armed || e.pointerId !== activePtr.current || !last.current) return;
+          const p = pos(e);
+          const g = cv.current!.getContext('2d')!;
+          g.beginPath();
+          g.moveTo(last.current.x, last.current.y);
+          g.lineTo(p.x, p.y);
+          g.stroke();
+          pathLen.current += Math.hypot(p.x - last.current.x, p.y - last.current.y);
+          last.current = p;
+          // A dot or micro-smudge is not a signature — require real ink.
+          if (!inked.current && pathLen.current > 12) { inked.current = true; setHasInk(true); }
+        }}
+        onPointerUp={endStroke}
+        onPointerCancel={endStroke}
+      />
+      {!armed && (
+        <button type="button" className="sig-arm" onClick={() => setArmed(true)}>✍ Ketuk untuk tanda tangan</button>
+      )}
+      {armed && (hasInk
+        ? <button type="button" className="sig-clr" onClick={doClear}>✕ Hapus</button>
+        : <span className="sig-hint">✍ tanda tangan di sini</span>)}
+    </div>
+  );
+});
 
 /** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
 const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
@@ -37,6 +153,8 @@ export default function Sheet() {
   const [kontakLain, setKontakLain] = useState('');
   const [menyerahkan, setMenyerahkan] = useState('');
   const [menerima, setMenerima] = useState('');
+  const sigMenyerahkan = useRef<SigHandle>(null);
+  const sigMenerima = useRef<SigHandle>(null);
   const [branch, setBranch] = useState('');
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
@@ -241,7 +359,14 @@ export default function Sheet() {
       estimasiMinutes: estimasi ? Number(estimasi) : null,
       serviceAdvisorName: menerima || null,
       salespersonName: menerima || null,
-      signatures: { menyerahkanPresent: !!menyerahkan, menerimaPresent: !!menerima, menerimaNamaJelas: menerima || null },
+      signatures: {
+        menyerahkanPresent: !!menyerahkan || !!sigMenyerahkan.current?.get(),
+        menyerahkanNamaJelas: menyerahkan || null,
+        menerimaPresent: !!menerima || !!sigMenerima.current?.get(),
+        menerimaNamaJelas: menerima || null,
+        menyerahkanImage: sigMenyerahkan.current?.get() ?? null,
+        menerimaImage: sigMenerima.current?.get() ?? null,
+      },
       // Verbatim raw fields → reproduce the Nawilis export columns exactly.
       raw: {
         merek_oli: merekOli, tipe_oli: tipeOli, merek_ban: merekBan, tipe_ban: tipeBan,
@@ -264,19 +389,26 @@ export default function Sheet() {
   /** Actually save + push (used by the clean path and the SIMPAN PAKSA override button). */
   async function send(uploadId: string, payload: unknown) {
     setSubmitting(true);
-    const res = await submitOrQueue(uploadId, payload);
-    if (!res) { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
-    const body = await res.json().catch(() => ({}));
-    if (res.ok) {
-      const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
-      const msg = body.needsReview
-        ? 'Tersimpan, perlu diperbaiki: '
-        : body.state === 'queued'
-          ? '✓ Tersimpan & langsung dikirim ke Turboly. '
-          : `✓ Tersimpan ke MongoDB (${body.state}). `;
-      setResult({ ok: !body.needsReview, text: msg + notes });
-    } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
-    setSubmitting(false);
+    try {
+      const res = await submitOrQueue(uploadId, payload);
+      if (res === 'queued') { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); return; }
+      if (res === 'queued_no_images') { setResult({ ok: true, text: '✓ Tersimpan offline (tanda tangan gambar dilepas — penyimpanan penuh). Akan dikirim otomatis saat online.' }); return; }
+      if (res === 'lost') { setResult({ ok: false, text: '✗ GAGAL menyimpan: penyimpanan perangkat penuh & tidak ada koneksi. Data TIDAK tersimpan — hubungkan internet lalu coba lagi.' }); return; }
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
+        const msg = body.needsReview
+          ? 'Tersimpan, perlu diperbaiki: '
+          : body.state === 'queued'
+            ? '✓ Tersimpan & langsung dikirim ke Turboly. '
+            : `✓ Tersimpan ke MongoDB (${body.state}). `;
+        setResult({ ok: !body.needsReview, text: msg + notes });
+      } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
+    } catch (e) {
+      setResult({ ok: false, text: `Gagal menyimpan: ${(e as Error).message}` });
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -535,8 +667,12 @@ export default function Sheet() {
           Saya yang bertanda tangan dibawah ini memberi wewenang penuh kepada bengkel NAWILIS untuk melakukan pekerjaan sesuai dengan permintaan order di atas dan test jalan apabila diperlukan.
         </div>
         <div className="sign">
-          <div className="b">Yang menyerahkan,<input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas & tanda tangan" /></div>
+          <div className="b">Yang menyerahkan,
+            <SignaturePad ref={sigMenyerahkan} />
+            <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas" />
+          </div>
           <div className="b">Yang menerima,
+            <SignaturePad ref={sigMenerima} />
             <input
               list="advisor-list"
               value={menerima}

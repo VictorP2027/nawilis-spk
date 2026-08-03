@@ -32,7 +32,15 @@ export async function GET(req: Request): Promise<Response> {
     q.$or = [{ assignment: { $ne: null } }, { state: { $in: ['queued', 'pushing', 'pushed', 'confirmed'] } }];
   }
 
-  const docs = (await collections.spk().find(q, { sort: { 'capture.receivedAt': 1 } }).toArray()) as SpkDoc[];
+  // Signature PNGs are dead weight for the xlsx (only namaJelas is exported) —
+  // excluding them keeps a big export from ballooning function memory.
+  const docs = (await collections
+    .spk()
+    .find(q, {
+      sort: { 'capture.receivedAt': 1 },
+      projection: { 'signatures.menyerahkan.imageDataUrl': 0, 'signatures.menerima.imageDataUrl': 0 },
+    })
+    .toArray()) as SpkDoc[];
   // Defensive second filter for `used` (keeps the definition in one place).
   const rows = (scope === 'used' ? docs.filter(isUsedInServiceOrder) : docs).map(toNawilisRow);
 

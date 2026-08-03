@@ -98,8 +98,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .sheet .zone.on { fill: rgba(23,99,214,.22); stroke: var(--nawilis); stroke-width: 1.5; }
 .sheet .auth { font-size: 9.5px; margin: 8px 0; line-height: 1.3; color: #33415c; }
 .sheet .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.sheet .sign .b { border: 1px solid var(--nawilis); border-radius: 8px; height: 74px; padding: 4px 6px; font-size: 10px; position: relative; }
-.sheet .sign .b input { position: absolute; bottom: 4px; left: 6px; width: calc(100% - 12px); }
+.sheet .sign .b { border: 1px solid var(--nawilis); border-radius: 8px; min-height: 74px; padding: 4px 6px 6px; font-size: 10px; position: relative; }
+.sheet .sign .b input { width: 100%; margin-top: 4px; }
 .sheet .branches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 14px; font-size: 9.5px; margin-top: 8px; border-top: 2px solid var(--nawilis); padding-top: 6px; }
 .sheet .branches label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .sheet .branches input { width: auto; accent-color: var(--nawilis); }
@@ -211,3 +211,10 @@ th { color: var(--muted); font-weight: 600; }
 /* Damage diagram zones (used by both / and /sheet) */
 svg.car .zone { fill: transparent; stroke: #6b82ad; stroke-width: 1; cursor: pointer; }
 svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-width: 1.5; }
+
+/* On-glass signature pad (sheet sign boxes) */
+.sigpad { position: relative; margin-top: 4px; }
+.sigpad canvas { display: block; width: 100%; height: 110px; background: #fff; border: 1px dashed #9db0d6; border-radius: 8px; } /* touch-action set inline: none only when armed */
+.sigpad .sig-arm { position: absolute; inset: 0; width: 100%; border: 0; border-radius: 8px; background: rgba(240, 245, 252, .85); color: #33507e; font-size: 13px; cursor: pointer; }
+.sigpad .sig-clr { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 2px 8px; border: 1px solid #d0d7e6; border-radius: 6px; background: #fff; color: #8a4b4b; cursor: pointer; }
+.sigpad .sig-hint { position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; color: #b6c2d9; font-size: 11px; pointer-events: none; }

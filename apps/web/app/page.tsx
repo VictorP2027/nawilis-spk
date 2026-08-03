@@ -173,10 +173,14 @@ export default function Intake() {
     };
 
     const res = await submitOrQueue(uploadId, payload);
-    if (!res) {
+    if (typeof res === 'string') {
       setOutbox(pending());
-      setResult({ ok: true, text: 'Tersimpan offline — akan dikirim otomatis saat online.' });
-      resetForm();
+      if (res === 'lost') {
+        setResult({ ok: false, text: '✗ GAGAL menyimpan: penyimpanan perangkat penuh & tidak ada koneksi. Data TIDAK tersimpan — hubungkan internet lalu coba lagi.' });
+      } else {
+        setResult({ ok: true, text: 'Tersimpan offline — akan dikirim otomatis saat online.' });
+        resetForm();
+      }
       setSubmitting(false);
       return;
     }

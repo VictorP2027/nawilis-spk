@@ -179,6 +179,8 @@ export interface SignatureInfo {
   inkDensity?: number;
   computedAt?: 'device' | 'server';
   namaJelas?: string | null;
+  /** On-glass drawn signature (small-canvas PNG data URL). */
+  imageDataUrl?: string | null;
 }
 
 export interface PushPhase {
