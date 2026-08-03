@@ -46,6 +46,21 @@ export async function pushQueued(
       const r = await transition(d._id, 'failed', 'queued', {}).catch(() => null);
       if (r) log(`↻ requeued ${d._id} (attempt ${d.push.attempt}, was ${d.push.failureClass ?? '?'})`);
     }
+
+    // Reclaim orphans: a runner killed mid-push (job timeout, crash) leaves its
+    // doc in `pushing` with a dead lease — nothing else ever touches it. Any
+    // pushing doc untouched for 15+ minutes has no living runner (leases are
+    // far shorter); CAS it back to queued so this run re-pushes it.
+    const staleIso = new Date(Date.now() - 15 * 60_000).toISOString();
+    const orphans = await collections
+      .spk()
+      .find({ state: 'pushing', updatedAt: { $lt: staleIso } })
+      .limit(opts.limit ?? 25)
+      .toArray();
+    for (const d of orphans) {
+      const r = await transition(d._id, 'pushing', 'queued', {}).catch(() => null);
+      if (r) log(`↻ reclaimed orphan ${d._id} (pushing since ${d.updatedAt} — runner died mid-push)`);
+    }
   }
 
   const filter = opts.onlyId ? { _id: opts.onlyId } : { state: 'queued' as const };
