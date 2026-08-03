@@ -220,4 +220,5 @@ svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-
 .sigpad .sig-hint { position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; color: #b6c2d9; font-size: 11px; pointer-events: none; }
 
 /* Compact required-field hint (no pill) — keeps the form visually small */
-.req-note { font-size: 10px; color: #b45309; margin-top: 2px; line-height: 1.3; }
+.req-note { font-size: 10px; color: #dc2626; margin-top: 2px; line-height: 1.3; } /* error = red */
+.err-inline { font-size: 10px; color: #dc2626; margin-top: 2px; }

@@ -323,7 +323,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
-          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#d97706' } : undefined} />
+          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
           {!waOk && <div className="req-note">⚠ wajib — format Indonesia 08… / +62 8…, contoh 08123456789</div>}
           {waOk && <div className="ok-note">✓ {waE164Preview}</div>}
           {custHint && (
@@ -344,7 +344,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">No. Polisi</div>
-          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA — WAJIB" autoCapitalize="characters" style={plateBad || !plateOk ? { borderColor: '#d97706' } : undefined} />
+          <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA — WAJIB" autoCapitalize="characters" style={!plateOk ? { borderColor: '#dc2626' } : plateBad ? { borderColor: '#d97706' } : undefined} />
           {!plateOk && <div className="req-note">⚠ wajib diisi</div>}
           {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
           {ownerMismatch && plateOwner && (
@@ -361,7 +361,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <div className="row">
             <div>
               <div className="label">KM</div>
-              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230 — WAJIB" style={kmBelowPrev || !kmOk ? { borderColor: '#d97706' } : undefined} />
+              <input value={km} onChange={(e) => setKm(e.target.value)} inputMode="numeric" placeholder="45.230 — WAJIB" style={!kmOk ? { borderColor: '#dc2626' } : kmBelowPrev ? { borderColor: '#d97706' } : undefined} />
               {!kmOk && <div className="req-note">⚠ wajib diisi</div>}
               {kmBelowPrev && <div className="warn-note">⚠ Lebih kecil dari kunjungan sebelumnya ({Number(hist!.lastKm).toLocaleString('id-ID')}) — boleh lanjut.</div>}
             </div>
@@ -369,11 +369,11 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               <div className="label">Tahun / Warna</div>
               <div className="row">
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019 — WAJIB" style={!tahunOk ? { borderColor: '#d97706' } : undefined} />
+                  <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019 — WAJIB" style={!tahunOk ? { borderColor: '#dc2626' } : undefined} />
                   {!tahunOk && <div className="req-note">⚠ wajib diisi</div>}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Silver — WAJIB" style={!warnaOk ? { borderColor: '#d97706' } : undefined} />
+                  <input value={warna} onChange={(e) => setWarna(e.target.value)} placeholder="Silver — WAJIB" style={!warnaOk ? { borderColor: '#dc2626' } : undefined} />
                   {!warnaOk && <div className="req-note">⚠ wajib diisi</div>}
                 </div>
               </div>
@@ -383,7 +383,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             <div className="row" style={{ marginTop: 10 }}>
               <div>
                 <div className="label">Merk</div>
-                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={makeUnknown || !merkOk ? { borderColor: '#d97706' } : undefined} />
+                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
                 {!merkOk && <div className="req-note">⚠ wajib diisi</div>}
                 <datalist id="make-list-q">{makes.map((m) => <option key={m} value={m} />)}</datalist>
                 {makeUnknown && <div className="warn-note">⚠ Merk tidak ada di katalog Turboly — boleh lanjut.</div>}
@@ -435,17 +435,17 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Customer</div>
-          <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama — WAJIB" style={!namaOk ? { borderColor: '#d97706' } : undefined} />
+          <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama — WAJIB" style={!namaOk ? { borderColor: '#dc2626' } : undefined} />
           {!namaOk && <div className="req-note">⚠ wajib diisi</div>}
           {regName && nama.trim() !== '' && nama.trim().toUpperCase() !== regName.toUpperCase() && (
             <div className="warn-note">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
           )}
           <div className="row" style={{ marginTop: 10 }}>
-            <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#d97706' } : undefined} />
+            <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#dc2626' } : undefined} />
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
-          <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />
+          <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}

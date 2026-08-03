@@ -334,7 +334,7 @@ export default function Sheet() {
               <div>
                 <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB, ketik dulu (08…)" style={!/^8\d{8,11}$/.test(wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '')) ? { borderColor: '#d97706' } : undefined} />
                 {(() => { const n = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, ''); return wa.trim() !== '' && !/^8\d{8,11}$/.test(n)
-                  ? <div className="warn-inline">⚠ Format Indonesia (+62): mulai 08… atau +62 8…, contoh 08123456789.</div>
+                  ? <div className="err-inline">⚠ Format Indonesia (+62): mulai 08… atau +62 8…, contoh 08123456789.</div>
                   : /^8\d{8,11}$/.test(n) ? <div className="ok-inline">✓ +62{n}</div> : null; })()}
                 {wa.replace(/\D/g, '').length < 9 && <div className="warn-inline">⚠ Nomor WhatsApp <b>wajib</b> — identitas pelanggan (min. 9 digit).</div>}
                 {custHint && (
@@ -380,7 +380,7 @@ export default function Sheet() {
             </div>
             <div className="fld"><label>Alamat</label><div>
               <input value={alamat} onChange={(e) => setAlamat(e.target.value)} style={!alamat.trim() ? { borderColor: '#d97706' } : undefined} />
-              {!alamat.trim() && <div className="warn-inline">⚠ Wajib diisi.</div>}
+              {!alamat.trim() && <div className="err-inline">⚠ Wajib diisi.</div>}
             </div></div>
 
           </div>
@@ -572,7 +572,7 @@ export default function Sheet() {
         <div className="sign">
           <div className="b">Yang menyerahkan,
             <SignaturePad ref={sigMenyerahkan} />
-            <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas — WAJIB" style={!menyerahkan.trim() ? { borderColor: '#d97706' } : undefined} />
+            <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas — WAJIB" style={!menyerahkan.trim() ? { borderColor: '#dc2626' } : undefined} />
           </div>
           <div className="b">Yang menerima,
             <SignaturePad ref={sigMenerima} />
