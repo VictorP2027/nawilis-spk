@@ -250,7 +250,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   // Advisor wajib: Turboly menolak Service Order tanpa Service Advisor, dan
   // kita tidak pernah memilih advisor otomatis (kredit penjualan salah orang).
   const advisorOk = advisor.trim() !== '';
-  const canSubmit = !!branch && waOk && advisorOk && !submitting;
+  // Alamat wajib: linked to the person (prefilled from Turboly) and required
+  // so every registration carries a reachable address.
+  const alamatOk = alamat.trim() !== '';
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -420,7 +423,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             <div className="warn-note">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
           )}
           <div className="row" style={{ marginTop: 10 }}>
-            <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat (opsional)" />
+            <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#d97706' } : undefined} />
+            {!alamatOk && <div className="warn-note">⚠ Alamat <b>wajib</b> diisi (terisi otomatis untuk customer terdaftar).</div>}
           </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />

@@ -272,6 +272,7 @@ export default function Sheet() {
     const waNatS = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
     if (!/^8\d{8,11}$/.test(waNatS)) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
+    if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -374,7 +375,10 @@ export default function Sheet() {
                 )}
               </div>
             </div>
-            <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
+            <div className="fld"><label>Alamat</label><div>
+              <input value={alamat} onChange={(e) => setAlamat(e.target.value)} style={!alamat.trim() ? { borderColor: '#d97706' } : undefined} />
+              {!alamat.trim() && <div className="warn-inline">⚠ Wajib diisi.</div>}
+            </div></div>
 
           </div>
           <div className="box">
