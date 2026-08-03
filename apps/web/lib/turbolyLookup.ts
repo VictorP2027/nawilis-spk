@@ -31,6 +31,16 @@ function cookiesFrom(res: Response): string {
 
 async function login(): Promise<string> {
   if (!USER || !PASS) throw new Error('no Turboly credentials configured');
+  // ONE SESSION PER USER: logging in here kicks the RPA pusher's session. When a
+  // push is in flight (recently-touched queued/pushing doc), skip the login — the
+  // route falls back to Mongo. Not needed with a dedicated TURBOLY_LOOKUP_* user.
+  if (!process.env.TURBOLY_LOOKUP_USERNAME) {
+    const recent = new Date(Date.now() - 20 * 60_000).toISOString();
+    const busy = await getDb()
+      .collection('spk')
+      .countDocuments({ state: { $in: ['queued', 'pushing'] }, updatedAt: { $gte: recent } }, { limit: 1 });
+    if (busy > 0) throw new Error('push in flight — skipping Turboly login to avoid kicking it');
+  }
   const r1 = await fetch(`${BASE}/users/sign_in`, { redirect: 'manual' });
   const pre = cookiesFrom(r1);
   const html = await r1.text();

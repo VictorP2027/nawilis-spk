@@ -213,6 +213,14 @@ export class RpaSink implements ServiceOrderSink {
     if (e instanceof TransientError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
     if (e instanceof AuthChallengeError) return { ...fail('auth', (e as Error).message), screenshotRef: shot };
     if (e instanceof DataError) return { ...fail('data', (e as Error).message), screenshotRef: shot };
+    // Turboly = ONE SESSION PER USER: a login elsewhere (web-form lookup, a human
+    // in a browser) kicks this session mid-push and a sign-in modal blankets the
+    // page, making every click time out. That's transient — retry logs in fresh.
+    const kicked = await this.session
+      .page_()
+      .evaluate(() => /you need to sign in|you have been logged out|sign in or sign up/i.test(document.body?.innerText ?? ''))
+      .catch(() => false);
+    if (kicked) return { ...fail('transient', 'session kicked mid-push (another login elsewhere) — auto-retry'), screenshotRef: shot };
     const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
     if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
     return { ...fail('structural', errMsg(e)), screenshotRef: shot };
