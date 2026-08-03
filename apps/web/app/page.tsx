@@ -217,6 +217,32 @@ export default function Intake() {
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
   const kmBelowPrev = hist?.lastKm != null && !Number.isNaN(kmValQ) && kmValQ < hist.lastKm;
+  // PHONE-FIRST: typing the WA auto-populates person + car(s); chips switch cars.
+  const [custVehicles, setCustVehicles] = useState<Array<{ plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }>>([]);
+  const [custHint, setCustHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (waDigits.length < 9) { setCustVehicles([]); setCustHint(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      fetch(`/api/customer?phone=${encodeURIComponent(wa)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (!live) return;
+          if (d?.customer) {
+            setNama((x) => x || d.customer.nama || '');
+            setAlamat((x) => x || d.customer.alamat || '');
+            const vs = d.vehicles ?? [];
+            setCustVehicles(vs);
+            setCustHint(`${d.customer.nama} — ${vs.length} kendaraan`);
+            const v = vs[0];
+            if (v && !plate && !merk) { setPlate(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? ''); setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? ''); }
+          } else { setCustVehicles([]); setCustHint(null); }
+        })
+        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); } });
+    }, 500);
+    return () => { live = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wa]);
   const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
   const modelUnknown = tipe.trim() !== '' && makeKnown && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = advisor.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === advisor.trim().toUpperCase());
@@ -243,6 +269,26 @@ export default function Intake() {
             <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="mis. Rina — diingat di perangkat ini" />
           </div>
         )}
+
+        <div className="card">
+          <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
+          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#d97706' } : undefined} />
+          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp <b>wajib</b> — min. 9 digit, cth 08123456789.</div>}
+          {custHint && (
+            <div className="ok-note">↩ {custHint}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}
+              {custVehicles.length > 1 && (
+                <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                  {custVehicles.map((v) => (
+                    <button key={v.plate} type="button" className="btn ghost" style={{ fontSize: 13, padding: '8px 10px' }}
+                      onClick={() => { setPlate(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? ''); setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? ''); }}>
+                      {v.plate}{v.merk ? ` · ${v.merk}` : ''}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="card">
           <div className="label">No. Polisi</div>
@@ -327,10 +373,8 @@ export default function Intake() {
           <div className="label">Customer</div>
           <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama" />
           <div className="row" style={{ marginTop: 10 }}>
-            <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB (08…)" />
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat (opsional)" />
           </div>
-          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp <b>wajib</b> — min. 9 digit, cth 08123456789.</div>}
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>

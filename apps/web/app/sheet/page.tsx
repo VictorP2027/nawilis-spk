@@ -120,6 +120,42 @@ export default function Sheet() {
     return () => { live = false; clearTimeout(t); };
   }, [plateNorm, plateBad]);
   const kmBelowPrev = prevVisitKm != null && !Number.isNaN(kmVal) && kmVal < prevVisitKm;
+
+  // PHONE-FIRST lookup: typing the WhatsApp number auto-populates the person and
+  // their car(s); vehicles stay fully editable, chips switch between their cars.
+  const [custVehicles, setCustVehicles] = useState<Array<{ plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }>>([]);
+  const [custHint, setCustHint] = useState<string | null>(null);
+  useEffect(() => {
+    const digits = wa.replace(/\D/g, '');
+    if (digits.length < 9) { setCustVehicles([]); setCustHint(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      fetch(`/api/customer?phone=${encodeURIComponent(wa)}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (!live) return;
+          if (d?.customer) {
+            setNama((x) => x || d.customer.nama || '');
+            setAlamat((x) => x || d.customer.alamat || '');
+            const vs = d.vehicles ?? [];
+            setCustVehicles(vs);
+            setCustHint(`${d.customer.nama} — ${vs.length} kendaraan tercatat`);
+            const v = vs[0];
+            if (v && !noPol && !merk && !tipe) {
+              setNoPol(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? '');
+              setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
+            }
+          } else { setCustVehicles([]); setCustHint(null); }
+        })
+        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); } });
+    }, 500);
+    return () => { live = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wa]);
+  const pickVehicle = (v: { plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }) => {
+    setNoPol(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? '');
+    setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
+  };
   const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
 
   // Load the real service advisors for the chosen branch (synced from Turboly).
@@ -263,6 +299,25 @@ export default function Sheet() {
         <div className="two">
           <div className="box">
             <span className="sec-h">INFORMASI CUSTOMER</span>
+            <div className="fld"><label>Nomor WhatsApp</label>
+              <div>
+                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB, ketik dulu (08…)" style={wa.replace(/\D/g, '').length < 9 ? { borderColor: '#d97706' } : undefined} />
+                {wa.replace(/\D/g, '').length < 9 && <div className="warn-inline">⚠ Nomor WhatsApp <b>wajib</b> — identitas pelanggan (min. 9 digit).</div>}
+                {custHint && (
+                  <div className="ok-inline">↩ {custHint}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}
+                    {custVehicles.length > 1 && (
+                      <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 3 }}>
+                        {custVehicles.map((v) => (
+                          <button key={v.plate} type="button" className="warn-btn" style={{ borderColor: '#16a34a', color: '#166534' }} onClick={() => pickVehicle(v)}>
+                            {v.plate}{v.merk ? ` · ${v.merk}` : ''}{v.tipe ? ` ${v.tipe}` : ''}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="fld"><label>Tanggal</label>
               <div>
                 <input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
@@ -283,12 +338,7 @@ export default function Sheet() {
             </div>
             <div className="fld"><label>Nama</label><input value={nama} onChange={(e) => setNama(e.target.value)} /></div>
             <div className="fld"><label>Alamat</label><input value={alamat} onChange={(e) => setAlamat(e.target.value)} /></div>
-            <div className="fld"><label>Nomor WhatsApp</label>
-              <div>
-                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB (08…)" style={wa.replace(/\D/g, '').length < 9 ? { borderColor: '#d97706' } : undefined} />
-                {wa.replace(/\D/g, '').length < 9 && <div className="warn-inline">⚠ Nomor WhatsApp <b>wajib</b> — identitas pelanggan (min. 9 digit).</div>}
-              </div>
-            </div>
+
           </div>
           <div className="box">
             <span className="sec-h">INFORMASI KENDARAAN</span>
