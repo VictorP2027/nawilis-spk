@@ -233,3 +233,6 @@ svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-
 .chk-chip { font-size: 10px; padding: 2px 8px; border: 1px solid #cdd7e6; border-radius: 999px; background: #fff; color: #55627a; cursor: pointer; line-height: 1.5; }
 .chk-chip.ok { background: #e7f5ec; border-color: #34a862; color: #1c7c43; font-weight: 600; }
 .chk-chip.bad { background: #fdeeee; border-color: #d97706; color: #b45309; font-weight: 600; }
+
+/* Compact confirmation hint — plain tiny text, no pill */
+.ok-sm { font-size: 10.5px; color: #1c7c43; margin-top: 3px; line-height: 1.4; }

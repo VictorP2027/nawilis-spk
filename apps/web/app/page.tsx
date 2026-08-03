@@ -337,13 +337,13 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
           {!waOk && <div className="req-note">⚠ wajib — format Indonesia 08… / +62 8…, contoh 08123456789</div>}
-          {waOk && <div className="ok-note">✓ {waE164Preview}</div>}
+          {waOk && <div className="ok-sm">✓ {waE164Preview}{custHint ? ` · ↩ ${custHint}` : ''}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}</div>}
           {custHint && (
-            <div className="ok-note">↩ {custHint}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}
+            <div>
               {custVehicles.length > 1 && (
                 <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                   {custVehicles.map((v) => (
-                    <button key={v.plate} type="button" className="btn ghost" style={{ fontSize: 13, padding: '8px 10px' }}
+                    <button key={v.plate} type="button" className="btn ghost" style={{ fontSize: 11, padding: '4px 8px' }}
                       onClick={() => { setPlate(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? ''); setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? ''); }}>
                       {v.plate}{v.merk ? ` · ${v.merk}` : ''}
                     </button>
@@ -363,7 +363,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             <div className="warn-note">⚠ Plat ini milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Order Turboly <b>tetap atas nama {plateOwner.nama}</b>; orang di form ini dicatat sebagai pembawa kendaraan di Notes.</div>
           )}
           {hist && (
-            <div className="hist" style={{ marginTop: 10 }}>
+            <div className="ok-sm" style={{ color: '#55627a' }}>
               {hist.merk} {hist.tipe} {hist.tahun ?? ''} {hist.warna ?? ''} · terakhir {hist.lastKm?.toLocaleString('id-ID')} km · {hist.visitCount}× kunjungan
             </div>
           )}
