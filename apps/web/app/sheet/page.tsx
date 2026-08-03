@@ -269,7 +269,8 @@ export default function Sheet() {
     // Branch routes the Turboly store; WA is REQUIRED (customer identity key).
     // Everything else is allowed through — the server warns instead of refusing.
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
-    if (wa.replace(/\D/g, '').length < 9) { setResult({ ok: false, text: 'Nomor WhatsApp wajib diisi — min. 9 digit.' }); setSubmitting(false); return; }
+    const waNatS = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+    if (!/^8\d{8,11}$/.test(waNatS)) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
@@ -327,7 +328,10 @@ export default function Sheet() {
             <span className="sec-h">INFORMASI CUSTOMER</span>
             <div className="fld"><label>Nomor WhatsApp</label>
               <div>
-                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB, ketik dulu (08…)" style={wa.replace(/\D/g, '').length < 9 ? { borderColor: '#d97706' } : undefined} />
+                <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="Nomor WhatsApp — WAJIB, ketik dulu (08…)" style={!/^8\d{8,11}$/.test(wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '')) ? { borderColor: '#d97706' } : undefined} />
+                {(() => { const n = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, ''); return wa.trim() !== '' && !/^8\d{8,11}$/.test(n)
+                  ? <div className="warn-inline">⚠ Format Indonesia (+62): mulai 08… atau +62 8…, contoh 08123456789.</div>
+                  : /^8\d{8,11}$/.test(n) ? <div className="ok-inline">✓ +62{n}</div> : null; })()}
                 {wa.replace(/\D/g, '').length < 9 && <div className="warn-inline">⚠ Nomor WhatsApp <b>wajib</b> — identitas pelanggan (min. 9 digit).</div>}
                 {custHint && (
                   <div className="ok-inline">↩ {custHint}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}

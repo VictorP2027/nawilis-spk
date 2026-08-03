@@ -237,7 +237,11 @@ export default function Intake() {
 
   // Branch routes the store; WA is REQUIRED — it is the customer identity key.
   const waDigits = wa.replace(/\D/g, '');
-  const waOk = waDigits.length >= 9; // any form — canonicalized server-side (0/62/bare = same person)
+  // ENFORCED Indonesian format: mobile starts with 8 after stripping +62/62/0,
+  // 9-12 national digits. Stored as E.164 (+62…) server-side.
+  const waNat = waDigits.replace(/^62/, '').replace(/^0/, '');
+  const waOk = /^8\d{8,11}$/.test(waNat);
+  const waE164Preview = waOk ? `+62${waNat}` : null;
 const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
   // Plat boleh terdaftar di lebih dari satu pemilik (mobil pindah tangan):
   // sistem otomatis mendaftarkan kendaraan ke pemilik baru saat push. Warning
@@ -309,7 +313,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         <div className="card">
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#d97706' } : undefined} />
-          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp <b>wajib</b> — min. 9 digit, cth 08123456789.</div>}
+          {!waOk && <div className="warn-note">⚠ Nomor WhatsApp Indonesia (+62) <b>wajib</b> — mulai 08… atau +62 8…, contoh 08123456789.</div>}
+          {waOk && <div className="ok-note">✓ {waE164Preview}</div>}
           {custHint && (
             <div className="ok-note">↩ {custHint}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}
               {custVehicles.length > 1 && (
