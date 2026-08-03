@@ -20,6 +20,25 @@ interface Row {
   jobLineSummary: { orderedCount: number; quotedTotal: number };
   turboly: { serviceOrderNo: string | null };
   push?: { lastError?: string | null; failureClass?: string | null };
+  signatures?: {
+    menyerahkan?: { imageDataUrl?: string | null };
+    menerima?: { imageDataUrl?: string | null };
+  };
+}
+
+/** Tiny inline signature thumbnail; click opens the full-size PNG in a new tab. */
+function SigThumb({ src, title }: { src?: string | null; title: string }) {
+  if (!src) return null;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={title}
+      title={title}
+      style={{ height: 26, maxWidth: 90, objectFit: 'contain', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 4, marginRight: 4, cursor: 'pointer', verticalAlign: 'middle' }}
+      onClick={() => { const w = window.open(); w?.document.write(`<title>${title}</title><img src="${src}" style="border:1px solid #ccc">`); }}
+    />
+  );
 }
 
 const RUNG_LABEL = ['0 · Full auto', '1 · Sampled audit', '2 · Assisted entry', '3 · Manual'];
@@ -160,7 +179,11 @@ export default function Admin() {
               {all.map((r) => (
                 <tr key={r._id}>
                   <td>{r.vehicle.noPolisi.display}</td>
-                  <td>{r.customer.nama}</td>
+                  <td>
+                    {r.customer.nama}
+                    <SigThumb src={r.signatures?.menyerahkan?.imageDataUrl} title={`Tanda tangan customer — ${r.customer.nama}`} />
+                    <SigThumb src={r.signatures?.menerima?.imageDataUrl} title="Tanda tangan penerima (SA)" />
+                  </td>
                   <td>{r.branchCode}</td>
                   <td>
                     <StateBadge state={r.state} />
