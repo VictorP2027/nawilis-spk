@@ -74,6 +74,21 @@ async function search(term: string, cookie: string): Promise<TbCustomer[] | null
   return j.customers ?? [];
 }
 
+/** Diagnostic: raw statuses at each step, as seen from THIS server. */
+export async function turbolyDebugProbe(phone: string): Promise<unknown> {
+  const key = canonPhoneKey(phone);
+  const steps: unknown[] = [];
+  const cookie = await cachedCookie();
+  steps.push({ step: 'cachedCookie', present: !!cookie, len: cookie?.length ?? 0 });
+  const url = `${BASE}/lookup/customers.json?search_term=${encodeURIComponent('0' + key)}&page_limit=10&page=1`;
+  try {
+    const res = await fetch(url, { headers: { cookie: cookie ?? '', accept: 'application/json' }, redirect: 'manual' });
+    const text = await res.text();
+    steps.push({ step: 'search', status: res.status, ct: res.headers.get('content-type'), loc: res.headers.get('location'), bodyHead: text.slice(0, 200) });
+  } catch (e) { steps.push({ step: 'search', error: String(e) }); }
+  return steps;
+}
+
 /** Search Turboly customers by phone; auto re-login once on an invalid session. */
 export async function turbolyCustomersByPhone(phone: string): Promise<TbCustomer[]> {
   const key = canonPhoneKey(phone);
