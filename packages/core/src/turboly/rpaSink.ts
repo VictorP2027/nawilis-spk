@@ -153,6 +153,23 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#service_order_reference_no', payload.referenceNumber);
     await this.setPickerValue('#service-date', payload.planServiceDate);
     await this.setPickerValue('#service-time', payload.planServiceTime);
+    // PUSH_DEBUG_FORM=1: dump every account/salesperson-ish + non-empty hidden
+    // field the SO form would submit — for diffing robot vs manual saves.
+    if (process.env.PUSH_DEBUG_FORM) {
+      const dump = await page.evaluate(() => {
+        const form = document.querySelector('form[action*="service_order"], form#new_service_order, form') as HTMLFormElement | null;
+        if (!form) return ['(no form found)'];
+        const out: string[] = [];
+        new FormData(form).forEach((v, k) => {
+          const val = String(v);
+          if (/account|salesperson|advisor|store_id|reference|customer_id|vehicle/i.test(k) || (val !== '' && /hidden/i.test((form.querySelector(`[name="${CSS.escape(k)}"]`) as HTMLInputElement | null)?.type ?? ''))) {
+            out.push(`${k} = ${val.slice(0, 60)}`);
+          }
+        });
+        return out;
+      });
+      console.log('FORM DUMP:\n' + (dump as string[]).join('\n'));
+    }
     const notesCombined = [payload.notes, ...this.notesExtra].filter(Boolean).join('\n');
     if (notesCombined) await page.fill('#service_order_notes', notesCombined).catch(() => {});
 

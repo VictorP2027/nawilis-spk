@@ -67,6 +67,27 @@ class BranchFlowRigs {
     return rig.rpa;
   }
 
+  /**
+   * ONE TURBOLY SESSION PER USER: any human login (or the web app's HTTP
+   * lookup) kicks a worker session mid-action — a routine event, and likely
+   * here because every branch rig shares the same env credentials. The kick
+   * surfaces as a Discovery/Data error (a sign-in modal blankets the page,
+   * buttons "disappear"), which classify() would mark PERMANENT. So after any
+   * failure, probe the live pages for the sign-in text (same probe as
+   * rpaSink.classifyFailure) — kicked means transient: the retry's
+   * ensureLoggedIn() logs back in.
+   */
+  async anySessionKicked(): Promise<boolean> {
+    for (const { session } of this.rigs.values()) {
+      const kicked = await session
+        .page_()
+        .evaluate(() => /you need to sign in|you have been logged out|sign in or sign up/i.test(document.body?.innerText ?? ''))
+        .catch(() => false);
+      if (kicked) return true;
+    }
+    return false;
+  }
+
   async dispose(): Promise<void> {
     for (const { session } of this.rigs.values()) await session.dispose().catch(() => {});
     this.rigs.clear();
@@ -165,8 +186,26 @@ async function executeJob(
     }
 
     case 'create_wo': {
-      if (f?.wo != null && f.workOrderUrl) {
-        return { alreadyDone: true, workOrderNo: f.workOrderNo, workOrderUrl: f.workOrderUrl };
+      // Idempotency: ANY recorded wo state means the WO exists — including the
+      // state derived by effectiveFlow from a mirrored turboly.workOrderNo,
+      // where workOrderUrl is null. NEVER click create twice; when the URL is
+      // missing, recover it from the SO page instead.
+      if (f?.wo != null) {
+        if (f.workOrderUrl) {
+          return { alreadyDone: true, workOrderNo: f.workOrderNo, workOrderUrl: f.workOrderUrl };
+        }
+        const soPage = needSo();
+        const rpa = await rigs.rpaFor(branchCode);
+        const linked = await rpa.findLinkedWorkOrder(soPage);
+        if (!linked) {
+          throw new DataError(
+            `WO ${f.workOrderNo ?? ''} sudah tercatat tapi URL-nya tidak ditemukan di halaman SO — cek Turboly atau isi params.workOrderUrl`.replace(/\s+/g, ' '),
+          );
+        }
+        if (job.spkId) {
+          await updateFlow(job.spkId, { workOrderNo: linked.workOrderNo ?? f.workOrderNo, workOrderUrl: linked.workOrderUrl });
+        }
+        return { alreadyDone: true, workOrderNo: linked.workOrderNo ?? f.workOrderNo, workOrderUrl: linked.workOrderUrl };
       }
       const url = needSo();
       const assignee = str(p.assigneeName) ?? str(p.mechanicName) ?? str(p.mechanic) ?? str(p.assignee) ?? str(p.name);
@@ -215,8 +254,22 @@ async function executeJob(
     }
 
     case 'create_invoice': {
-      if (f?.invoice != null && f.invoiceUrl) {
-        return { alreadyDone: true, invoiceNo: f.invoiceNo, invoiceUrl: f.invoiceUrl };
+      // Idempotency: mirror of create_wo — never click create twice; recover a
+      // lost invoice URL from the WO page.
+      if (f?.invoice != null) {
+        if (f.invoiceUrl) return { alreadyDone: true, invoiceNo: f.invoiceNo, invoiceUrl: f.invoiceUrl };
+        const woPage = needWo();
+        const rpa = await rigs.rpaFor(branchCode);
+        const linked = await rpa.findLinkedInvoice(woPage);
+        if (!linked) {
+          throw new DataError(
+            `Invoice ${f.invoiceNo ?? ''} sudah tercatat tapi URL-nya tidak ditemukan di halaman WO — cek Turboly atau isi params.invoiceUrl`.replace(/\s+/g, ' '),
+          );
+        }
+        if (job.spkId) {
+          await updateFlow(job.spkId, { invoiceNo: linked.invoiceNo ?? f.invoiceNo, invoiceUrl: linked.invoiceUrl });
+        }
+        return { alreadyDone: true, invoiceNo: linked.invoiceNo ?? f.invoiceNo, invoiceUrl: linked.invoiceUrl };
       }
       const url = needWo();
       const rpa = await rigs.rpaFor(branchCode);
@@ -273,22 +326,50 @@ async function executeJob(
         storeTurbolyId = (await collections.tbStores().findOne({ _id: branchCode }))?.turbolyStoreId ?? null;
       }
       const rpa = await rigs.rpaFor(branchCode);
-      const r = await rpa.registerWholesaleCustomer({
-        companyName,
-        picName: str(p.picName) ?? str(p.pic) ?? '',
-        npwp: str(p.npwp) ?? '',
-        alamat: str(p.alamat) ?? str(p.address) ?? '',
-        advisorName: str(p.advisorName) ?? str(p.advisor) ?? '',
-        retail: retailNama
-          ? {
-              nama: retailNama,
-              phone: str(rp.phone) ?? str(rp.wa) ?? str(p.phone) ?? str(p.wa) ?? '',
-              alamat: str(rp.alamat) ?? str(p.alamat) ?? str(p.address) ?? '',
-              storeTurbolyId,
-            }
-          : null,
-      });
-      return { ...r } as unknown as Record<string, unknown>;
+
+      // Two-step with a job-row CHECKPOINT: the company save is irreversible,
+      // so when the retail half fails (e.g. the fresh company is not yet
+      // searchable in select2) the retry must NOT create the company again.
+      // The checkpoint survives both transient requeues and the board's retry.
+      type WholesaleProgress = { companyId?: string | null; companyUrl?: string | null };
+      const prog = (job as FlowJob & { progress?: WholesaleProgress | null }).progress ?? null;
+      let companyId: string | null;
+      let companyUrl: string;
+      let note: string | null = null;
+      if (prog?.companyUrl) {
+        companyId = prog.companyId ?? null;
+        companyUrl = prog.companyUrl;
+        note = 'perusahaan sudah dibuat pada percobaan sebelumnya (checkpoint) — tidak dibuat ulang';
+      } else {
+        const w = await rpa.registerWholesaleCustomer({
+          companyName,
+          picName: str(p.picName) ?? str(p.pic) ?? '',
+          npwp: str(p.npwp) ?? '',
+          alamat: str(p.alamat) ?? str(p.address) ?? '',
+          advisorName: str(p.advisorName) ?? str(p.advisor) ?? '',
+          retail: null, // retail runs BELOW, after the checkpoint is written
+        });
+        companyId = w.companyId;
+        companyUrl = w.companyUrl;
+        note = w.note ?? null;
+        await flowJobs().updateOne(
+          { _id: job._id },
+          { $set: { progress: { companyId, companyUrl }, updatedAt: new Date().toISOString() } as unknown as Partial<FlowJob> },
+        );
+      }
+
+      let retail: Record<string, unknown> | null = null;
+      if (retailNama) {
+        const r = await rpa.registerRetailCustomer({
+          nama: retailNama,
+          phone: str(rp.phone) ?? str(rp.wa) ?? str(p.phone) ?? str(p.wa) ?? '',
+          alamat: str(rp.alamat) ?? str(p.alamat) ?? str(p.address) ?? '',
+          storeTurbolyId,
+          companyName,
+        });
+        retail = { ...r };
+      }
+      return { companyId, companyUrl, ...(retail ? { retail } : {}), ...(note ? { note } : {}) };
     }
   }
 }
@@ -361,7 +442,15 @@ async function main(): Promise<void> {
         done += 1;
         console.log(`flow-once: ok ${label}`);
       } catch (e) {
-        const { transient, msg } = classify(e);
+        let { transient, msg } = classify(e);
+        // A kicked session (one Turboly session per user — routine!) surfaces
+        // as Discovery/Data errors, not as a typed transient. Probe the live
+        // pages: kicked → transient, the retry's ensureLoggedIn re-logs in.
+        const isAuth = e instanceof AuthChallengeError || (e instanceof Error && e.name === 'AuthChallengeError');
+        if (!transient && !isAuth && (await rigs.anySessionKicked())) {
+          transient = true;
+          msg = `sesi Turboly ter-kick oleh login lain — dicoba ulang otomatis. (${msg})`;
+        }
         const willRetry = transient && job.attempts < (job.maxAttempts ?? FLOW_JOB_MAX_ATTEMPTS);
         await failFlowJob(job._id, msg, { transient });
         if (job.spkId) {

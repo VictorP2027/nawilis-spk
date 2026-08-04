@@ -6,6 +6,7 @@ import {
   type FlowActionType,
 } from '@spk/core';
 import { db } from '../../../../lib/db';
+import { triggerFlowAction } from '../../../../lib/triggerPush';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,41 +58,6 @@ function normalizeAction(raw: unknown): FlowActionType | null {
   return ACTION_ALIASES[stripped] ?? null;
 }
 
-/**
- * Fire the GitHub repository_dispatch that starts the flow workflow NOW instead
- * of waiting for its 5-min cron — same pattern (and the same env vars) as
- * lib/triggerPush.ts, but with event_type "flow-action" for flow.yml.
- * Best-effort and time-boxed: a GitHub hiccup must never fail the enqueue.
- */
-async function triggerFlowRun(jobId: string, spkId: string, action: string): Promise<void> {
-  const token = process.env.GH_DISPATCH_TOKEN;
-  if (!token) return; // not configured (e.g. local dev) — the cron still covers it
-  const repo = process.env.GH_REPO ?? 'VictorP2027/nawilis-spk';
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 4000);
-  try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ event_type: 'flow-action', client_payload: { jobId, spkId, action } }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      console.error(`triggerFlowRun: GitHub dispatch failed ${res.status} ${await res.text().catch(() => '')}`);
-    }
-  } catch (e) {
-    console.error(`triggerFlowRun: ${(e as Error).message ?? e}`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function POST(req: Request): Promise<Response> {
   await db();
   const json = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -105,7 +71,7 @@ export async function POST(req: Request): Promise<Response> {
     if (!ok) {
       return NextResponse.json({ error: 'job_not_failed', message: 'Job tidak ditemukan atau tidak dalam status gagal' }, { status: 404 });
     }
-    await triggerFlowRun(json.retryJobId, '', 'retry');
+    await triggerFlowAction(json.retryJobId, '', 'retry');
     return NextResponse.json({ jobId: json.retryJobId, state: 'queued', retried: true }, { status: 202 });
   }
 
@@ -161,7 +127,7 @@ export async function POST(req: Request): Promise<Response> {
 
   try {
     const job = await enqueueFlowJob(spkId, action, params, by);
-    await triggerFlowRun(job._id, spkId, action);
+    await triggerFlowAction(job._id, spkId, action);
     return NextResponse.json({ jobId: job._id, spkId: spkId || null, action, state: job.state }, { status: 202 });
   } catch (e) {
     console.error('flow action enqueue error', e);

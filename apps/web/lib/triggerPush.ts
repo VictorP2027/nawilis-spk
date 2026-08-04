@@ -39,3 +39,39 @@ export async function triggerTurbolyPush(spkId: string): Promise<void> {
     clearTimeout(timer);
   }
 }
+
+/**
+ * FLOW v2: fire the flow workflow (event_type "flow-action" → flow.yml) the
+ * moment a flow job is enqueued, instead of waiting for its 5-min cron.
+ * Same env (GH_DISPATCH_TOKEN / GH_REPO), same best-effort time-boxed
+ * behaviour as triggerTurbolyPush above — a GitHub hiccup never fails the
+ * enqueue itself.
+ */
+export async function triggerFlowAction(jobId: string, spkId: string, action: string): Promise<void> {
+  const token = process.env.GH_DISPATCH_TOKEN;
+  if (!token) return; // not configured (e.g. local dev) — the cron still covers it
+  const repo = process.env.GH_REPO ?? 'VictorP2027/nawilis-spk';
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ event_type: 'flow-action', client_payload: { jobId, spkId, action } }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.error(`triggerFlowAction: GitHub dispatch failed ${res.status} ${await res.text().catch(() => '')}`);
+    }
+  } catch (e) {
+    console.error(`triggerFlowAction: ${(e as Error).message ?? e}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -19,7 +19,8 @@ type Tab = 'retail' | 'corporate';
 type Phase = 'idle' | 'sending' | 'queued' | 'running' | 'done' | 'failed' | 'unknown';
 
 interface FlowJobView {
-  _id: string;
+  _id?: string;
+  jobId?: string;
   action?: string;
   state?: string;
   error?: string | null;
@@ -33,14 +34,18 @@ interface ActionPayload {
 
 /**
  * /api/flow/state adalah endpoint papan-flow — bentuk persisnya milik modul lain.
- * Cari job berdasarkan _id di array manapun pada respons (kedalaman ≤ 2) supaya
- * halaman ini tidak bergantung pada nama key ('jobs' / 'flowJobs' / dst).
+ * Cari job di array manapun pada respons (kedalaman ≤ 2) supaya halaman ini
+ * tidak bergantung pada nama key ('jobs' / 'flowJobs' / dst). Job brief di
+ * endpoint itu memakai key `jobId` (bukan `_id`) — cocokkan KEDUANYA.
  */
 function findJob(body: unknown, id: string, depth = 0): FlowJobView | null {
   if (!body || typeof body !== 'object' || depth > 2) return null;
   if (Array.isArray(body)) {
     for (const it of body) {
-      if (it && typeof it === 'object' && (it as { _id?: unknown })._id === id) return it as FlowJobView;
+      if (it && typeof it === 'object') {
+        const o = it as { _id?: unknown; jobId?: unknown };
+        if (o._id === id || o.jobId === id) return it as FlowJobView;
+      }
       const deep = findJob(it, id, depth + 1);
       if (deep) return deep;
     }
@@ -65,7 +70,7 @@ function renderResult(result: unknown): string | null {
   if (typeof result === 'object') {
     const r = result as Record<string, unknown>;
     const parts: string[] = [];
-    for (const k of ['customerNo', 'customerId', 'customerUrl', 'wholesaleId', 'wholesaleUrl', 'retailId', 'retailUrl', 'url']) {
+    for (const k of ['customerNo', 'customerId', 'customerUrl', 'companyId', 'companyUrl', 'wholesaleId', 'wholesaleUrl', 'retailId', 'retailUrl', 'url', 'note']) {
       const v = r[k];
       if (typeof v === 'string' || typeof v === 'number') parts.push(`${k}: ${v}`);
     }
@@ -200,16 +205,18 @@ export default function Customers(): React.ReactElement {
     if (tab === 'retail') {
       return { action: 'register_customer_retail', params: retailParams };
     }
+    // Worker contract (apps/worker flow executor): company fields FLAT di root
+    // params (companyName/picName/npwp/alamat/advisorName + branchCode); hanya
+    // customer retail (PIC yang datang) yang nested di params.retail.
     return {
       action: 'register_customer_wholesale',
       params: {
-        company: {
-          companyName: coName.trim(),
-          picName: coPic.trim(),
-          npwp: coNpwp.trim(),
-          alamat: coAlamat.trim(),
-          advisorName: coAdvisor.trim(),
-        },
+        companyName: coName.trim(),
+        picName: coPic.trim(),
+        npwp: coNpwp.trim(),
+        alamat: coAlamat.trim(),
+        advisorName: coAdvisor.trim(),
+        branchCode: branch,
         retail: retailParams,
       },
     };

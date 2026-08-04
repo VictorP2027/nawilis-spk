@@ -16,21 +16,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // ─────────────────────────────────────────────────────────────────────────
-// Types — mirrors /api/flow/state row projection (defensively normalized).
+// Types — mirrors the /api/flow/state row projection (defensively normalized):
+// { spkId, docType, branchCode, customer:{nama,wa}, plate, quotedTotal,
+//   flow:{so,wo,invoice,workOrderNo,workOrderUrl,invoiceNo,invoiceUrl,…},
+//   turboly:{serviceOrderNo,serviceOrderUrl,workOrderNo,invoiceNo},
+//   column, nextAction, activeJob, failedJob }
 // ─────────────────────────────────────────────────────────────────────────
 
 interface SoInfo { no: string | null; url: string | null; approved: boolean }
 interface WoInfo { no: string | null; url: string | null; status: string | null }
 interface InvInfo { no: string | null; url: string | null; status: string | null }
-interface PendingJob { action: string; state: string; error: string | null }
+interface PendingJob { jobId: string | null; action: string; state: string; error: string | null }
 
 interface FlowRow {
-  _id: string;
+  _id: string; // = spkId on the wire
   docType: string; // 'SPK_NAWILIS' | 'CHECK_AND_GO' | …
   plate: string;
   customer: string;
   branchCode: string;
-  stage: string;
+  /** Server-derived board column (same helper the action route guards with). */
+  column: ColKey;
+  /** Server-derived ONE next action (canonical name, e.g. 'create_wo'). */
+  nextAction: string | null;
   so: SoInfo | null;
   wo: WoInfo | null;
   invoice: InvInfo | null;
@@ -51,15 +58,16 @@ interface ActionDef {
   hint: string;
 }
 
-// Action names follow the flowSink method names in snake_case; params follow
-// the flowSink signatures exactly ({assigneeName}, {waktuMinutes, feedback},
-// {nextOdometer, nextServiceDateISO, recommendations}, {method, amount}).
+// Keyed by the CANONICAL action names the server uses everywhere (flow.ts
+// FLOW_ACTIONS, job briefs, row.nextAction) — the modal posts these verbatim.
+// Params follow the worker's expectations ({assigneeName}, {waktuMinutes,
+// feedback}, {nextOdometer, nextServiceDateISO, recommendations}, {method, amount}).
 const ACTIONS: Record<string, ActionDef> = {
-  approve_service_order: { action: 'approve_service_order', label: 'Approve SO', fields: 'none', hint: 'Service Order akan di-approve di Turboly.' },
-  create_work_order: { action: 'create_work_order', label: 'Buat Work Order', fields: 'mechanic', hint: 'Work Order dibuat dari SO yang sudah approved — pilih mekanik.' },
-  start_work_order: { action: 'start_work_order', label: 'Start', fields: 'none', hint: 'Pekerjaan dimulai (WO → IN PROGRESS).' },
-  complete_work_order: { action: 'complete_work_order', label: 'Selesai', fields: 'complete', hint: 'Tandai pekerjaan selesai — isi durasi & temuan.' },
-  qc_approve: { action: 'qc_approve', label: 'QC OK', fields: 'qc', hint: 'QC lolos — isi rekomendasi servis berikutnya.' },
+  approve_so: { action: 'approve_so', label: 'Approve SO', fields: 'none', hint: 'Service Order akan di-approve di Turboly.' },
+  create_wo: { action: 'create_wo', label: 'Buat Work Order', fields: 'mechanic', hint: 'Work Order dibuat dari SO yang sudah approved — pilih mekanik.' },
+  start_wo: { action: 'start_wo', label: 'Start', fields: 'none', hint: 'Pekerjaan dimulai (WO → IN PROGRESS).' },
+  complete_wo: { action: 'complete_wo', label: 'Selesai', fields: 'complete', hint: 'Tandai pekerjaan selesai — isi durasi & temuan.' },
+  qc_ok: { action: 'qc_ok', label: 'QC OK', fields: 'qc', hint: 'QC lolos — isi rekomendasi servis berikutnya.' },
   create_invoice: { action: 'create_invoice', label: 'Buat Invoice', fields: 'payment', hint: 'Invoice dibuat dari WO yang selesai.' },
   complete_invoice: { action: 'complete_invoice', label: 'Selesaikan Invoice', fields: 'payment', hint: 'Pembayaran dicatat dan invoice diselesaikan.' },
   stay_check_only: { action: 'stay_check_only', label: 'Tetap Check Saja', fields: 'none', hint: 'Customer tidak setuju perbaikan — dokumen tetap check-only, semua temuan tersimpan.' },
@@ -68,11 +76,11 @@ const ACTIONS: Record<string, ActionDef> = {
 const PAYMENT_METHODS = ['Cash', 'Transfer', 'QRIS', 'EDC'] as const;
 
 // ─────────────────────────────────────────────────────────────────────────
-// Stage derivation — computed from the doc fields so the column ALWAYS
-// matches the action button (server `stage` shown nowhere it could conflict).
+// Columns — ids match the server's boardColumn() output exactly.
 // ─────────────────────────────────────────────────────────────────────────
 
 type ColKey = 'intake' | 'so' | 'wo' | 'qc' | 'invoice' | 'done';
+const COL_KEYS: readonly ColKey[] = ['intake', 'so', 'wo', 'qc', 'invoice', 'done'];
 
 const COLUMNS: { key: ColKey; label: string }[] = [
   { key: 'intake', label: 'Intake' },
@@ -83,47 +91,21 @@ const COLUMNS: { key: ColKey; label: string }[] = [
   { key: 'done', label: 'Selesai' },
 ];
 
-function woStatus(row: FlowRow): string {
-  return (row.wo?.status ?? '').toLowerCase().replace(/[\s-]+/g, '_');
-}
-
-function columnOf(row: FlowRow): ColKey {
-  const inv = (row.invoice?.status ?? '').toLowerCase();
-  if (inv === 'completed') return 'done';
-  if (row.invoice?.no || inv === 'draft') return 'invoice';
-  const ws = woStatus(row);
-  if (ws === 'waiting_qc' || ws === 'waiting_for_qc') return 'qc';
-  if (ws === 'completed') return 'invoice'; // QC lolos — tinggal buat invoice
-  if (row.wo?.no) return 'wo';
-  if (row.so?.no) return 'so';
-  return 'intake';
-}
-
-/** The ONE next action for a card (null = nothing to do / waiting). */
+/** The next-step button def for a card (null = nothing to do / waiting). */
 function nextActionFor(row: FlowRow): ActionDef | null {
-  if (!row.so?.no) return null; // masih menunggu push SO dari pipeline intake
-  if (!row.so.approved) return ACTIONS.approve_service_order!;
-  if (!row.wo?.no) return ACTIONS.create_work_order!;
-  const ws = woStatus(row);
-  if (ws === 'created' || ws === 'waiting' || ws === '') return ACTIONS.start_work_order!;
-  if (ws === 'in_progress') return ACTIONS.complete_work_order!;
-  if (ws === 'waiting_qc' || ws === 'waiting_for_qc') return ACTIONS.qc_approve!;
-  const inv = (row.invoice?.status ?? '').toLowerCase();
-  if (!row.invoice?.no && ws === 'completed') return ACTIONS.create_invoice!;
-  if (inv === 'draft' || (row.invoice?.no && inv !== 'completed')) return ACTIONS.complete_invoice!;
-  return null; // done
+  return row.nextAction ? ACTIONS[row.nextAction] ?? null : null;
 }
 
 /** Small status chip text on the card. */
 function stageChip(row: FlowRow): { text: string; cls: string } {
-  const col = columnOf(row);
-  const ws = woStatus(row);
-  if (col === 'intake') return { text: 'Menunggu SO', cls: 'gray' };
-  if (col === 'so') return row.so?.approved ? { text: 'SO approved', cls: 'green' } : { text: 'SO dibuat', cls: 'blue' };
-  if (col === 'wo') return ws === 'in_progress' ? { text: 'Dikerjakan', cls: 'blue' } : { text: 'WO menunggu', cls: 'gray' };
-  if (col === 'qc') return { text: 'Tunggu QC', cls: 'yellow' };
-  if (col === 'invoice') return row.invoice?.no ? { text: 'Invoice draft', cls: 'yellow' } : { text: 'Siap invoice', cls: 'green' };
-  return { text: 'Selesai', cls: 'green' };
+  switch (row.column) {
+    case 'intake': return { text: 'Menunggu SO', cls: 'gray' };
+    case 'so': return row.so?.approved ? { text: 'SO approved', cls: 'green' } : { text: 'SO dibuat', cls: 'blue' };
+    case 'wo': return row.wo?.status === 'in_progress' ? { text: 'Dikerjakan', cls: 'blue' } : { text: 'WO menunggu', cls: 'gray' };
+    case 'qc': return { text: 'Tunggu QC', cls: 'yellow' };
+    case 'invoice': return row.invoice?.no ? { text: 'Invoice draft', cls: 'yellow' } : { text: 'Siap invoice', cls: 'green' };
+    default: return { text: 'Selesai', cls: 'green' };
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -137,26 +119,71 @@ function obj(v: unknown): Record<string, unknown> | null {
   return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : null;
 }
 
+/** Fallback column derivation (only when the server sent no/unknown column). */
+function deriveColumn(so: SoInfo | null, wo: WoInfo | null, inv: InvInfo | null): ColKey {
+  if (inv?.status === 'completed') return 'done';
+  if (inv?.status === 'draft' || inv?.no) return 'invoice';
+  if (wo?.status === 'completed') return 'invoice'; // QC lolos — tinggal buat invoice
+  if (wo?.status === 'waiting_qc') return 'qc';
+  if (wo?.status || wo?.no) return 'wo';
+  if (so) return 'so';
+  return 'intake';
+}
+
+/** One job brief ({jobId, action, state, error}) from the wire, or null. */
+function normJob(raw: unknown): PendingJob | null {
+  const j = obj(raw);
+  const action = j ? str(j.action) : null;
+  if (!j || !action) return null;
+  return { jobId: str(j.jobId) ?? str(j._id), action, state: str(j.state) ?? 'queued', error: str(j.error) };
+}
+
 function normRow(raw: unknown): FlowRow | null {
   const r = obj(raw);
-  const id = r ? str(r._id) : null;
+  const id = r ? str(r.spkId) ?? str(r._id) : null;
   if (!r || !id) return null;
-  const so = obj(r.so);
-  const wo = obj(r.wo);
-  const inv = obj(r.invoice);
-  const pj = obj(r.pendingJob);
+
+  const flow = obj(r.flow);
+  const tb = obj(r.turboly);
+  const cust = obj(r.customer);
+
+  const soStage = flow ? str(flow.so) : null;
+  const soNo = tb ? str(tb.serviceOrderNo) : null;
+  const so: SoInfo | null =
+    soNo || soStage ? { no: soNo, url: tb ? str(tb.serviceOrderUrl) : null, approved: soStage === 'approved' } : null;
+
+  const woStage = flow ? str(flow.wo) : null;
+  const woNo = (flow ? str(flow.workOrderNo) : null) ?? (tb ? str(tb.workOrderNo) : null);
+  const wo: WoInfo | null =
+    woNo || woStage ? { no: woNo, url: flow ? str(flow.workOrderUrl) : null, status: woStage } : null;
+
+  const invStage = flow ? str(flow.invoice) : null;
+  const invNo = (flow ? str(flow.invoiceNo) : null) ?? (tb ? str(tb.invoiceNo) : null);
+  const invoice: InvInfo | null =
+    invNo || invStage ? { no: invNo, url: flow ? str(flow.invoiceUrl) : null, status: invStage } : null;
+
+  const colRaw = str(r.column);
+  const column: ColKey = (COL_KEYS as readonly string[]).includes(colRaw ?? '')
+    ? (colRaw as ColKey)
+    : deriveColumn(so, wo, invoice);
+
+  // While a job is in flight the card shows a spinner; a failed one shows the
+  // error chip + retry. activeJob wins (the server nulls failedJob then too).
+  const pendingJob = normJob(r.activeJob) ?? normJob(r.failedJob);
+
   return {
     _id: id,
     docType: str(r.docType) ?? 'SPK_NAWILIS',
     plate: str(r.plate) ?? '—',
-    customer: str(r.customer) ?? '—',
+    customer: (cust ? str(cust.nama) : null) ?? str(r.customer) ?? '—',
     branchCode: str(r.branchCode) ?? '',
-    stage: str(r.stage) ?? '',
-    so: so ? { no: str(so.no), url: str(so.url), approved: so.approved === true } : null,
-    wo: wo ? { no: str(wo.no), url: str(wo.url), status: str(wo.status) } : null,
-    invoice: inv ? { no: str(inv.no), url: str(inv.url), status: str(inv.status) } : null,
-    pendingJob: pj && str(pj.action) ? { action: str(pj.action)!, state: str(pj.state) ?? 'queued', error: str(pj.error) } : null,
-    total: typeof r.total === 'number' && Number.isFinite(r.total) ? r.total : 0,
+    column,
+    nextAction: str(r.nextAction),
+    so,
+    wo,
+    invoice,
+    pendingJob,
+    total: typeof r.quotedTotal === 'number' && Number.isFinite(r.quotedTotal) ? r.quotedTotal : 0,
   };
 }
 
@@ -387,7 +414,11 @@ function DocLink({ label, no, url }: { label: string; no: string | null; url: st
   );
 }
 
-function Card({ row, onAction }: { row: FlowRow; onAction: (row: FlowRow, def: ActionDef) => void }) {
+function Card({ row, onAction, onRetry }: {
+  row: FlowRow;
+  onAction: (row: FlowRow, def: ActionDef) => void;
+  onRetry: (row: FlowRow) => void;
+}) {
   const chip = stageChip(row);
   const def = nextActionFor(row);
   const pj = row.pendingJob;
@@ -395,9 +426,9 @@ function Card({ row, onAction }: { row: FlowRow; onAction: (row: FlowRow, def: A
   const failed = pj !== null && pj.state === 'failed';
   const pjLabel = pj ? (ACTIONS[pj.action]?.label ?? pj.action) : '';
   const isCng = row.docType === 'CHECK_AND_GO';
-  const col = columnOf(row);
+  const col = row.column;
   // Edge case C&G: customer tidak setuju perbaikan → tetap check-only.
-  const showStayCheck = isCng && col === 'wo' && woStatus(row) === 'in_progress' && !inFlight;
+  const showStayCheck = isCng && col === 'wo' && row.wo?.status === 'in_progress' && !inFlight;
 
   return (
     <div className="fb-card">
@@ -424,11 +455,7 @@ function Card({ row, onAction }: { row: FlowRow; onAction: (row: FlowRow, def: A
       {failed && (
         <div className="fb-errchip" title={pj.error ?? undefined}>
           <div className="fb-errtxt">✗ {pjLabel} gagal{pj.error ? `: ${pj.error}` : ''}</div>
-          <button
-            type="button"
-            className="fb-retry"
-            onClick={() => onAction(row, ACTIONS[pj.action] ?? { action: pj.action, label: pjLabel, fields: 'none', hint: 'Ulangi aksi yang gagal.' })}
-          >
+          <button type="button" className="fb-retry" onClick={() => onRetry(row)}>
             Coba lagi
           </button>
         </div>
@@ -494,7 +521,36 @@ export default function FlowBoard() {
   // After a job is enqueued: optimistic spinner now, real state shortly after.
   const onActionDone = useCallback((spkId: string, action: string) => {
     setModal(null);
-    setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, pendingJob: { action, state: 'queued', error: null } } : r)));
+    setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, pendingJob: { jobId: null, action, state: 'queued', error: null } } : r)));
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { void load(); }, 1500);
+  }, [load]);
+
+  // Retry of a FAILED job: re-queue the SAME job via {retryJobId} — the
+  // original params (mekanik, waktu, temuan, …) ride along unchanged. Only
+  // when the job id is unknown does the params modal open again.
+  const onRetry = useCallback((row: FlowRow) => {
+    const pj = row.pendingJob;
+    if (!pj || pj.state !== 'failed') return;
+    if (!pj.jobId) {
+      const def = ACTIONS[pj.action] ?? { action: pj.action, label: pj.action, fields: 'none' as const, hint: 'Ulangi aksi yang gagal.' };
+      setModal({ row, def });
+      return;
+    }
+    const jobId = pj.jobId;
+    setRows((prev) => prev.map((r) => (r._id === row._id ? { ...r, pendingJob: { ...pj, state: 'queued', error: null } } : r)));
+    void (async () => {
+      try {
+        const res = await fetch('/api/flow/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ retryJobId: jobId }),
+        });
+        if (!res.ok) void load(); // e.g. job no longer failed — resync the board
+      } catch {
+        void load();
+      }
+    })();
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => { void load(); }, 1500);
   }, [load]);
@@ -514,7 +570,7 @@ export default function FlowBoard() {
 
   const byCol = useMemo(() => {
     const m: Record<ColKey, FlowRow[]> = { intake: [], so: [], wo: [], qc: [], invoice: [], done: [] };
-    for (const r of filtered) m[columnOf(r)].push(r);
+    for (const r of filtered) m[r.column].push(r);
     return m;
   }, [filtered]);
 
@@ -610,7 +666,7 @@ export default function FlowBoard() {
                 </div>
                 {byCol[c.key].length === 0 && <div className="fb-empty">—</div>}
                 {byCol[c.key].map((r) => (
-                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} />
+                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} onRetry={onRetry} />
                 ))}
               </div>
             ))}

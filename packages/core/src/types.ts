@@ -10,8 +10,14 @@
 // Enumerations
 // ─────────────────────────────────────────────────────────────────────────
 
-/** The two paper forms. Only SPK is in scope for v1; QS is stubbed for later. */
-export type DocType = 'SPK_NAWILIS' | 'QS_INSPECTION';
+import type { FlowState } from './flow.js';
+
+/**
+ * The intake document kinds. SPK is the v1 paper form; QS is stubbed for
+ * later; CHECK_AND_GO is the Flow-v2 vehicle-check intake (one General Check
+ * service line, detailed inspection stored in Mongo).
+ */
+export type DocType = 'SPK_NAWILIS' | 'QS_INSPECTION' | 'CHECK_AND_GO';
 
 export type BranchType = 'NAWILIS' | 'QUICKSERV';
 
@@ -297,6 +303,29 @@ export interface SpkDoc {
   state: PipelineState;
   push: PushInfo;
   turboly: TurbolyReadback;
+
+  /**
+   * FLOW v2 (additive, optional): full Turboly lifecycle position after the
+   * SO exists — Approve SO → WO → QC → Invoice. See packages/core/src/flow.ts.
+   */
+  flow?: FlowState;
+
+  /**
+   * CHECK_AND_GO docs only (additive, optional): the typable General Check
+   * price + the detailed inspection checklist kept in OUR Mongo (Turboly only
+   * stores the summary). Rows are written at intake; feedback/recommendation/
+   * inspected are filled by the mechanic during the job.
+   */
+  checkGo?: {
+    harga: number;
+    inspectionItems: Array<{
+      item: string;
+      catatan: string | null;
+      feedback: 'pass' | 'fail' | null;
+      recommendation: string | null;
+      inspected: boolean;
+    }>;
+  };
 
   /** Optional appointment time (ISO). Future value drives Turboly's plan date/time. */
   scheduledAt?: string | null;

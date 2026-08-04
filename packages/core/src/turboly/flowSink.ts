@@ -3,6 +3,7 @@ import { SELECTOR_MAP as S } from './selmap.js';
 import { resolve, exists } from './locators.js';
 import { TurbolySession } from './session.js';
 import { DataError, TransientError } from './rpaSink.js';
+import { canonPhoneKey } from '../indonesia.js';
 
 /**
  * FLOW v2 — browser automation for the Turboly lifecycle AFTER the Service
@@ -77,6 +78,9 @@ export interface RegisterRetailArgs {
 export interface RegisterCustomerResult {
   customerId: string | null;
   customerUrl: string;
+  /** True when an existing record was found (dedupe) — nothing was created. */
+  existing?: boolean;
+  note?: string;
 }
 
 export interface RegisterWholesaleArgs {
@@ -93,6 +97,9 @@ export interface RegisterWholesaleResult {
   companyId: string | null;
   companyUrl: string;
   retail?: RegisterCustomerResult;
+  /** True when the company already existed (dedupe) — it was NOT re-created. */
+  existing?: boolean;
+  note?: string;
 }
 
 /** The expected control was not on the page — message lists what WAS visible. */
@@ -157,6 +164,18 @@ export class TurbolyFlowRpa {
    */
   async createWorkOrder(serviceOrderUrl: string, assigneeName: string): Promise<CreateWorkOrderResult> {
     const page = await this.open(serviceOrderUrl, 'wo-create-from-so');
+    // Idempotency read-back BEFORE the irreversible click: a previous attempt
+    // may have clicked create and died (kick/timeout) before reporting back.
+    // If the SO already links to an SWO, return it — NEVER create a second one.
+    const already = await this.findLinkedDocOnPage(page, /service_work_orders\/\d+/, /^SWO\//);
+    if (already) {
+      await this.session.noteJobDone();
+      return {
+        workOrderNo: already.no,
+        workOrderUrl: already.url,
+        note: 'Work Order sudah ada di SO ini — tidak dibuat ulang (guard duplikat)',
+      };
+    }
     await this.clickControl(
       page,
       /create\s*(service\s*)?work\s*order|buat\s*work\s*order|\+\s*work\s*order/i,
@@ -320,6 +339,12 @@ export class TurbolyFlowRpa {
   /** Create the Service Invoice (SRI/…) from a COMPLETED Work Order. */
   async createInvoice(workOrderUrl: string): Promise<CreateInvoiceResult> {
     const page = await this.open(workOrderUrl, 'invoice-create');
+    // Idempotency read-back BEFORE the irreversible click (see createWorkOrder).
+    const already = await this.findLinkedDocOnPage(page, /(service_invoices|invoices)\/\d+/, /^SRI\//);
+    if (already) {
+      await this.session.noteJobDone();
+      return { invoiceNo: already.no, invoiceUrl: already.url };
+    }
     await this.clickControl(
       page,
       /create\s*(service\s*)?invoice|buat\s*invoice|\+\s*invoice/i,
@@ -353,6 +378,24 @@ export class TurbolyFlowRpa {
     const invoiceNo = await this.captureDocNo(page, /^SRI\//);
     await this.session.noteJobDone();
     return { invoiceNo, invoiceUrl: page.url() };
+  }
+
+  /**
+   * Recovery probe: the SWO already linked on a Service Order page, or null.
+   * Used by the worker when flow state says a WO exists but its URL was lost
+   * (e.g. state derived from a mirrored doc number) — never re-creates.
+   */
+  async findLinkedWorkOrder(serviceOrderUrl: string): Promise<CreateWorkOrderResult | null> {
+    const page = await this.open(serviceOrderUrl, 'wo-linked-probe');
+    const hit = await this.findLinkedDocOnPage(page, /service_work_orders\/\d+/, /^SWO\//);
+    return hit ? { workOrderNo: hit.no, workOrderUrl: hit.url } : null;
+  }
+
+  /** Recovery probe: the SRI already linked on a Work Order page, or null. */
+  async findLinkedInvoice(workOrderUrl: string): Promise<CreateInvoiceResult | null> {
+    const page = await this.open(workOrderUrl, 'invoice-linked-probe');
+    const hit = await this.findLinkedDocOnPage(page, /(service_invoices|invoices)\/\d+/, /^SRI\//);
+    return hit ? { invoiceNo: hit.no, invoiceUrl: hit.url } : null;
   }
 
   /** Payments tab: add payment (method + amount) → complete → verify COMPLETED. */
@@ -483,6 +526,10 @@ export class TurbolyFlowRpa {
    * `companyName` links the retail customer to a wholesale company (corporate).
    */
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
+    // Dedupe by phone BEFORE registering: a retried job may have already saved
+    // this customer (save click landed, then the session died before read-back).
+    const dup = await this.findExistingCustomerByPhone(args.phone);
+    if (dup) return dup;
     const page = await this.openFormPage(
       ['/retail_customers/new', '/customers/new'],
       '/customers',
@@ -546,6 +593,22 @@ export class TurbolyFlowRpa {
    * Currency IDR, PPN, sales advisor), then the linked retail customer.
    */
   async registerWholesaleCustomer(args: RegisterWholesaleArgs): Promise<RegisterWholesaleResult> {
+    // Dedupe by company name BEFORE registering: the company save is the
+    // irreversible first half of the corporate flow — when a retry re-runs
+    // after a mid-retail failure, the company must NOT be created twice.
+    const dupCo = await this.findExistingCompanyByName(args.companyName);
+    if (dupCo) {
+      const result: RegisterWholesaleResult = {
+        companyId: dupCo.customerId,
+        companyUrl: dupCo.customerUrl,
+        existing: true,
+        note: `perusahaan "${args.companyName}" sudah terdaftar — tidak dibuat ulang (guard duplikat)`,
+      };
+      if (args.retail) {
+        result.retail = await this.registerRetailCustomer({ ...args.retail, companyName: args.companyName });
+      }
+      return result;
+    }
     const page = await this.openFormPage(
       ['/wholesale_customers/new', '/companies/new'],
       '/wholesale_customers',
@@ -636,6 +699,136 @@ export class TurbolyFlowRpa {
     await this.clickControl(page, newButton, `${what} — tombol New di ${listPath}`);
     await page.waitForTimeout(2500);
     return page;
+  }
+
+  /**
+   * Read-back guard for irreversible creates: does the page ALREADY link to the
+   * created child document (SWO on the SO page, SRI on the WO page)? A retried
+   * job checks this BEFORE clicking create — the click may have landed on a
+   * previous attempt that died before it could report back.
+   */
+  private async findLinkedDocOnPage(
+    page: Page,
+    hrefRe: RegExp,
+    noRe: RegExp,
+  ): Promise<{ no: string | null; url: string } | null> {
+    const hit = await page.evaluate(
+      ({ source, flags }) => {
+        const re = new RegExp(source, flags);
+        const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+        const a = anchors.find((x) => re.test(x.getAttribute('href') ?? ''));
+        return a ? { href: a.href, text: (a.innerText ?? '').trim().replace(/\s+/g, ' ') } : null;
+      },
+      { source: hrefRe.source, flags: hrefRe.flags },
+    );
+    if (!hit) return null;
+    // Doc number: prefer the anchor's own text, else the first PREFIX-matching
+    // number in the body (never fall back to an arbitrary number — the page's
+    // own doc number, e.g. SRO/…, would be wrong).
+    const inText = hit.text.match(/\b[A-Z]{2,4}\/[A-Z0-9]{2,6}\/\d{4,}\b/)?.[0] ?? null;
+    let no = inText && noRe.test(inText) ? inText : null;
+    if (!no) {
+      const body = (await page.textContent('body').catch(() => '')) ?? '';
+      const all = body.match(/\b[A-Z]{2,4}\/[A-Z0-9]{2,6}\/\d{4,}\b/g) ?? [];
+      no = all.find((n) => noRe.test(n)) ?? null;
+    }
+    return { no, url: hit.href };
+  }
+
+  /**
+   * Turboly's own select2 JSON endpoint through the logged-in browser context:
+   * GET /lookup/customers.json?search_term=… → { customers: [{id,name,phone}] }.
+   * Best-effort — null when the endpoint misbehaves (caller proceeds normally).
+   */
+  private async lookupCustomers(
+    page: Page,
+    term: string,
+  ): Promise<Array<{ id: number; name: string; phone: string | null }> | null> {
+    try {
+      const res = await page.request.get(
+        `${this.baseUrl}/lookup/customers.json?search_term=${encodeURIComponent(term)}&page_limit=10&page=1`,
+        { headers: { accept: 'application/json' } },
+      );
+      if (!res.ok()) return null;
+      const j = (await res.json()) as { customers?: Array<{ id?: unknown; name?: unknown; phone?: unknown }> };
+      if (!Array.isArray(j.customers)) return null;
+      return j.customers
+        .filter((c): c is { id: number; name?: unknown; phone?: unknown } => typeof c.id === 'number')
+        .map((c) => ({
+          id: c.id,
+          name: typeof c.name === 'string' ? c.name : '',
+          phone: typeof c.phone === 'string' ? c.phone : null,
+        }));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Dedupe probe: an existing customer with EXACTLY this phone (canonical form),
+   * via /lookup/customers.json under every stored spelling (0…, 62…, +62…).
+   * Null = not found / lookup unavailable — caller registers normally.
+   */
+  private async findExistingCustomerByPhone(phone: string): Promise<RegisterCustomerResult | null> {
+    const key = canonPhoneKey(phone ?? '');
+    if (key.length < 8) return null;
+    await this.session.ensureLoggedIn();
+    const page = this.session.page_();
+    for (const term of [key, `0${key}`, `62${key}`, `+62${key}`]) {
+      const found = await this.lookupCustomers(page, term);
+      const hit = found?.find((c) => canonPhoneKey(c.phone ?? '') === key);
+      if (hit) {
+        return {
+          customerId: String(hit.id),
+          customerUrl: this.abs(`/customers/${hit.id}`),
+          existing: true,
+          note: `customer dengan nomor HP ini sudah terdaftar (${hit.name || 'tanpa nama'}) — tidak dibuat ulang (guard duplikat)`,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Dedupe probe: an existing WHOLESALE company with exactly this name, found by
+   * scanning the wholesale-customers list (search param first, plain list next —
+   * the just-created company is the newest row). Best-effort: null = proceed.
+   */
+  private async findExistingCompanyByName(name: string): Promise<RegisterCustomerResult | null> {
+    const want = name.trim().toUpperCase().replace(/\s+/g, ' ');
+    if (!want) return null;
+    await this.session.ensureLoggedIn();
+    const page = this.session.page_();
+    const paths = [
+      `/wholesale_customers?search_term=${encodeURIComponent(name.trim())}`,
+      `/wholesale_customers?q=${encodeURIComponent(name.trim())}`,
+      '/wholesale_customers',
+    ];
+    for (const path of paths) {
+      const ok = await page
+        .goto(this.abs(path), { waitUntil: 'domcontentloaded' })
+        .then(() => true)
+        .catch(() => false);
+      if (!ok) continue;
+      await page.waitForTimeout(1500);
+      const row = await page.evaluate(
+        ({ want }) => {
+          const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+          const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
+          const a = anchors.find(
+            (x) =>
+              /\/(wholesale_customers|companies)\/\d+/.test(x.getAttribute('href') ?? '') &&
+              norm(x.innerText ?? '') === want,
+          );
+          if (!a) return null;
+          const id = /\/(?:wholesale_customers|companies)\/(\d+)/.exec(a.getAttribute('href') ?? '')?.[1] ?? null;
+          return { href: a.href, id };
+        },
+        { want },
+      );
+      if (row) return { customerId: row.id, customerUrl: row.href, existing: true };
+    }
+    return null;
   }
 
   /** All visible clickable texts — the payload of every DiscoveryError. */
@@ -990,39 +1183,89 @@ export class TurbolyFlowRpa {
 
   // ── status / verification ────────────────────────────────────────────────
 
-  /** Candidate workflow-status texts (badges/labels), most-specific first. */
-  private async readStatuses(page: Page): Promise<string[]> {
+  /**
+   * Workflow status texts that are ACTUALLY ACTIVE on the page.
+   *
+   * Turboly renders the WHOLE workflow chain (e.g. "WAITING → IN PROGRESS →
+   * WAITING FOR QC → COMPLETED") as sibling labels, so FUTURE-stage texts are
+   * always somewhere in the DOM — and action-button texts ("Mark Completed")
+   * contain stage words too. Matching any of those would make every
+   * skip-if-already-done pre-check and every post-action verification pass
+   * vacuously. Therefore:
+   *   - only leaf-ish, NON-clickable, short-text status/badge/step nodes count;
+   *   - when ≥2 such nodes are siblings under one parent/grandparent (i.e. the
+   *     rendered workflow chain), only the one marked active/current/selected
+   *     counts;
+   *   - there is NO body-text fallback, by design.
+   * `seen` carries every candidate (inactive chain members included) so a
+   * failed verify can report loudly what WAS on the page.
+   */
+  private async readStatuses(page: Page): Promise<{ active: string[]; seen: string[] }> {
     return page.evaluate(() => {
-      const nodes = Array.from(
-        document.querySelectorAll('.label, .badge, [class*="status" i], [class*="state" i], [class*="workflow" i] .active, .active'),
-      );
-      const texts = nodes
-        .filter((n) => {
-          const r = (n as HTMLElement).getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        })
-        .map((n) => ((n as HTMLElement).innerText ?? '').trim().replace(/\s+/g, ' '))
-        .filter((t) => t.length > 0 && t.length <= 40);
-      return Array.from(new Set(texts)).slice(0, 30);
+      const ACTIVE_RE = /(^|[\s_-])(active|current|selected)([\s_-]|$)/i;
+      const cls = (el: Element | null): string => (el ? el.getAttribute('class') ?? '' : '');
+      const visible = (el: Element): boolean => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      // Anything clickable is an ACTION, not a status ("Mark Completed" ≠ COMPLETED).
+      const clickable = (el: Element): boolean =>
+        el.closest('a, button, [role="button"], [role="tab"], input, select, textarea') !== null;
+      const candidates = (
+        Array.from(
+          document.querySelectorAll(
+            '.label, .badge, [class*="status" i], [class*="state" i], ' +
+              '[class*="workflow" i] li, [class*="stepper" i] li, [class*="wizard" i] li, .active, .current',
+          ),
+        ) as HTMLElement[]
+      ).filter((el) => {
+        if (!visible(el) || clickable(el)) return false;
+        const t = (el.innerText ?? '').trim().replace(/\s+/g, ' ');
+        return t.length > 0 && t.length <= 40 && el.querySelectorAll('*').length <= 2;
+      });
+      // Chain detection: candidates sharing a parent (chain of spans/divs) or a
+      // grandparent (ul > li > span.label) form the rendered workflow chain.
+      const parentCount = new Map<Element, number>();
+      const grandCount = new Map<Element, number>();
+      for (const el of candidates) {
+        const p = el.parentElement;
+        const g = p?.parentElement ?? null;
+        if (p) parentCount.set(p, (parentCount.get(p) ?? 0) + 1);
+        if (g) grandCount.set(g, (grandCount.get(g) ?? 0) + 1);
+      }
+      const active: string[] = [];
+      const seen: string[] = [];
+      for (const el of candidates) {
+        const t = (el.innerText ?? '').trim().replace(/\s+/g, ' ');
+        seen.push(t);
+        const p = el.parentElement;
+        const g = p?.parentElement ?? null;
+        const inChain = (p !== null && (parentCount.get(p) ?? 0) >= 2) || (g !== null && (grandCount.get(g) ?? 0) >= 2);
+        const marked = ACTIVE_RE.test(cls(el)) || ACTIVE_RE.test(cls(p)) || ACTIVE_RE.test(cls(g));
+        if (!inChain || marked) active.push(t);
+      }
+      return {
+        active: Array.from(new Set(active)).slice(0, 30),
+        seen: Array.from(new Set(seen)).slice(0, 30),
+      };
     });
   }
 
-  /** Is the expected workflow status visibly active (badge first, body fallback)? */
+  /** Is the expected workflow status the ACTIVE one? Strict — no body fallback. */
   private async statusVisible(page: Page, expected: RegExp): Promise<boolean> {
-    const badges = await this.readStatuses(page);
-    if (badges.some((t) => expected.test(t))) return true;
-    const body = (await page.textContent('body').catch(() => '')) ?? '';
-    return expected.test(body);
+    const { active } = await this.readStatuses(page);
+    return active.some((t) => expected.test(t));
   }
 
-  /** LOUD verify: throws DataError listing the statuses that WERE on the page. */
+  /** LOUD verify: throws DataError listing active + all candidate statuses seen. */
   private async verifyStatus(page: Page, expected: RegExp, what: string): Promise<void> {
-    if (await this.statusVisible(page, expected)) return;
+    const { active, seen } = await this.readStatuses(page);
+    if (active.some((t) => expected.test(t))) return;
     const inline = await this.readInlineError(page);
-    const badges = await this.readStatuses(page);
     throw new DataError(
-      `${what}: status /${expected.source}/ tidak terbaca di ${page.url()}` +
-        `${inline ? ` — error Turboly: ${inline}` : ''} — status terlihat: [${badges.join(' | ')}]`,
+      `${what}: status /${expected.source}/ tidak AKTIF di ${page.url()}` +
+        `${inline ? ` — error Turboly: ${inline}` : ''} — status aktif: [${active.join(' | ')}]` +
+        ` — semua kandidat status: [${seen.join(' | ')}]`,
     );
   }
 

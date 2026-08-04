@@ -9,5 +9,7 @@ export * from './mongo.js';
 export * from './repo.js';
 export * from './mirror.js';
 export * from './export-schema.js';
+export * from './flow.js';
 // Turboly adapter is exported via the "./turboly" subpath to keep Playwright
 // out of the web app's bundle. Import from '@spk/core/turboly'.
+// (TurbolyFlowRpa is exported there too — see turboly/index.ts.)
