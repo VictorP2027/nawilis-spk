@@ -1,0 +1,1109 @@
+import type { Page } from 'playwright';
+import { SELECTOR_MAP as S } from './selmap.js';
+import { resolve, exists } from './locators.js';
+import { TurbolySession } from './session.js';
+import { DataError, TransientError } from './rpaSink.js';
+
+/**
+ * FLOW v2 — browser automation for the Turboly lifecycle AFTER the Service
+ * Order exists: Approve SO → Create Work Order → Start → Complete → QC →
+ * Invoice → Complete Invoice, plus Inspections and Customer registration.
+ *
+ * Mirrors rpaSink conventions (ONE session/page, waitForTimeout pacing,
+ * inline-error reads, screenshots via PUSH_SCREENSHOT_DIR) but the WO /
+ * invoice / customer pages are NOT yet selector-mapped. Everything here is
+ * therefore DISCOVERY-FRIENDLY best-effort: controls are found by visible
+ * text, and when a control is missing we throw a DiscoveryError whose message
+ * LISTS the visible buttons/fields on the page, so live testing iterates fast.
+ *
+ * Error contract (same philosophy as rpaSink, for the flow worker to classify):
+ *   - DiscoveryError  → structural: the expected control wasn't on the page.
+ *   - DataError       → Turboly rejected the input; retrying won't help.
+ *   - TransientError  → flaky search/timeout; retry later.
+ *   - AuthChallengeError (from session.ensureLoggedIn) → auth.
+ */
+
+// ─────────────────────────────────────────────────────────────────────────
+// Public arg/result shapes
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface CreateWorkOrderResult {
+  workOrderNo: string | null;
+  workOrderUrl: string;
+  /** Non-fatal discovery notes (e.g. assignee control not found on a created WO). */
+  note?: string;
+}
+
+export interface CreateInvoiceResult {
+  invoiceNo: string | null;
+  invoiceUrl: string;
+}
+
+export interface CompleteWorkOrderArgs {
+  waktuMinutes: number;
+  feedback: string;
+}
+
+export interface QcApproveArgs {
+  nextOdometer?: number | null;
+  nextServiceDateISO?: string | null;
+  recommendations?: string | null;
+}
+
+export interface CompleteInvoiceArgs {
+  /** Visible option text on the payment-method control, e.g. "Cash". */
+  method: string;
+  amount: number;
+}
+
+export interface InspectionItemInput {
+  category: string;
+  description: string;
+  /** e.g. 'pass' | 'fail' (visible option text on the feedback control). */
+  feedback?: string | null;
+  recommendation?: string | null;
+}
+
+export interface RegisterRetailArgs {
+  nama: string;
+  phone: string;
+  alamat: string;
+  /** Turboly store id (native select value) — first registration store, kept forever. */
+  storeTurbolyId?: string | null;
+  /** Link to a wholesale company (corporate customers only). */
+  companyName?: string | null;
+}
+
+export interface RegisterCustomerResult {
+  customerId: string | null;
+  customerUrl: string;
+}
+
+export interface RegisterWholesaleArgs {
+  companyName: string;
+  picName: string;
+  npwp: string;
+  alamat: string;
+  advisorName: string;
+  /** When given, the linked RETAIL customer is registered right after. */
+  retail?: Omit<RegisterRetailArgs, 'companyName'> | null;
+}
+
+export interface RegisterWholesaleResult {
+  companyId: string | null;
+  companyUrl: string;
+  retail?: RegisterCustomerResult;
+}
+
+/** The expected control was not on the page — message lists what WAS visible. */
+export class DiscoveryError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'DiscoveryError';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// The RPA class
+// ─────────────────────────────────────────────────────────────────────────
+
+export class TurbolyFlowRpa {
+  constructor(
+    private readonly session: TurbolySession,
+    private readonly opts: { screenshotDir?: string } = {},
+  ) {}
+
+  private get screenshotDir(): string | undefined {
+    return this.opts.screenshotDir ?? process.env.PUSH_SCREENSHOT_DIR ?? undefined;
+  }
+
+  private get baseUrl(): string {
+    return (this.session as unknown as { cfg?: { baseUrl?: string } }).cfg?.baseUrl ?? 'https://sandbox.turboly.com';
+  }
+
+  async dispose(): Promise<void> {
+    await this.session.dispose();
+  }
+
+  // ── lifecycle methods ────────────────────────────────────────────────────
+
+  /** DRAFT/DIAGNOSIS → APPROVED on the Service Order page. Idempotent. */
+  async approveServiceOrder(serviceOrderUrl: string): Promise<void> {
+    const page = await this.open(serviceOrderUrl, 'so-approve');
+    if (await this.statusVisible(page, /\bAPPROVED\b/i)) return; // already there
+    let clicked = false;
+    if (await exists(page, S.actions.approve, 3000)) {
+      clicked = await resolve(page, S.actions.approve)
+        .first()
+        .click({ timeout: 8000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    if (!clicked) await this.clickControl(page, /^approved?$/i, 'tombol Approve di Service Order');
+    await page.waitForTimeout(1200);
+    await this.confirmModals(page);
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-so-approved');
+    await this.verifyStatus(page, /\bAPPROVED\b/i, 'Approve Service Order');
+    await this.session.noteJobDone();
+  }
+
+  /**
+   * Create the Service Work Order from an APPROVED SO and set the assignee
+   * (mechanic) on every service line. The create control is discovered by
+   * text; if the WO got created but the assignee control can't be found, we
+   * return successfully WITH a note (never a retry that would duplicate the WO).
+   */
+  async createWorkOrder(serviceOrderUrl: string, assigneeName: string): Promise<CreateWorkOrderResult> {
+    const page = await this.open(serviceOrderUrl, 'wo-create-from-so');
+    await this.clickControl(
+      page,
+      /create\s*(service\s*)?work\s*order|buat\s*work\s*order|\+\s*work\s*order/i,
+      'tombol Create Work Order di SO (harus APPROVED dulu)',
+    );
+    await page.waitForTimeout(1500);
+    await this.confirmModals(page);
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-wo-after-create-click');
+
+    const notes: string[] = [];
+
+    // Wherever we landed (WO form or WO detail), try to set the assignee.
+    if (/service_work_orders\/\d+/.test(page.url())) {
+      // Detail page — assignee may need Edit mode.
+      const edited = await this.clickControlIfPresent(page, /^edit$/i);
+      if (edited) await page.waitForTimeout(2200);
+    }
+    const assigned = await this.trySetAssignees(page, assigneeName);
+    if (!assigned) {
+      notes.push(
+        `kontrol Assignee/mekanik TIDAK ditemukan — set manual di Turboly. Kontrol terlihat: ${await this.controlHints(page)}`,
+      );
+    }
+
+    // A form flow needs a save; a direct-created detail page may not.
+    const saved = await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
+    if (saved) {
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+      await page.waitForTimeout(3000);
+      await page.waitForLoadState('networkidle').catch(() => {});
+    }
+    await this.snapshot(page, 'flow-wo-created');
+
+    const inline = await this.readInlineError(page);
+    if (inline) throw new DataError(`Create Work Order ditolak Turboly: ${inline}`);
+    if (!/service_work_orders\/\d+/.test(page.url())) {
+      throw new DiscoveryError(
+        `Work Order tidak terbentuk — setelah klik create URL masih ${page.url()}. ` +
+          `Tombol terlihat: ${await this.buttonList(page)}`,
+      );
+    }
+    const workOrderNo = await this.captureDocNo(page, /^SWO\//);
+    await this.session.noteJobDone();
+    const res: CreateWorkOrderResult = { workOrderNo, workOrderUrl: page.url() };
+    if (notes.length) res.note = notes.join(' • ');
+    return res;
+  }
+
+  /** WAITING → IN PROGRESS (the Start button stamps START DATE). Idempotent. */
+  async startWorkOrder(workOrderUrl: string): Promise<void> {
+    const page = await this.open(workOrderUrl, 'wo-start');
+    if (await this.statusVisible(page, /IN\s*PROGRESS/i)) return;
+    await this.clickControl(page, /^start$|^mulai$/i, 'tombol Start di Work Order');
+    await page.waitForTimeout(1200);
+    await this.confirmModals(page);
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-wo-started');
+    await this.verifyStatus(page, /IN\s*PROGRESS/i, 'Start Work Order');
+    await this.session.noteJobDone();
+  }
+
+  /**
+   * IN PROGRESS → WAITING FOR QC: edit → duration (waktu) + feedback per line
+   * → mark completed. Fields are filled BEFORE any irreversible click, so a
+   * DiscoveryError here is safely retryable after the selector is fixed.
+   */
+  async completeWorkOrder(workOrderUrl: string, args: CompleteWorkOrderArgs): Promise<void> {
+    const page = await this.open(workOrderUrl, 'wo-complete');
+    if (await this.statusVisible(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i)) return;
+
+    const edited = await this.clickControlIfPresent(page, /^edit$/i);
+    if (edited) await page.waitForTimeout(2200);
+
+    const durOk = await this.fillFields(page, /duration|durasi|waktu|time[_\s-]*spent|minutes/i, String(args.waktuMinutes), { all: false });
+    const fbCount = args.feedback
+      ? await this.fillFields(page, /feedback/i, args.feedback, { all: true })
+      : 0;
+    if (!durOk && args.feedback && fbCount === 0) {
+      throw new DiscoveryError(
+        `Selesai WO: field duration/waktu dan feedback tidak ditemukan. Field terlihat: ${await this.fieldList(page)}`,
+      );
+    }
+
+    const saved = await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
+    if (saved) {
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle').catch(() => {});
+    }
+
+    // Mark completed (control text discovered live; several candidates).
+    await this.clickControl(
+      page,
+      /mark\s*(as\s*)?complete[d]?|^complete[d]?$|^finish$|^selesai$/i,
+      'tombol Mark Completed di Work Order',
+    );
+    await page.waitForTimeout(1200);
+    await this.confirmModals(page);
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-wo-completed');
+    await this.verifyStatus(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i, 'Selesai Work Order');
+    await this.session.noteJobDone();
+  }
+
+  /**
+   * QC: fill Next Service Recommendations (NEXT ODOMETER / NEXT SERVICE DATE /
+   * RECOMMENDATIONS), approve the service part(s), save → verify COMPLETED.
+   */
+  async qcApprove(workOrderUrl: string, args: QcApproveArgs): Promise<void> {
+    const page = await this.open(workOrderUrl, 'wo-qc');
+    if (await this.statusVisible(page, /\bCOMPLETED\b/i)) return;
+
+    const edited = await this.clickControlIfPresent(page, /^edit$/i);
+    if (edited) await page.waitForTimeout(2200);
+
+    const misses: string[] = [];
+    if (args.nextOdometer != null) {
+      const ok = await this.fillFields(page, /next[_\s-]*odometer|odometer[_\s-]*next|next[_\s-]*km|km[_\s-]*next/i, String(args.nextOdometer), { all: false });
+      if (!ok) misses.push('NEXT ODOMETER');
+    }
+    if (args.nextServiceDateISO) {
+      const ok = await this.fillFields(page, /next[_\s-]*service[_\s-]*date|next[_\s-]*date/i, args.nextServiceDateISO, { all: false });
+      if (!ok) misses.push('NEXT SERVICE DATE');
+    }
+    if (args.recommendations) {
+      const ok = await this.fillFields(page, /recommendation|rekomendasi/i, args.recommendations, { all: false });
+      if (!ok) misses.push('RECOMMENDATIONS');
+    }
+    if (misses.length) {
+      throw new DiscoveryError(
+        `QC: field ${misses.join(', ')} tidak ditemukan di halaman WO. Field terlihat: ${await this.fieldList(page)}`,
+      );
+    }
+
+    // Approve at the service part(s) — per-line approve controls when present.
+    const perLine = await this.clickAllControls(page, /^approve[d]?$|^pass$|^qc\s*ok$/i);
+    if (perLine === 0) {
+      await this.clickControl(page, /qc|approve/i, 'tombol Approve/QC di Work Order');
+    }
+    await page.waitForTimeout(1200);
+    await this.confirmModals(page);
+
+    const saved = await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
+    if (saved) {
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+    }
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-wo-qc');
+    await this.verifyStatus(page, /\bCOMPLETED\b/i, 'QC Work Order');
+    await this.session.noteJobDone();
+  }
+
+  /** Create the Service Invoice (SRI/…) from a COMPLETED Work Order. */
+  async createInvoice(workOrderUrl: string): Promise<CreateInvoiceResult> {
+    const page = await this.open(workOrderUrl, 'invoice-create');
+    await this.clickControl(
+      page,
+      /create\s*(service\s*)?invoice|buat\s*invoice|\+\s*invoice/i,
+      'tombol Create Invoice di Work Order (harus COMPLETED dulu)',
+    );
+    await page.waitForTimeout(1500);
+    await this.confirmModals(page);
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
+
+    // Landed on an invoice FORM (…/new)? Save it to get the document.
+    if (/\/new\b/.test(page.url())) {
+      const saved = await this.clickControlIfPresent(page, /^(save|simpan|create)$/i);
+      if (saved) {
+        await page.waitForTimeout(1500);
+        await this.confirmModals(page);
+        await page.waitForTimeout(3000);
+        await page.waitForLoadState('networkidle').catch(() => {});
+      }
+    }
+    await this.snapshot(page, 'flow-invoice-created');
+
+    const inline = await this.readInlineError(page);
+    if (inline) throw new DataError(`Create Invoice ditolak Turboly: ${inline}`);
+    if (!/(service_invoices|invoices)\/\d+/.test(page.url())) {
+      throw new DiscoveryError(
+        `Invoice tidak terbentuk — setelah klik create URL masih ${page.url()}. ` +
+          `Tombol terlihat: ${await this.buttonList(page)}`,
+      );
+    }
+    const invoiceNo = await this.captureDocNo(page, /^SRI\//);
+    await this.session.noteJobDone();
+    return { invoiceNo, invoiceUrl: page.url() };
+  }
+
+  /** Payments tab: add payment (method + amount) → complete → verify COMPLETED. */
+  async completeInvoice(invoiceUrl: string, args: CompleteInvoiceArgs): Promise<void> {
+    const page = await this.open(invoiceUrl, 'invoice-complete');
+    if (await this.statusVisible(page, /\bCOMPLETED\b/i)) return;
+
+    await this.clickControl(page, /^payments?$|pembayaran/i, 'tab Payments di Invoice');
+    await page.waitForTimeout(1500);
+    await this.clickControlIfPresent(page, /add\s*payment|new\s*payment|\+\s*payment|tambah\s*pembayaran/i);
+    await page.waitForTimeout(1200);
+
+    // Payment method: native select first, then a select2 fallback.
+    const methodOk =
+      (await this.selectNativeOption(page, /payment|method|metode/i, args.method)) ||
+      (await this.tryPickSelect2ByHint(page, /payment|method|metode/i, args.method));
+    if (!methodOk) {
+      throw new DiscoveryError(
+        `Invoice: kontrol payment method tidak ditemukan (dicari "${args.method}"). Kontrol terlihat: ${await this.controlHints(page)}`,
+      );
+    }
+    const amountOk = await this.fillFields(page, /amount|jumlah|nominal/i, String(args.amount), { all: false, last: true });
+    if (!amountOk) {
+      throw new DiscoveryError(`Invoice: field amount tidak ditemukan. Field terlihat: ${await this.fieldList(page)}`);
+    }
+    const savedPay = await this.clickControlIfPresent(page, /^(save|simpan|add|submit)$/i);
+    if (savedPay) {
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+      await page.waitForTimeout(2000);
+    }
+
+    await this.clickControl(page, /^complete[d]?$|^finish$|^selesai(kan)?$/i, 'tombol Complete di Invoice');
+    await page.waitForTimeout(1200);
+    await this.confirmModals(page);
+    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-invoice-completed');
+    const inline = await this.readInlineError(page);
+    if (inline) throw new DataError(`Complete Invoice ditolak Turboly: ${inline}`);
+    await this.verifyStatus(page, /\bCOMPLETED\b/i, 'Selesaikan Invoice');
+    await this.session.noteJobDone();
+  }
+
+  /**
+   * SO edit → Inspections tab → Add Category / Add Inspection rows.
+   * Check & Go default: one category row "Check and Go"; detailed items get
+   * description + feedback (pass/fail) + recommendation.
+   */
+  async fillInspections(serviceOrderUrl: string, items: InspectionItemInput[]): Promise<void> {
+    if (!items.length) return;
+    const page = await this.open(serviceOrderUrl, 'so-inspections');
+
+    // Get into edit mode (button first; /edit URL as fallback).
+    const edited = await this.clickControlIfPresent(page, /^edit$/i);
+    if (edited) {
+      await page.waitForTimeout(2200);
+    } else {
+      const m = /(\/service_orders\/\d+)/.exec(serviceOrderUrl);
+      if (m?.[1]) {
+        await page.goto(`${this.abs(m[1])}/edit`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.waitForTimeout(2500);
+      }
+    }
+
+    // Inspections tab — selmap locator first, generic text find second.
+    let tabOk = false;
+    if (await exists(page, S.tabs.inspections, 2500)) {
+      tabOk = await resolve(page, S.tabs.inspections)
+        .first()
+        .click({ timeout: 6000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+    if (!tabOk) await this.clickControl(page, /inspections?|inspeksi/i, 'tab Inspections di Service Order');
+    await page.waitForTimeout(1200);
+
+    const misses: string[] = [];
+    for (const item of items) {
+      const added =
+        (await this.clickControlIfPresent(page, /add\s*category|tambah\s*kategori/i)) ||
+        (await this.clickControlIfPresent(page, /add\s*inspection|tambah\s*inspeksi/i));
+      if (!added) {
+        throw new DiscoveryError(
+          `Inspections: tombol Add Category/Add Inspection tidak ditemukan. Tombol terlihat: ${await this.buttonList(page)}`,
+        );
+      }
+      await page.waitForTimeout(900);
+      if (item.category && !(await this.fillFields(page, /category|kategori/i, item.category, { all: false, last: true }))) {
+        misses.push(`category "${item.category}"`);
+      }
+      if (item.description && !(await this.fillFields(page, /description|deskripsi|inspection[_\s-]*name/i, item.description, { all: false, last: true }))) {
+        misses.push(`description "${item.description}"`);
+      }
+      if (item.feedback) {
+        const fb =
+          (await this.selectNativeOption(page, /feedback/i, item.feedback, { last: true })) ||
+          (await this.fillFields(page, /feedback/i, item.feedback, { all: false, last: true }));
+        if (!fb) misses.push(`feedback "${item.feedback}"`);
+      }
+      if (item.recommendation && !(await this.fillFields(page, /recommendation|rekomendasi/i, item.recommendation, { all: false, last: true }))) {
+        misses.push(`recommendation "${item.recommendation}"`);
+      }
+    }
+    if (misses.length) {
+      // Nothing irreversible has happened yet (no save) — loud, retry-safe.
+      throw new DiscoveryError(
+        `Inspections: field tidak ditemukan untuk ${misses.join('; ')}. Field terlihat: ${await this.fieldList(page)}`,
+      );
+    }
+
+    await this.clickControl(page, /^(save|simpan)$/i, 'tombol Save Service Order (Inspections)');
+    await page.waitForTimeout(1500);
+    await this.confirmModals(page);
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-so-inspections');
+    const inline = await this.readInlineError(page);
+    if (inline) throw new DataError(`Simpan Inspections ditolak Turboly: ${inline}`);
+    await this.session.noteJobDone();
+  }
+
+  // ── customer registration ────────────────────────────────────────────────
+
+  /**
+   * Customers → Retail Customers → New. Mandatory starred fields + full
+   * address in the bottom address field, Service Tax PPN / "Always use Tax".
+   * `companyName` links the retail customer to a wholesale company (corporate).
+   */
+  async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
+    const page = await this.openFormPage(
+      ['/retail_customers/new', '/customers/new'],
+      '/customers',
+      /new\s*(retail\s*)?customer|add\s*(retail\s*)?customer|\+\s*new/i,
+      'form Retail Customer baru',
+    );
+
+    await this.fillSelectorOrPattern(page, '#customer_name', /customer.*name|^name$|nama/i, args.nama, 'nama customer');
+    await this.fillSelectorOrPattern(page, '#customer_phone', /phone|telepon|hp/i, args.phone, 'nomor HP');
+    // Full address goes in the BOTTOM address field (no area/region granularity).
+    await this.fillSelectorOrPattern(
+      page,
+      '#customer_addresses_attributes_0_address',
+      /address|alamat/i,
+      args.alamat,
+      'alamat',
+      { last: true },
+    );
+
+    if (args.storeTurbolyId) {
+      const storeOk =
+        (await page
+          .selectOption('select[id*="store" i], select[name*="store" i], select[id*="location" i]', { value: args.storeTurbolyId })
+          .then(() => true)
+          .catch(() => false)) || (await this.selectNativeOption(page, /store|location|cabang/i, args.storeTurbolyId));
+      if (!storeOk) {
+        throw new DiscoveryError(
+          `Customer Retail: kontrol Store tidak ditemukan (store id ${args.storeTurbolyId}). Kontrol terlihat: ${await this.controlHints(page)}`,
+        );
+      }
+    }
+
+    // Service Tax: PPN + "Always use Tax" (best-effort; some tenants preset it).
+    await this.selectNativeOption(page, /tax|pajak|ppn/i, 'PPN');
+    await this.checkBoxByLabel(page, /always\s*use\s*tax/i);
+
+    if (args.companyName) {
+      const companyOk =
+        (await this.tryPickSelect2ByHint(page, /company|wholesale|perusahaan/i, args.companyName)) ||
+        (await this.selectNativeOption(page, /company|wholesale|perusahaan/i, args.companyName));
+      if (!companyOk) {
+        throw new DiscoveryError(
+          `Customer Retail: kontrol Company (link ke wholesale "${args.companyName}") tidak ditemukan. Kontrol terlihat: ${await this.controlHints(page)}`,
+        );
+      }
+    }
+
+    await this.snapshot(page, 'flow-cust-retail-presave');
+    await this.clickControl(page, /^(save|simpan|create|submit)$/i, 'tombol Save Customer Retail');
+    await page.waitForTimeout(1500);
+    await this.confirmModals(page);
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-cust-retail-saved');
+
+    return this.readCustomerSaveResult(page, /(retail_customers|customers)\/(\d+)/, 'Customer Retail');
+  }
+
+  /**
+   * Corporate: create the WHOLESALE company FIRST (name, PIC, NPWP, address,
+   * Currency IDR, PPN, sales advisor), then the linked retail customer.
+   */
+  async registerWholesaleCustomer(args: RegisterWholesaleArgs): Promise<RegisterWholesaleResult> {
+    const page = await this.openFormPage(
+      ['/wholesale_customers/new', '/companies/new'],
+      '/wholesale_customers',
+      /new\s*(wholesale\s*)?customer|add\s*(wholesale\s*)?customer|\+\s*new/i,
+      'form Wholesale Customer baru',
+    );
+
+    await this.fillSelectorOrPattern(page, '#customer_name', /company.*name|customer.*name|^name$|nama/i, args.companyName, 'nama perusahaan');
+    await this.fillSelectorOrPattern(page, '#customer_pic', /pic|person[_\s-]*in[_\s-]*charge|contact[_\s-]*person/i, args.picName, 'PIC (Tax info)');
+    await this.fillSelectorOrPattern(page, '#customer_npwp', /npwp|tax[_\s-]*(number|id)/i, args.npwp, 'NPWP');
+    await this.fillSelectorOrPattern(page, '#customer_addresses_attributes_0_address', /address|alamat/i, args.alamat, 'alamat', { last: true });
+
+    await this.selectNativeOption(page, /currency|mata\s*uang/i, 'IDR');
+    await this.selectNativeOption(page, /tax|pajak|ppn/i, 'PPN');
+
+    const advisorOk =
+      (await this.tryPickSelect2ByHint(page, /advisor|sales/i, args.advisorName)) ||
+      (await this.selectNativeOption(page, /advisor|sales/i, args.advisorName));
+    if (!advisorOk) {
+      throw new DiscoveryError(
+        `Customer Wholesale: kontrol Sales Advisor tidak ditemukan ("${args.advisorName}"). Kontrol terlihat: ${await this.controlHints(page)}`,
+      );
+    }
+
+    await this.snapshot(page, 'flow-cust-wholesale-presave');
+    await this.clickControl(page, /^(save|simpan|create|submit)$/i, 'tombol Save Customer Wholesale');
+    await page.waitForTimeout(1500);
+    await this.confirmModals(page);
+    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, 'flow-cust-wholesale-saved');
+
+    const company = await this.readCustomerSaveResult(page, /(wholesale_customers|companies|customers)\/(\d+)/, 'Customer Wholesale');
+    const result: RegisterWholesaleResult = { companyId: company.customerId, companyUrl: company.customerUrl };
+    if (args.retail) {
+      result.retail = await this.registerRetailCustomer({ ...args.retail, companyName: args.companyName });
+    }
+    return result;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Discovery-friendly primitives
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** ensureLoggedIn + goto + settle + clear stray warning modals. */
+  private async open(url: string, tag: string): Promise<Page> {
+    await this.session.ensureLoggedIn();
+    const page = this.session.page_();
+    await page.goto(this.abs(url), { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    await this.dismissModals(page);
+    await this.snapshot(page, `flow-${tag}-open`);
+    return page;
+  }
+
+  private abs(url: string): string {
+    return /^https?:\/\//i.test(url) ? url : `${this.baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+  }
+
+  /**
+   * Direct-URL first, list+button second: navigate to the first candidate path
+   * that renders a real form (a visible text input), else open the list page
+   * and click the "new" control. Loud when neither works.
+   */
+  private async openFormPage(newPaths: string[], listPath: string, newButton: RegExp, what: string): Promise<Page> {
+    await this.session.ensureLoggedIn();
+    const page = this.session.page_();
+    for (const p of newPaths) {
+      await page.goto(this.abs(p), { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await page.waitForTimeout(2200);
+      const looksLikeForm = await page.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type]), textarea'));
+        const visible = inputs.filter((el) => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        const denied = /sorry you can'?t view|not found|doesn'?t exist/i.test(document.body?.innerText ?? '');
+        return visible.length >= 2 && !denied;
+      });
+      if (looksLikeForm) {
+        await this.dismissModals(page);
+        return page;
+      }
+    }
+    await page.goto(this.abs(listPath), { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(2200);
+    await this.dismissModals(page);
+    await this.clickControl(page, newButton, `${what} — tombol New di ${listPath}`);
+    await page.waitForTimeout(2500);
+    return page;
+  }
+
+  /** All visible clickable texts — the payload of every DiscoveryError. */
+  private async visibleButtons(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+      const nodes = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"], [role="tab"]'));
+      const texts = nodes
+        .filter((n) => {
+          const r = (n as HTMLElement).getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        })
+        .map((n) => (((n as HTMLElement).innerText || (n as HTMLInputElement).value || '') as string).trim().replace(/\s+/g, ' '))
+        .filter((t) => t.length > 0 && t.length <= 60);
+      return Array.from(new Set(texts)).slice(0, 60);
+    });
+  }
+
+  private async buttonList(page: Page): Promise<string> {
+    const b = await this.visibleButtons(page);
+    return b.length ? `[${b.join(' | ')}]` : '[TIDAK ADA tombol terlihat]';
+  }
+
+  /** Visible input/textarea identifiers (id/name/placeholder/label). */
+  private async visibleFields(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+      const els = Array.from(document.querySelectorAll('input, textarea, select')) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
+      const hints = els
+        .filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && (el as HTMLInputElement).type !== 'hidden';
+        })
+        .map((el) => {
+          const label = (el.labels && el.labels[0]?.textContent) || '';
+          const ph = (el as HTMLInputElement).placeholder || '';
+          return `${el.tagName.toLowerCase()}#${el.id || '-'}[name=${el.getAttribute('name') || '-'}]${ph ? `(ph:${ph})` : ''}${label ? `(label:${label.trim()})` : ''}`;
+        });
+      return Array.from(new Set(hints)).slice(0, 80);
+    });
+  }
+
+  private async fieldList(page: Page): Promise<string> {
+    const f = await this.visibleFields(page);
+    return f.length ? `[${f.join(' | ')}]` : '[TIDAK ADA field terlihat]';
+  }
+
+  private async controlHints(page: Page): Promise<string> {
+    return `${await this.buttonList(page)} ${await this.fieldList(page)}`;
+  }
+
+  /** Click the first visible control whose text matches — LOUD when missing. */
+  private async clickControl(page: Page, pattern: RegExp, what: string): Promise<void> {
+    const ok = await this.clickControlIfPresent(page, pattern);
+    if (!ok) {
+      throw new DiscoveryError(
+        `${what}: kontrol /${pattern.source}/ tidak ditemukan di ${page.url()}. Tombol terlihat: ${await this.buttonList(page)}`,
+      );
+    }
+  }
+
+  /** Best-effort click by visible text (DOM click bypasses overlay quirks). */
+  private async clickControlIfPresent(page: Page, pattern: RegExp): Promise<boolean> {
+    return page.evaluate(
+      ({ source, flags }) => {
+        const re = new RegExp(source, flags);
+        const nodes = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"], [role="tab"], li a'));
+        const hit = nodes.find((n) => {
+          const r = (n as HTMLElement).getBoundingClientRect();
+          const txt = (((n as HTMLElement).innerText || (n as HTMLInputElement).value || '') as string).trim().replace(/\s+/g, ' ');
+          return r.width > 0 && r.height > 0 && re.test(txt);
+        });
+        if (hit) {
+          (hit as HTMLElement).click();
+          return true;
+        }
+        return false;
+      },
+      { source: pattern.source, flags: pattern.flags },
+    );
+  }
+
+  /** Click EVERY visible matching control once (per-line approve buttons). */
+  private async clickAllControls(page: Page, pattern: RegExp): Promise<number> {
+    return page.evaluate(
+      ({ source, flags }) => {
+        const re = new RegExp(source, flags);
+        const nodes = Array.from(document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]'));
+        let n = 0;
+        for (const el of nodes) {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const txt = (((el as HTMLElement).innerText || (el as HTMLInputElement).value || '') as string).trim().replace(/\s+/g, ' ');
+          if (r.width > 0 && r.height > 0 && re.test(txt)) {
+            (el as HTMLElement).click();
+            n++;
+          }
+        }
+        return n;
+      },
+      { source: pattern.source, flags: pattern.flags },
+    );
+  }
+
+  /**
+   * Fill input(s)/textarea(s) whose id/name/placeholder/label matches.
+   * Fires input+change and (for datepickers) updates the jQuery widget's
+   * internal state so a re-render can't write a stale value back (same fix
+   * as rpaSink.setPickerValue). Returns count filled (all:true) / 1 or 0.
+   */
+  private async fillFields(
+    page: Page,
+    pattern: RegExp,
+    value: string,
+    opts: { all: boolean; last?: boolean } = { all: false },
+  ): Promise<number> {
+    return page.evaluate(
+      ({ source, flags, value, all, last }) => {
+        const re = new RegExp(source, flags);
+        const els = (Array.from(document.querySelectorAll('input, textarea')) as (HTMLInputElement | HTMLTextAreaElement)[]).filter((el) => {
+          const t = (el as HTMLInputElement).type;
+          if (t === 'hidden' || t === 'checkbox' || t === 'radio' || t === 'submit' || t === 'button' || t === 'file') return false;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return false;
+          const label = (el.labels && el.labels[0]?.textContent) || '';
+          const key = `${el.id} ${el.getAttribute('name') ?? ''} ${(el as HTMLInputElement).placeholder ?? ''} ${label}`;
+          return re.test(key);
+        });
+        const targets = all ? els : els.length ? [last ? els[els.length - 1] : els[0]] : [];
+        let n = 0;
+        for (const el of targets) {
+          if (!el) continue;
+          el.value = value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          try {
+            const w = window as unknown as { jQuery?: (e: Element) => { data: (k: string) => unknown; datepicker: (m: string, v: string) => void } };
+            const $el = w.jQuery ? w.jQuery(el) : null;
+            if ($el && $el.data('datepicker')) $el.datepicker('update', value);
+          } catch {
+            /* widget API absent — value+change already set */
+          }
+          n++;
+        }
+        return n;
+      },
+      { source: pattern.source, flags: pattern.flags, value, all: opts.all, last: opts.last ?? false },
+    );
+  }
+
+  /** Specific selector first (proven ids from rpaSink), pattern fallback — LOUD when both miss. */
+  private async fillSelectorOrPattern(
+    page: Page,
+    selector: string,
+    pattern: RegExp,
+    value: string,
+    what: string,
+    opts: { last?: boolean } = {},
+  ): Promise<void> {
+    const direct = await page
+      .fill(selector, value, { timeout: 2500 })
+      .then(() => true)
+      .catch(() => false);
+    if (direct) return;
+    const n = await this.fillFields(page, pattern, value, { all: false, last: opts.last ?? false });
+    if (n === 0) {
+      throw new DiscoveryError(
+        `Field ${what} tidak ditemukan (dicoba ${selector} lalu /${pattern.source}/). Field terlihat: ${await this.fieldList(page)}`,
+      );
+    }
+  }
+
+  /**
+   * Pick an option on a native <select> found by id/name/label hint (or, when
+   * no hinted select exists, ANY select that has a matching option). Option
+   * matched by exact text, then contains, then exact value. Returns false on miss.
+   */
+  private async selectNativeOption(
+    page: Page,
+    hint: RegExp,
+    optionText: string,
+    opts: { last?: boolean } = {},
+  ): Promise<boolean> {
+    return page.evaluate(
+      ({ source, flags, optionText, last }) => {
+        const re = new RegExp(source, flags);
+        const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+        const want = norm(optionText);
+        const all = (Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]).filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        const hinted = all.filter((el) => {
+          const label = (el.labels && el.labels[0]?.textContent) || '';
+          return re.test(`${el.id} ${el.getAttribute('name') ?? ''} ${label}`);
+        });
+        const pool = hinted.length ? hinted : all;
+        const candidates = last ? [...pool].reverse() : pool;
+        for (const sel of candidates) {
+          const options = Array.from(sel.options);
+          const hit =
+            options.find((o) => norm(o.textContent ?? '') === want) ??
+            options.find((o) => norm(o.textContent ?? '').includes(want)) ??
+            options.find((o) => norm(o.value) === want);
+          // Unhinted pool: only accept a select that REALLY has the option.
+          if (!hit) continue;
+          sel.value = hit.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+        return false;
+      },
+      { source: hint.source, flags: hint.flags, optionText, last: opts.last ?? false },
+    );
+  }
+
+  /** Tick a checkbox whose label/name matches (e.g. "Always use Tax"). */
+  private async checkBoxByLabel(page: Page, pattern: RegExp): Promise<boolean> {
+    return page.evaluate(
+      ({ source, flags }) => {
+        const re = new RegExp(source, flags);
+        const boxes = (Array.from(document.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[]).filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        const hit = boxes.find((el) => {
+          const label = (el.labels && el.labels[0]?.textContent) || el.closest('label')?.textContent || '';
+          return re.test(`${el.id} ${el.getAttribute('name') ?? ''} ${label}`);
+        });
+        if (!hit) return false;
+        if (!hit.checked) {
+          hit.click();
+          if (!hit.checked) {
+            hit.checked = true;
+            hit.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        return true;
+      },
+      { source: pattern.source, flags: pattern.flags },
+    );
+  }
+
+  /**
+   * Set the Assignee (mechanic) on every service line of the WO. Tries native
+   * selects hinted assignee/mechanic/technician, then select2 containers with
+   * the same hints. Returns false when NO assignee control was found at all.
+   */
+  private async trySetAssignees(page: Page, assigneeName: string): Promise<boolean> {
+    if (!assigneeName.trim()) return true;
+    let any = false;
+
+    // 1) Native selects (option text contains the mechanic name).
+    const nativeCount = await page.evaluate(
+      ({ name }) => {
+        const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+        const want = norm(name);
+        const sels = (Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]).filter((el) => {
+          const r = el.getBoundingClientRect();
+          const label = (el.labels && el.labels[0]?.textContent) || '';
+          return r.width > 0 && r.height > 0 && /assignee|mechanic|technician|mekanik|teknisi|store[_\s-]*user/i.test(`${el.id} ${el.getAttribute('name') ?? ''} ${label}`);
+        });
+        let n = 0;
+        for (const sel of sels) {
+          const options = Array.from(sel.options);
+          const hit = options.find((o) => norm(o.textContent ?? '') === want) ?? options.find((o) => norm(o.textContent ?? '').includes(want));
+          if (hit) {
+            sel.value = hit.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            n++;
+          }
+        }
+        return n;
+      },
+      { name: assigneeName },
+    );
+    if (nativeCount > 0) any = true;
+
+    // 2) Select2 containers hinted assignee/mechanic — one search+pick each.
+    const containers = page.locator(
+      '.select2-container[id*="assignee" i], .select2-container[class*="assignee" i], ' +
+        '.select2-container[id*="mechanic" i], .select2-container[class*="mechanic" i], ' +
+        '.select2-container[id*="technician" i], .select2-container[id*="store-user" i], .select2-container[id*="store_user" i]',
+    );
+    const cnt = await containers.count();
+    for (let i = 0; i < cnt; i++) {
+      try {
+        await containers.nth(i).locator('.select2-choice, .select2-choices').first().click({ timeout: 4000 });
+        await this.dropPick(page, assigneeName);
+        await page.waitForTimeout(400);
+        any = true;
+      } catch {
+        await page.keyboard.press('Escape').catch(() => {});
+        await page.waitForTimeout(300);
+      }
+    }
+    return any;
+  }
+
+  /** Select2 pick on a container found by id/class hint. False on miss (drop closed). */
+  private async tryPickSelect2ByHint(page: Page, hint: RegExp, query: string): Promise<boolean> {
+    // Hint sources are alternations — probe each alternative as an attr substring.
+    const alts = hint.source.split('|').map((a) => a.replace(/[^a-z0-9_-]/gi, '')).filter(Boolean);
+    for (const alt of alts) {
+      const loc = page.locator(`.select2-container[id*="${alt}" i], .select2-container[class*="${alt}" i]`);
+      if ((await loc.count()) === 0) continue;
+      try {
+        await loc.first().locator('.select2-choice, .select2-choices').first().click({ timeout: 4000 });
+        await this.dropPick(page, query);
+        await page.waitForTimeout(400);
+        return true;
+      } catch {
+        await page.keyboard.press('Escape').catch(() => {});
+        await page.waitForTimeout(300);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Select2-v3 dropdown: type into the open drop, wait out the remote search,
+   * click the first selectable result. (Copied from rpaSink.dropPick — that
+   * class's helper is private and rpaSink must not be edited.)
+   */
+  private async dropPick(page: Page, query: string): Promise<void> {
+    await page.waitForTimeout(400);
+    let ready = false;
+    for (let round = 0; round < 2 && !ready; round++) {
+      const input = page.locator('#select2-drop input, .select2-drop:visible input.select2-input').first();
+      await input.fill('');
+      await page.waitForTimeout(150);
+      await input.fill(query);
+      for (let i = 0; i < 30; i++) {
+        const st = await page.evaluate(() => {
+          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li, .select2-drop .select2-results li'));
+          return {
+            sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length,
+            txt: l.map((x) => (x as HTMLElement).innerText).join(' '),
+          };
+        });
+        if (st.sel > 0) {
+          ready = true;
+          break;
+        }
+        if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`tidak ada hasil Turboly untuk "${query}"`);
+        await page.waitForTimeout(700);
+      }
+    }
+    if (!ready) throw new TransientError(`pencarian Turboly "${query}" timeout (masih searching)`);
+    await page
+      .locator('#select2-drop .select2-results li.select2-result-selectable, .select2-drop .select2-results li.select2-result-selectable')
+      .first()
+      .click({ timeout: 4000 });
+  }
+
+  // ── status / verification ────────────────────────────────────────────────
+
+  /** Candidate workflow-status texts (badges/labels), most-specific first. */
+  private async readStatuses(page: Page): Promise<string[]> {
+    return page.evaluate(() => {
+      const nodes = Array.from(
+        document.querySelectorAll('.label, .badge, [class*="status" i], [class*="state" i], [class*="workflow" i] .active, .active'),
+      );
+      const texts = nodes
+        .filter((n) => {
+          const r = (n as HTMLElement).getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        })
+        .map((n) => ((n as HTMLElement).innerText ?? '').trim().replace(/\s+/g, ' '))
+        .filter((t) => t.length > 0 && t.length <= 40);
+      return Array.from(new Set(texts)).slice(0, 30);
+    });
+  }
+
+  /** Is the expected workflow status visibly active (badge first, body fallback)? */
+  private async statusVisible(page: Page, expected: RegExp): Promise<boolean> {
+    const badges = await this.readStatuses(page);
+    if (badges.some((t) => expected.test(t))) return true;
+    const body = (await page.textContent('body').catch(() => '')) ?? '';
+    return expected.test(body);
+  }
+
+  /** LOUD verify: throws DataError listing the statuses that WERE on the page. */
+  private async verifyStatus(page: Page, expected: RegExp, what: string): Promise<void> {
+    if (await this.statusVisible(page, expected)) return;
+    const inline = await this.readInlineError(page);
+    const badges = await this.readStatuses(page);
+    throw new DataError(
+      `${what}: status /${expected.source}/ tidak terbaca di ${page.url()}` +
+        `${inline ? ` — error Turboly: ${inline}` : ''} — status terlihat: [${badges.join(' | ')}]`,
+    );
+  }
+
+  /** First doc number matching the preferred prefix (SWO/, SRI/), else the first any. */
+  private async captureDocNo(page: Page, prefer: RegExp): Promise<string | null> {
+    const body = (await page.textContent('body').catch(() => '')) ?? '';
+    const all = body.match(/\b[A-Z]{2,4}\/[A-Z0-9]{2,6}\/\d{4,}\b/g) ?? [];
+    return all.find((n) => prefer.test(n)) ?? all[0] ?? null;
+  }
+
+  /** Post-save read for customer registration: URL id or a loud DataError. */
+  private async readCustomerSaveResult(page: Page, urlRe: RegExp, what: string): Promise<RegisterCustomerResult> {
+    const inline = await this.readInlineError(page);
+    const m = urlRe.exec(page.url());
+    const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
+    if (!m && !flashOk) {
+      throw new DataError(
+        `${what}: simpan tidak terkonfirmasi (URL ${page.url()})${inline ? ` — error Turboly: ${inline}` : ''}. ` +
+          `Tombol terlihat: ${await this.buttonList(page)}`,
+      );
+    }
+    if (inline && !m) throw new DataError(`${what} ditolak Turboly: ${inline}`);
+    return { customerId: m?.[2] ?? null, customerUrl: page.url() };
+  }
+
+  // ── modal / error / evidence helpers (rpaSink conventions, copied) ──────
+
+  /** Dismiss any visible warning/info modal by clicking OK/Close/Tutup. */
+  private async dismissModals(page: Page): Promise<void> {
+    for (let i = 0; i < 4; i++) {
+      const clicked = await page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('.modal-scrollable button, .modal-scrollable a, .modal button, .modal a, [role=dialog] button, [role=dialog] a'));
+        const ok = nodes.find((n) => (n as HTMLElement).offsetParent !== null && /^(ok|close|tutup)$/i.test(((n as HTMLElement).textContent ?? '').trim()));
+        if (ok) {
+          (ok as HTMLElement).click();
+          return true;
+        }
+        return false;
+      });
+      if (!clicked) break;
+      await page.waitForTimeout(600);
+    }
+  }
+
+  /** Affirm any confirmation modal (Yes/Continue/Save anyway) — opposite of dismiss. */
+  private async confirmModals(page: Page): Promise<void> {
+    for (let i = 0; i < 3; i++) {
+      const clicked = await page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('.modal-scrollable button, .modal-scrollable a, .modal button, .modal a, [role=dialog] button, [role=dialog] a'));
+        const yes = nodes.find(
+          (n) => (n as HTMLElement).offsetParent !== null && /^(ya|yes|ok|save|simpan|lanjut|lanjutkan|continue|confirm|proceed)$/i.test(((n as HTMLElement).textContent ?? '').trim()),
+        );
+        if (yes) {
+          (yes as HTMLElement).click();
+          return true;
+        }
+        return false;
+      });
+      if (!clicked) break;
+      await page.waitForTimeout(1200);
+    }
+  }
+
+  /** Turboly's Bootstrap-2-era validation banner and friends. */
+  private async readInlineError(page: Page): Promise<string | null> {
+    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
+      const loc = page.locator(sel);
+      if ((await loc.count().catch(() => 0)) > 0) {
+        const t = (await loc.first().innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
+        if (t && !/success/i.test(t)) return t;
+      }
+    }
+    return null;
+  }
+
+  /** Evidence screenshot (PUSH_SCREENSHOT_DIR), never fatal. */
+  private async snapshot(page: Page, name: string): Promise<string | null> {
+    const dir = this.screenshotDir;
+    if (!dir) return null;
+    const path = `${dir}/${name}-${Date.now()}.png`;
+    await page.screenshot({ path, fullPage: true }).catch(() => {});
+    return path;
+  }
+}

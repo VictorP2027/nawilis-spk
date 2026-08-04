@@ -1,0 +1,635 @@
+'use client';
+
+/**
+ * FLOW BOARD — the lifecycle centerpiece.
+ *
+ * Every active document (SPK + Check&Go) is a card in a stage column:
+ *   Intake → Service Order → Work Order → QC → Invoice → Selesai
+ *
+ * Each card shows ONE primary next-step button. Clicking it opens a compact
+ * confirm/params modal, then POSTs /api/flow/action { spkId, action, params }
+ * which enqueues a flow job (executed serially by the RPA worker). The board
+ * polls /api/flow/state every 10s: queued/running jobs render a spinner,
+ * failed jobs render a red error chip with [Coba lagi].
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Types — mirrors /api/flow/state row projection (defensively normalized).
+// ─────────────────────────────────────────────────────────────────────────
+
+interface SoInfo { no: string | null; url: string | null; approved: boolean }
+interface WoInfo { no: string | null; url: string | null; status: string | null }
+interface InvInfo { no: string | null; url: string | null; status: string | null }
+interface PendingJob { action: string; state: string; error: string | null }
+
+interface FlowRow {
+  _id: string;
+  docType: string; // 'SPK_NAWILIS' | 'CHECK_AND_GO' | …
+  plate: string;
+  customer: string;
+  branchCode: string;
+  stage: string;
+  so: SoInfo | null;
+  wo: WoInfo | null;
+  invoice: InvInfo | null;
+  pendingJob: PendingJob | null;
+  total: number;
+}
+
+interface Mechanic { code: string; name: string; role: string | null }
+
+/** Which params UI an action needs. */
+type FieldsKind = 'none' | 'mechanic' | 'complete' | 'qc' | 'payment';
+
+interface ActionDef {
+  action: string;
+  label: string;
+  fields: FieldsKind;
+  /** Short confirm line shown in the modal. */
+  hint: string;
+}
+
+// Action names follow the flowSink method names in snake_case; params follow
+// the flowSink signatures exactly ({assigneeName}, {waktuMinutes, feedback},
+// {nextOdometer, nextServiceDateISO, recommendations}, {method, amount}).
+const ACTIONS: Record<string, ActionDef> = {
+  approve_service_order: { action: 'approve_service_order', label: 'Approve SO', fields: 'none', hint: 'Service Order akan di-approve di Turboly.' },
+  create_work_order: { action: 'create_work_order', label: 'Buat Work Order', fields: 'mechanic', hint: 'Work Order dibuat dari SO yang sudah approved — pilih mekanik.' },
+  start_work_order: { action: 'start_work_order', label: 'Start', fields: 'none', hint: 'Pekerjaan dimulai (WO → IN PROGRESS).' },
+  complete_work_order: { action: 'complete_work_order', label: 'Selesai', fields: 'complete', hint: 'Tandai pekerjaan selesai — isi durasi & temuan.' },
+  qc_approve: { action: 'qc_approve', label: 'QC OK', fields: 'qc', hint: 'QC lolos — isi rekomendasi servis berikutnya.' },
+  create_invoice: { action: 'create_invoice', label: 'Buat Invoice', fields: 'payment', hint: 'Invoice dibuat dari WO yang selesai.' },
+  complete_invoice: { action: 'complete_invoice', label: 'Selesaikan Invoice', fields: 'payment', hint: 'Pembayaran dicatat dan invoice diselesaikan.' },
+  stay_check_only: { action: 'stay_check_only', label: 'Tetap Check Saja', fields: 'none', hint: 'Customer tidak setuju perbaikan — dokumen tetap check-only, semua temuan tersimpan.' },
+};
+
+const PAYMENT_METHODS = ['Cash', 'Transfer', 'QRIS', 'EDC'] as const;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Stage derivation — computed from the doc fields so the column ALWAYS
+// matches the action button (server `stage` shown nowhere it could conflict).
+// ─────────────────────────────────────────────────────────────────────────
+
+type ColKey = 'intake' | 'so' | 'wo' | 'qc' | 'invoice' | 'done';
+
+const COLUMNS: { key: ColKey; label: string }[] = [
+  { key: 'intake', label: 'Intake' },
+  { key: 'so', label: 'Service Order' },
+  { key: 'wo', label: 'Work Order' },
+  { key: 'qc', label: 'QC' },
+  { key: 'invoice', label: 'Invoice' },
+  { key: 'done', label: 'Selesai' },
+];
+
+function woStatus(row: FlowRow): string {
+  return (row.wo?.status ?? '').toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function columnOf(row: FlowRow): ColKey {
+  const inv = (row.invoice?.status ?? '').toLowerCase();
+  if (inv === 'completed') return 'done';
+  if (row.invoice?.no || inv === 'draft') return 'invoice';
+  const ws = woStatus(row);
+  if (ws === 'waiting_qc' || ws === 'waiting_for_qc') return 'qc';
+  if (ws === 'completed') return 'invoice'; // QC lolos — tinggal buat invoice
+  if (row.wo?.no) return 'wo';
+  if (row.so?.no) return 'so';
+  return 'intake';
+}
+
+/** The ONE next action for a card (null = nothing to do / waiting). */
+function nextActionFor(row: FlowRow): ActionDef | null {
+  if (!row.so?.no) return null; // masih menunggu push SO dari pipeline intake
+  if (!row.so.approved) return ACTIONS.approve_service_order!;
+  if (!row.wo?.no) return ACTIONS.create_work_order!;
+  const ws = woStatus(row);
+  if (ws === 'created' || ws === 'waiting' || ws === '') return ACTIONS.start_work_order!;
+  if (ws === 'in_progress') return ACTIONS.complete_work_order!;
+  if (ws === 'waiting_qc' || ws === 'waiting_for_qc') return ACTIONS.qc_approve!;
+  const inv = (row.invoice?.status ?? '').toLowerCase();
+  if (!row.invoice?.no && ws === 'completed') return ACTIONS.create_invoice!;
+  if (inv === 'draft' || (row.invoice?.no && inv !== 'completed')) return ACTIONS.complete_invoice!;
+  return null; // done
+}
+
+/** Small status chip text on the card. */
+function stageChip(row: FlowRow): { text: string; cls: string } {
+  const col = columnOf(row);
+  const ws = woStatus(row);
+  if (col === 'intake') return { text: 'Menunggu SO', cls: 'gray' };
+  if (col === 'so') return row.so?.approved ? { text: 'SO approved', cls: 'green' } : { text: 'SO dibuat', cls: 'blue' };
+  if (col === 'wo') return ws === 'in_progress' ? { text: 'Dikerjakan', cls: 'blue' } : { text: 'WO menunggu', cls: 'gray' };
+  if (col === 'qc') return { text: 'Tunggu QC', cls: 'yellow' };
+  if (col === 'invoice') return row.invoice?.no ? { text: 'Invoice draft', cls: 'yellow' } : { text: 'Siap invoice', cls: 'green' };
+  return { text: 'Selesai', cls: 'green' };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Row normalization — never trust the wire shape blindly (strict + defensive).
+// ─────────────────────────────────────────────────────────────────────────
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' && v !== '' ? v : null;
+}
+function obj(v: unknown): Record<string, unknown> | null {
+  return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+}
+
+function normRow(raw: unknown): FlowRow | null {
+  const r = obj(raw);
+  const id = r ? str(r._id) : null;
+  if (!r || !id) return null;
+  const so = obj(r.so);
+  const wo = obj(r.wo);
+  const inv = obj(r.invoice);
+  const pj = obj(r.pendingJob);
+  return {
+    _id: id,
+    docType: str(r.docType) ?? 'SPK_NAWILIS',
+    plate: str(r.plate) ?? '—',
+    customer: str(r.customer) ?? '—',
+    branchCode: str(r.branchCode) ?? '',
+    stage: str(r.stage) ?? '',
+    so: so ? { no: str(so.no), url: str(so.url), approved: so.approved === true } : null,
+    wo: wo ? { no: str(wo.no), url: str(wo.url), status: str(wo.status) } : null,
+    invoice: inv ? { no: str(inv.no), url: str(inv.url), status: str(inv.status) } : null,
+    pendingJob: pj && str(pj.action) ? { action: str(pj.action)!, state: str(pj.state) ?? 'queued', error: str(pj.error) } : null,
+    total: typeof r.total === 'number' && Number.isFinite(r.total) ? r.total : 0,
+  };
+}
+
+function rp(n: number): string {
+  return `Rp ${n.toLocaleString('id-ID')}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Action modal — one component, field set switches on def.fields.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface ModalProps {
+  row: FlowRow;
+  def: ActionDef;
+  onClose: () => void;
+  onDone: (spkId: string, action: string) => void;
+}
+
+function ActionModal({ row, def, onClose, onDone }: ModalProps) {
+  const [mechanics, setMechanics] = useState<Mechanic[]>([]);
+  const [mechLoading, setMechLoading] = useState(def.fields === 'mechanic');
+  const [assignee, setAssignee] = useState('');
+  const [waktu, setWaktu] = useState('');
+  const [findings, setFindings] = useState('');
+  const [nextOdo, setNextOdo] = useState('');
+  const [nextDate, setNextDate] = useState(() => {
+    // Default reminder: +6 bulan (boleh dikosongkan).
+    const d = new Date(Date.now() + 182 * 24 * 3600 * 1000);
+    return d.toISOString().slice(0, 10);
+  });
+  const [rekomendasi, setRekomendasi] = useState('');
+  const [method, setMethod] = useState<string>('Cash');
+  const [amount, setAmount] = useState(row.total > 0 ? String(row.total) : '');
+  const [posting, setPosting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (def.fields !== 'mechanic') return;
+    let live = true;
+    fetch(`/api/mechanics?branch=${encodeURIComponent(row.branchCode)}`)
+      .then((r) => r.json())
+      .then((d: unknown) => {
+        if (!live) return;
+        const o = obj(d);
+        const list = (o && (Array.isArray(o.mechanics) ? o.mechanics : Array.isArray(o.rows) ? o.rows : [])) as unknown[];
+        const out: Mechanic[] = [];
+        for (const m of list) {
+          const mo = obj(m);
+          if (!mo) continue;
+          const name = str(mo.name);
+          if (!name) continue;
+          out.push({ code: str(mo.code) ?? str(mo.mechanicCode) ?? str(mo._id) ?? name, name, role: str(mo.role) });
+        }
+        setMechanics(out);
+        setMechLoading(false);
+      })
+      .catch(() => { if (live) setMechLoading(false); });
+    return () => { live = false; };
+  }, [def.fields, row.branchCode]);
+
+  const amountNum = Number(amount.replace(/[.\s]/g, '')) || 0;
+  const amountDiff = row.total > 0 && amountNum > 0 && amountNum !== row.total;
+
+  // Per-action validity gate for the submit button.
+  const valid =
+    def.fields === 'none' ? true
+    : def.fields === 'mechanic' ? assignee.trim() !== ''
+    : def.fields === 'complete' ? /^\d+$/.test(waktu.trim()) && Number(waktu) > 0
+    : def.fields === 'qc' ? true // semua input QC opsional (rekomendasi servis berikutnya)
+    : amountNum > 0;
+
+  function buildParams(): Record<string, unknown> {
+    switch (def.fields) {
+      case 'mechanic':
+        return { assigneeName: assignee.trim() };
+      case 'complete':
+        return { waktuMinutes: Number(waktu), feedback: findings.trim() || null };
+      case 'qc':
+        return {
+          nextOdometer: /^\d+$/.test(nextOdo.replace(/[.\s]/g, '')) && nextOdo.trim() !== '' ? Number(nextOdo.replace(/[.\s]/g, '')) : null,
+          nextServiceDateISO: nextDate ? new Date(`${nextDate}T09:00:00+07:00`).toISOString() : null,
+          recommendations: rekomendasi.trim() || null,
+        };
+      case 'payment':
+        return { method, amount: amountNum };
+      default:
+        return {};
+    }
+  }
+
+  async function submit() {
+    if (!valid || posting) return;
+    setPosting(true);
+    setErr(null);
+    try {
+      const res = await fetch('/api/flow/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spkId: row._id, action: def.action, params: buildParams() }),
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setErr(str(body.error) ?? str(body.message) ?? `Gagal (HTTP ${res.status})`);
+        setPosting(false);
+        return;
+      }
+      onDone(row._id, def.action);
+    } catch {
+      setErr('Jaringan bermasalah — coba lagi.');
+      setPosting(false);
+    }
+  }
+
+  return (
+    <div className="ovr-overlay" onClick={onClose}>
+      <div className="ovr-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+        <div className="fb-mtitle">{def.label}</div>
+        <div className="fb-msub">
+          <b>{row.plate}</b> · {row.customer} · {row.branchCode}
+          {row.so?.no ? <> · {row.so.no}</> : null}
+          {row.wo?.no ? <> · {row.wo.no}</> : null}
+          {row.invoice?.no ? <> · {row.invoice.no}</> : null}
+        </div>
+        <div className="fb-mhint">{def.hint}</div>
+
+        {def.fields === 'mechanic' && (
+          <div style={{ marginTop: 12 }}>
+            <div className="label">Mekanik (assignee)</div>
+            {mechLoading ? (
+              <div className="fb-wait"><span className="fb-spin" /> Memuat daftar mekanik…</div>
+            ) : mechanics.length > 0 ? (
+              <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+                <option value="">— pilih mekanik —</option>
+                {mechanics.map((m) => (
+                  <option key={m.code} value={m.name}>{m.name}{m.role ? ` (${m.role})` : ''}</option>
+                ))}
+              </select>
+            ) : (
+              <>
+                <input value={assignee} onChange={(e) => setAssignee(e.target.value)} placeholder="Nama mekanik — harus sama dengan di Turboly" />
+                <div className="warn-note">⚠ Daftar mekanik cabang kosong — ketik nama persis seperti di Turboly.</div>
+              </>
+            )}
+            {!valid && !mechLoading && <div className="req-note">⚠ wajib pilih mekanik</div>}
+          </div>
+        )}
+
+        {def.fields === 'complete' && (
+          <div style={{ marginTop: 12 }}>
+            <div className="label">Waktu pengerjaan (menit)</div>
+            <input value={waktu} onChange={(e) => setWaktu(e.target.value)} inputMode="numeric" placeholder="60" style={!valid ? { borderColor: '#dc2626', maxWidth: 140 } : { maxWidth: 140 }} />
+            {!valid && <div className="req-note">⚠ wajib — angka menit, contoh 60</div>}
+            <div className="label" style={{ marginTop: 12 }}>Temuan / feedback pengerjaan</div>
+            <textarea value={findings} onChange={(e) => setFindings(e.target.value)} rows={3} placeholder="Hasil pengecekan / pekerjaan yang dilakukan" />
+            <button
+              type="button"
+              className="btn ghost"
+              style={{ fontSize: 12, padding: '6px 10px', marginTop: 6 }}
+              onClick={() => setFindings((f) => f || 'From inspection, there was problem with … so we did ….')}
+            >
+              Pakai template temuan
+            </button>
+          </div>
+        )}
+
+        {def.fields === 'qc' && (
+          <div style={{ marginTop: 12 }}>
+            <div className="row">
+              <div>
+                <div className="label">Next odometer (KM)</div>
+                <input value={nextOdo} onChange={(e) => setNextOdo(e.target.value)} inputMode="numeric" placeholder="mis. 55.000" />
+              </div>
+              <div>
+                <div className="label">Next service date</div>
+                <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} />
+              </div>
+            </div>
+            <div className="label" style={{ marginTop: 12 }}>Rekomendasi servis berikutnya</div>
+            <textarea value={rekomendasi} onChange={(e) => setRekomendasi(e.target.value)} rows={3} placeholder="mis. Ganti oli + cek rem pada servis berikutnya" />
+            <div className="ok-sm">Semua kolom opsional — kosongkan jika tidak ada rekomendasi.</div>
+          </div>
+        )}
+
+        {def.fields === 'payment' && (
+          <div style={{ marginTop: 12 }}>
+            <div className="row">
+              <div>
+                <div className="label">Metode pembayaran</div>
+                <select value={method} onChange={(e) => setMethod(e.target.value)}>
+                  {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="label">Jumlah (Rp)</div>
+                <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" placeholder={row.total > 0 ? String(row.total) : 'jumlah'} style={!valid ? { borderColor: '#dc2626' } : undefined} />
+              </div>
+            </div>
+            {!valid && <div className="req-note">⚠ wajib — jumlah pembayaran</div>}
+            {row.total > 0 && <div className="ok-sm">Total dokumen: {rp(row.total)}</div>}
+            {amountDiff && <div className="warn-note">⚠ Jumlah berbeda dari total {rp(row.total)} — pastikan memang benar (diskon/pembulatan).</div>}
+          </div>
+        )}
+
+        {err && <div className="finding BLOCK" style={{ marginTop: 12 }}>{err}</div>}
+
+        <div className="ovr-actions" style={{ marginTop: 16 }}>
+          <button type="button" className="btn ghost" onClick={onClose} disabled={posting}>Batal</button>
+          <button type="button" className="btn primary" style={{ width: 'auto' }} disabled={!valid || posting} onClick={submit}>
+            {posting ? <><span className="fb-spin fb-spin-w" /> Mengirim…</> : def.label}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Card
+// ─────────────────────────────────────────────────────────────────────────
+
+function DocLink({ label, no, url }: { label: string; no: string | null; url: string | null }) {
+  if (!no) return null;
+  return (
+    <span className="fb-doc">
+      <span className="fb-doc-k">{label}</span>{' '}
+      {url ? <a href={url} target="_blank" rel="noreferrer">{no}</a> : <span>{no}</span>}
+    </span>
+  );
+}
+
+function Card({ row, onAction }: { row: FlowRow; onAction: (row: FlowRow, def: ActionDef) => void }) {
+  const chip = stageChip(row);
+  const def = nextActionFor(row);
+  const pj = row.pendingJob;
+  const inFlight = pj !== null && (pj.state === 'queued' || pj.state === 'running');
+  const failed = pj !== null && pj.state === 'failed';
+  const pjLabel = pj ? (ACTIONS[pj.action]?.label ?? pj.action) : '';
+  const isCng = row.docType === 'CHECK_AND_GO';
+  const col = columnOf(row);
+  // Edge case C&G: customer tidak setuju perbaikan → tetap check-only.
+  const showStayCheck = isCng && col === 'wo' && woStatus(row) === 'in_progress' && !inFlight;
+
+  return (
+    <div className="fb-card">
+      <div className="fb-card-top">
+        <span className="fb-plate">{row.plate}</span>
+        <span className={`badge ${isCng ? 'green' : 'blue'}`}>{isCng ? 'C&G' : 'SPK'}</span>
+      </div>
+      <div className="fb-cust">{row.customer}</div>
+      <div className="fb-meta">
+        {row.branchCode}
+        {row.total > 0 ? <> · {rp(row.total)}</> : null}
+        {' '}· <span className={`badge ${chip.cls}`} style={{ fontSize: 10, padding: '1px 6px' }}>{chip.text}</span>
+      </div>
+      <div className="fb-docs">
+        <DocLink label="SO" no={row.so?.no ?? null} url={row.so?.url ?? null} />
+        <DocLink label="WO" no={row.wo?.no ?? null} url={row.wo?.url ?? null} />
+        <DocLink label="INV" no={row.invoice?.no ?? null} url={row.invoice?.url ?? null} />
+      </div>
+
+      {inFlight && (
+        <div className="fb-wait"><span className="fb-spin" /> {pj.state === 'running' ? 'Menjalankan' : 'Antri'}: {pjLabel}…</div>
+      )}
+
+      {failed && (
+        <div className="fb-errchip" title={pj.error ?? undefined}>
+          <div className="fb-errtxt">✗ {pjLabel} gagal{pj.error ? `: ${pj.error}` : ''}</div>
+          <button
+            type="button"
+            className="fb-retry"
+            onClick={() => onAction(row, ACTIONS[pj.action] ?? { action: pj.action, label: pjLabel, fields: 'none', hint: 'Ulangi aksi yang gagal.' })}
+          >
+            Coba lagi
+          </button>
+        </div>
+      )}
+
+      {!inFlight && !failed && def && (
+        <button type="button" className="btn primary fb-act" onClick={() => onAction(row, def)}>{def.label}</button>
+      )}
+      {!inFlight && !failed && !def && col === 'intake' && (
+        <div className="fb-wait" style={{ color: 'var(--muted)' }}><span className="fb-spin" /> Menunggu Service Order dari Turboly…</div>
+      )}
+      {showStayCheck && !failed && (
+        <button type="button" className="btn ghost fb-act-sec" onClick={() => onAction(row, ACTIONS.stay_check_only!)}>Tetap Check Saja</button>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Board page
+// ─────────────────────────────────────────────────────────────────────────
+
+export default function FlowBoard() {
+  const [rows, setRows] = useState<FlowRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [authErr, setAuthErr] = useState(false);
+  const [netErr, setNetErr] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<string>('');
+  const [branchFilter, setBranchFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'spk' | 'cng'>('all');
+  const [q, setQ] = useState('');
+  const [modal, setModal] = useState<{ row: FlowRow; def: ActionDef } | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch('/api/flow/state', { cache: 'no-store' });
+      if (res.status === 401 || res.status === 403) { setAuthErr(true); setLoaded(true); return; }
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const raw = Array.isArray(body.rows) ? body.rows : [];
+      const next: FlowRow[] = [];
+      for (const r of raw) { const n = normRow(r); if (n) next.push(n); }
+      setRows(next);
+      setAuthErr(false);
+      setNetErr(false);
+      setUpdatedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } catch {
+      setNetErr(true);
+    }
+    setLoaded(true);
+  }, []);
+
+  // Poll every 10s (skip while the tab is hidden; refresh on return).
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => { if (!document.hidden) void load(); }, 10_000);
+    const onVis = () => { if (!document.hidden) void load(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVis); };
+  }, [load]);
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
+
+  // After a job is enqueued: optimistic spinner now, real state shortly after.
+  const onActionDone = useCallback((spkId: string, action: string) => {
+    setModal(null);
+    setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, pendingJob: { action, state: 'queued', error: null } } : r)));
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => { void load(); }, 1500);
+  }, [load]);
+
+  const branches = useMemo(() => [...new Set(rows.map((r) => r.branchCode).filter((b) => b !== ''))].sort(), [rows]);
+
+  const filtered = useMemo(() => {
+    const qq = q.trim().toUpperCase();
+    return rows.filter((r) => {
+      if (branchFilter && r.branchCode !== branchFilter) return false;
+      if (typeFilter === 'spk' && r.docType === 'CHECK_AND_GO') return false;
+      if (typeFilter === 'cng' && r.docType !== 'CHECK_AND_GO') return false;
+      if (qq && !r.plate.toUpperCase().includes(qq) && !r.customer.toUpperCase().includes(qq)) return false;
+      return true;
+    });
+  }, [rows, branchFilter, typeFilter, q]);
+
+  const byCol = useMemo(() => {
+    const m: Record<ColKey, FlowRow[]> = { intake: [], so: [], wo: [], qc: [], invoice: [], done: [] };
+    for (const r of filtered) m[columnOf(r)].push(r);
+    return m;
+  }, [filtered]);
+
+  const failedCount = useMemo(() => filtered.filter((r) => r.pendingJob?.state === 'failed').length, [filtered]);
+
+  return (
+    <>
+      <style>{`
+        .fb-page { max-width: 1500px; margin: 0 auto; padding: 12px 14px 30px; }
+        .fb-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .fb-toolbar select, .fb-toolbar input { width: auto; font-size: 13px; padding: 7px 10px; border-radius: 8px; }
+        .fb-tf { display: flex; gap: 4px; }
+        .fb-tf button { font-size: 12px; font-weight: 600; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer; color: #55627a; }
+        .fb-tf button.on { border-color: var(--nawilis); background: var(--nawilis-tint); color: var(--nawilis); }
+        .fb-upd { margin-left: auto; font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+        .fb-upd button { font-size: 12px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; cursor: pointer; }
+        .fb-board { display: flex; gap: 10px; overflow-x: auto; align-items: flex-start; padding-bottom: 20px; -webkit-overflow-scrolling: touch; }
+        .fb-col { flex: 0 0 236px; min-width: 236px; background: #e7ecf5; border: 1px solid #d6ddea; border-radius: 12px; padding: 8px; }
+        .fb-col-h { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase; color: var(--nawilis); padding: 2px 4px 6px; }
+        .fb-count { background: #fff; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; font-weight: 700; padding: 0 8px; color: #55627a; }
+        .fb-empty { border: 1.5px dashed #c4cede; border-radius: 10px; text-align: center; color: #9aa6ba; font-size: 12px; padding: 14px 0; }
+        .fb-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(10,61,143,.07); font-size: 13px; }
+        .fb-card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+        .fb-plate { font-weight: 800; font-size: 14.5px; letter-spacing: .3px; }
+        .fb-cust { font-size: 12.5px; color: #33415c; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fb-meta { font-size: 11px; color: var(--muted); margin-top: 3px; }
+        .fb-docs { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 11.5px; }
+        .fb-docs:empty { display: none; }
+        .fb-doc-k { color: var(--muted); font-weight: 700; font-size: 10px; }
+        .fb-doc a { color: var(--nawilis-2); text-decoration: none; font-weight: 600; }
+        .fb-doc a:hover { text-decoration: underline; }
+        .fb-act { width: 100%; margin-top: 9px; font-size: 13.5px; font-weight: 700; padding: 9px 10px; border-radius: 9px; }
+        .fb-act-sec { width: 100%; margin-top: 6px; font-size: 12px; font-weight: 600; padding: 7px 10px; border-radius: 9px; }
+        .fb-wait { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--nawilis-2); margin-top: 9px; }
+        .fb-spin { width: 13px; height: 13px; flex: none; border: 2px solid #c9d7f0; border-top-color: var(--nawilis-2); border-radius: 50%; display: inline-block; animation: fbspin .8s linear infinite; }
+        .fb-spin-w { border-color: rgba(255,255,255,.35); border-top-color: #fff; vertical-align: -2px; margin-right: 6px; }
+        @keyframes fbspin { to { transform: rotate(360deg); } }
+        .fb-errchip { background: #fdecea; border: 1px solid #f3c1bd; border-radius: 9px; padding: 7px 9px; margin-top: 9px; }
+        .fb-errtxt { color: var(--block); font-size: 11.5px; line-height: 1.4; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .fb-retry { margin-top: 6px; font-size: 12px; font-weight: 700; padding: 5px 12px; border: 1.5px solid var(--block); border-radius: 8px; background: #fff; color: var(--block); cursor: pointer; }
+        .fb-retry:active { background: #fdecea; }
+        .fb-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis); }
+        .fb-msub { font-size: 12.5px; color: #33415c; margin-top: 4px; }
+        .fb-mhint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+      `}</style>
+
+      <div className="topbar">
+        <span className="brand">NAWILIS · FLOW</span>
+        <span className="branch">{filtered.length} dokumen aktif{failedCount > 0 ? ` · ${failedCount} gagal` : ''}</span>
+      </div>
+
+      <div className="fb-page">
+        <div className="fb-toolbar">
+          <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+            <option value="">Semua cabang</option>
+            {branches.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <div className="fb-tf">
+            {([['all', 'Semua'], ['spk', 'SPK'], ['cng', 'C&G']] as const).map(([k, label]) => (
+              <button key={k} type="button" className={typeFilter === k ? 'on' : ''} onClick={() => setTypeFilter(k)}>{label}</button>
+            ))}
+          </div>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari plat / nama…" style={{ minWidth: 160 }} />
+          <div className="fb-upd">
+            {netErr ? <span style={{ color: 'var(--block)' }}>⚠ koneksi bermasalah</span> : updatedAt ? <span>Diperbarui {updatedAt}</span> : null}
+            <button type="button" onClick={() => void load()} title="Muat ulang sekarang">↻</button>
+          </div>
+        </div>
+
+        {authErr && (
+          <div className="card">
+            <div className="finding BLOCK">Sesi berakhir — silakan <a href="/login">login</a> ulang untuk melihat papan flow.</div>
+          </div>
+        )}
+
+        {!authErr && loaded && rows.length === 0 && (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--muted)' }}>
+            Belum ada dokumen aktif. Buat dari <a href="/">form SPK</a> atau <a href="/checkgo">Check &amp; Go</a>.
+          </div>
+        )}
+
+        {!authErr && !loaded && (
+          <div className="fb-wait" style={{ justifyContent: 'center', padding: 30 }}><span className="fb-spin" /> Memuat papan flow…</div>
+        )}
+
+        {!authErr && loaded && rows.length > 0 && (
+          <div className="fb-board">
+            {COLUMNS.map((c) => (
+              <div key={c.key} className="fb-col">
+                <div className="fb-col-h">
+                  <span>{c.label}</span>
+                  <span className="fb-count">{byCol[c.key].length}</span>
+                </div>
+                {byCol[c.key].length === 0 && <div className="fb-empty">—</div>}
+                {byCol[c.key].map((r) => (
+                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} />
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="sync" style={{ marginTop: 6, textAlign: 'center', color: 'var(--muted)' }}>
+          <a href="/">Form SPK</a>{' · '}<a href="/checkgo">Check &amp; Go</a>{' · '}<a href="/customers">Daftar customer</a>{' · '}<a href="/admin">Dashboard</a>
+        </div>
+      </div>
+
+      {modal && (
+        <ActionModal
+          row={modal.row}
+          def={modal.def}
+          onClose={() => setModal(null)}
+          onDone={onActionDone}
+        />
+      )}
+    </>
+  );
+}

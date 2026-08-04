@@ -1,0 +1,52 @@
+name: sync-catalogs
+
+# Hourly catalog re-sync: stores, per-branch advisors, vehicle makes/models
+# mirrored from Turboly's live UI into Mongo. Shares the turboly-push
+# concurrency group so it can NEVER run while a push is in flight (one
+# Turboly session per user). Service SKU mappings are human-confirmed and
+# not touched.
+
+on:
+  schedule:
+    - cron: '10 * * * *'   # hourly at :10 (offset from the */5 push cron ticks)
+  workflow_dispatch: {}
+
+concurrency:
+  group: turboly-push
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build core
+        run: npm run build -w @spk/core
+
+      - name: Sync catalogs from Turboly
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
+          TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
+        run: node scripts/sync-catalogs.mjs

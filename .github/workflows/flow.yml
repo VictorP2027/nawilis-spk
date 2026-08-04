@@ -1,0 +1,69 @@
+name: flow-to-turboly
+
+# Drains the flow_jobs queue: the flow-board actions (Approve SO, Buat Work
+# Order, Start, Selesai, QC OK, Buat/Selesaikan Invoice, customer registration)
+# queued by /api/flow/action are executed serially against Turboly by the
+# one-shot flow worker, which then exits. Instant runs come from the web app's
+# repository_dispatch; the 5-min cron is the safety net for anything missed and
+# for transiently-requeued jobs.
+
+on:
+  repository_dispatch:
+    types: [flow-action]     # fired by /api/flow/action the instant a job is queued
+  schedule:
+    - cron: '*/5 * * * *'    # safety net: requeued/missed jobs
+  workflow_dispatch: {}       # + a manual "Run workflow" button
+
+# Turboly = ONE SESSION PER USER: share the pusher's concurrency group so the
+# flow worker NEVER runs in parallel with push.yml / sync (belt-and-braces on
+# top of the flow_jobs CAS claim).
+concurrency:
+  group: turboly-push
+  cancel-in-progress: false
+
+jobs:
+  flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Install Chromium (for Playwright RPA)
+        run: npx playwright install --with-deps chromium
+
+      - name: Build core
+        run: npm run build -w @spk/core
+
+      - name: Drain flow jobs (Turboly lifecycle steps)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
+          TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
+          PUSH_MODE: rpa
+          PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
+        run: node --import tsx apps/worker/src/flow-once.ts
+
+      - name: Upload RPA screenshots (debug evidence)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-screenshots-${{ github.run_id }}
+          path: .turboly-state/screenshots/
+          if-no-files-found: ignore
+          retention-days: 3
