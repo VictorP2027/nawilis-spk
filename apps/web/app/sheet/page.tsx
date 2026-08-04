@@ -47,6 +47,8 @@ export default function Sheet() {
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
+  const [salesperson, setSalesperson] = useState('');
   const [svcOpts, setSvcOpts] = useState<Record<string, SvcOpt>>({});
 
   // Per-service Turboly variant options (form dropdowns; default pre-selected).
@@ -177,7 +179,7 @@ export default function Sheet() {
     let live = true;
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`)
       .then((r) => r.json())
-      .then((d) => { if (live) setAdvisors(d.advisors ?? []); })
+      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } })
       .catch(() => { if (live) setAdvisors([]); });
     return () => { live = false; };
   }, [branch]);
@@ -250,7 +252,7 @@ export default function Sheet() {
       rekomendasiService: rekom || null,
       estimasiMinutes: estimasi ? Number(estimasi) : null,
       serviceAdvisorName: menerima || null,
-      salespersonName: menerima || null,
+      salespersonName: salesperson.trim() || menerima || null,
       signatures: {
         menyerahkanPresent: !!menyerahkan || !!sigMenyerahkan.current?.get(),
         menyerahkanNamaJelas: menyerahkan || null,
@@ -592,6 +594,11 @@ export default function Sheet() {
             <datalist id="advisor-list">
               {advisors.map((a) => <option key={a.code} value={a.name} />)}
             </datalist>
+            <input list="sales-list" value={salesperson} onChange={(e) => setSalesperson(e.target.value)} placeholder="Salesperson (kosong = advisor)" style={{ marginTop: 4 }} />
+            <datalist id="sales-list">{salespeople.map((a) => <option key={a.code} value={a.name} />)}</datalist>
+            {salespeople.length > 0 && !salesperson.trim() && menerima.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === menerima.trim().toUpperCase()) && (
+              <div className="warn-inline">⚠ Advisor bukan salesperson di cabang ini — pilih salesperson.</div>
+            )}
             {advisorUnknown && <div className="warn-inline">⚠ Nama tidak ada di daftar advisor cabang ini — boleh lanjut; order Turboly akan memakai advisor terdaftar sebagai fallback.</div>}
           </div>
         </div>

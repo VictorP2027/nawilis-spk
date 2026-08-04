@@ -97,7 +97,14 @@ export async function pushQueued(
       const plan = sched
         ? { date: formatDateWib(sched), time: formatTimeWib(sched) }
         : planFromNowWib(30);
-      const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson: advisor, planServiceDate: plan.date, planServiceTime: plan.time });
+      // Salesperson may be a SEPARATE Turboly list (e.g. NWL-BGR): use the form's
+      // salesperson when given, else the advisor name; exact-match only — never
+      // auto-pick (same policy as advisor).
+      const typedSales = (claimed.salespersonName ?? '').trim() || typedAdvisor;
+      const salesperson =
+        mirror.salespersonByName.get(norm(typedSales)) ??
+        { _id: 'unmatched', mechanicCode: 'unmatched', name: typedSales, storeCode: null, role: 'salesperson', syncedAt: '' };
+      const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson, planServiceDate: plan.date, planServiceTime: plan.time });
 
       const res = await branchSinks.withSink(claimed.branchCode, (sink) =>
         sink.pushServiceOrder(payload, { workerId, epoch, approve: config.approveAfterSave, leaseExpiresAt }),

@@ -13,7 +13,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request): Promise<Response> {
   await db();
   const branch = new URL(req.url).searchParams.get('branch');
-  const q = branch ? { role: 'advisor', $or: [{ storeCode: branch }, { storeCode: null }] } : { role: 'advisor' };
-  const rows = await collections.tbMechanics().find(q).sort({ name: 1 }).toArray();
-  return NextResponse.json({ advisors: rows.map((m) => ({ code: m.mechanicCode, name: m.name })) });
+  const scope = branch ? { $or: [{ storeCode: branch }, { storeCode: null }] } : {};
+  const rows = await collections.tbMechanics().find({ ...scope, role: { $in: ['advisor', 'salesperson'] } }).sort({ name: 1 }).toArray();
+  const advisors = rows.filter((m) => m.role === 'advisor').map((m) => ({ code: m.mechanicCode, name: m.name }));
+  // Turboly's Salesperson select is a separate list at some stores: people with
+  // role salesperson, plus advisors known to appear in both lists.
+  const salespeople = rows
+    .filter((m) => m.role === 'salesperson' || (m as { alsoSalesperson?: boolean }).alsoSalesperson)
+    .map((m) => ({ code: m.mechanicCode, name: m.name }));
+  return NextResponse.json({ advisors, salespeople });
 }

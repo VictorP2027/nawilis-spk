@@ -212,6 +212,7 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
         imageDataUrl: input.signatures.menerimaImage ?? undefined,
       },
     },
+    salespersonName: input.salespersonName ?? null,
     authorization: {
       accepted: input.signatures.menyerahkanPresent,
       acceptedBasis: input.signatures.menyerahkanImage ? 'on_glass' : 'wet_signature',

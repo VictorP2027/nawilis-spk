@@ -525,13 +525,57 @@ export class TurbolyFlowRpa {
    * address in the bottom address field, Service Tax PPN / "Always use Tax".
    * `companyName` links the retail customer to a wholesale company (corporate).
    */
+  /** The customer form's address block lives in a collapsed section/tab —
+   * reveal it before filling (fill() requires a visible element). */
+  private async revealAddressSection(page: Page): Promise<void> {
+    const visible = await page
+      .evaluate(() => {
+        const el = document.querySelector('#address_address');
+        const r = el?.getBoundingClientRect();
+        return !!(r && r.width > 0 && r.height > 0);
+      })
+      .catch(() => false);
+    if (visible) return;
+    // "Add Address" opens the address modal; Turboly then requires exactly one
+    // MAIN address ("Main Address must be one").
+    await page.evaluate(() => {
+      const hit = Array.from(document.querySelectorAll('a, button')).find((n) =>
+        /add\s*address/i.test((n as HTMLElement).innerText ?? '') && (n as HTMLElement).offsetParent !== null,
+      );
+      (hit as HTMLElement | undefined)?.click();
+    });
+    await page.waitForTimeout(1500);
+  }
+
+  /** Tick "Main Address" and confirm the address modal (if one is open). */
+  private async finishAddressSection(page: Page): Promise<void> {
+    await page.evaluate(() => {
+      const box = Array.from(document.querySelectorAll('input[type=checkbox]')).find((c) => {
+        const el = c as HTMLInputElement;
+        const lab = (document.querySelector(`label[for="${el.id}"]`)?.textContent ?? el.closest('label')?.textContent ?? '').trim();
+        return /main\s*address|alamat\s*utama|primary/i.test(lab + ' ' + (el.id || el.name || ''));
+      }) as HTMLInputElement | undefined;
+      if (box && !box.checked) box.click();
+      // Confirm the modal (its own Save/Add button, not the page's Save Customer).
+      const modal = document.querySelector('.modal.in, .modal[style*="block"], .modal-scrollable');
+      const btn = modal
+        ? Array.from(modal.querySelectorAll('a, button, input[type=button], input[type=submit]')).find((n) => {
+            const t = ((n as HTMLElement).innerText || (n as HTMLInputElement).value || '').trim();
+            return /^(save|add|simpan|ok|tambah)/i.test(t);
+          })
+        : null;
+      (btn as HTMLElement | null)?.click();
+    });
+    await page.waitForTimeout(1800);
+  }
+
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
     // Dedupe by phone BEFORE registering: a retried job may have already saved
     // this customer (save click landed, then the session died before read-back).
     const dup = await this.findExistingCustomerByPhone(args.phone);
     if (dup) return dup;
     const page = await this.openFormPage(
-      ['/retail_customers/new', '/customers/new'],
+      ['/customers/new'],
       '/customers',
       /new\s*(retail\s*)?customer|add\s*(retail\s*)?customer|\+\s*new/i,
       'form Retail Customer baru',
@@ -539,20 +583,24 @@ export class TurbolyFlowRpa {
 
     await this.fillSelectorOrPattern(page, '#customer_name', /customer.*name|^name$|nama/i, args.nama, 'nama customer');
     await this.fillSelectorOrPattern(page, '#customer_phone', /phone|telepon|hp/i, args.phone, 'nomor HP');
+    // Turboly requires a customer group name mirroring the customer name.
+    await page.fill('#customer_group_name', args.nama).catch(() => {});
     // Full address goes in the BOTTOM address field (no area/region granularity).
+    await this.revealAddressSection(page);
     await this.fillSelectorOrPattern(
       page,
-      '#customer_addresses_attributes_0_address',
-      /address|alamat/i,
+      '#address_address',
+      /^address$|alamat/i,
       args.alamat,
       'alamat',
       { last: true },
     );
+    await this.finishAddressSection(page);
 
     if (args.storeTurbolyId) {
       const storeOk =
         (await page
-          .selectOption('select[id*="store" i], select[name*="store" i], select[id*="location" i]', { value: args.storeTurbolyId })
+          .selectOption('#customer_store_id', { value: args.storeTurbolyId })
           .then(() => true)
           .catch(() => false)) || (await this.selectNativeOption(page, /store|location|cabang/i, args.storeTurbolyId));
       if (!storeOk) {
@@ -562,14 +610,16 @@ export class TurbolyFlowRpa {
       }
     }
 
-    // Service Tax: PPN + "Always use Tax" (best-effort; some tenants preset it).
-    await this.selectNativeOption(page, /tax|pajak|ppn/i, 'PPN');
-    await this.checkBoxByLabel(page, /always\s*use\s*tax/i);
+    // Service Tax: the real control is #customer_service_tax_id (PPN / Always Use Tax).
+    await page.selectOption('#customer_service_tax_id', { label: 'PPN' }).catch(async () => {
+      await page.selectOption('#customer_service_tax_id', { label: 'Always Use Tax' }).catch(() => {});
+    });
 
     if (args.companyName) {
       const companyOk =
-        (await this.tryPickSelect2ByHint(page, /company|wholesale|perusahaan/i, args.companyName)) ||
-        (await this.selectNativeOption(page, /company|wholesale|perusahaan/i, args.companyName));
+        (await page.selectOption('#customer_customer_wholesale_id', { label: args.companyName }).then(() => true).catch(() => false)) ||
+        (await this.tryPickSelect2ByHint(page, /wholesale|company|perusahaan/i, args.companyName)) ||
+        (await this.selectNativeOption(page, /wholesale|company|perusahaan/i, args.companyName));
       if (!companyOk) {
         throw new DiscoveryError(
           `Customer Retail: kontrol Company (link ke wholesale "${args.companyName}") tidak ditemukan. Kontrol terlihat: ${await this.controlHints(page)}`,
@@ -610,19 +660,24 @@ export class TurbolyFlowRpa {
       return result;
     }
     const page = await this.openFormPage(
-      ['/wholesale_customers/new', '/companies/new'],
-      '/wholesale_customers',
+      ['/customers/new?wholesale=1'],
+      '/customers/wholesale',
       /new\s*(wholesale\s*)?customer|add\s*(wholesale\s*)?customer|\+\s*new/i,
       'form Wholesale Customer baru',
     );
 
     await this.fillSelectorOrPattern(page, '#customer_name', /company.*name|customer.*name|^name$|nama/i, args.companyName, 'nama perusahaan');
-    await this.fillSelectorOrPattern(page, '#customer_pic', /pic|person[_\s-]*in[_\s-]*charge|contact[_\s-]*person/i, args.picName, 'PIC (Tax info)');
-    await this.fillSelectorOrPattern(page, '#customer_npwp', /npwp|tax[_\s-]*(number|id)/i, args.npwp, 'NPWP');
-    await this.fillSelectorOrPattern(page, '#customer_addresses_attributes_0_address', /address|alamat/i, args.alamat, 'alamat', { last: true });
+    await page.fill('#customer_group_name', args.companyName).catch(() => {});
+    // PIC = "Contact Fullname"; NPWP = tax_no on this form.
+    await this.fillSelectorOrPattern(page, '#customer_contact_fullname', /contact.*(full)?name|pic|person[_\s-]*in[_\s-]*charge/i, args.picName, 'PIC (Contact Fullname)');
+    await this.fillSelectorOrPattern(page, '#customer_tax_no', /npwp|tax[_\s-]*(no|number|id)/i, args.npwp, 'NPWP');
+    await this.revealAddressSection(page);
+    await this.fillSelectorOrPattern(page, '#address_address', /^address$|alamat/i, args.alamat, 'alamat', { last: true });
+    await this.finishAddressSection(page);
 
     await this.selectNativeOption(page, /currency|mata\s*uang/i, 'IDR');
-    await this.selectNativeOption(page, /tax|pajak|ppn/i, 'PPN');
+    await page.selectOption('#customer_service_tax_id', { label: 'PPN' }).catch(() => {});
+    if (args.advisorName) await page.selectOption('#salesperson-id', { label: args.advisorName }).catch(() => {});
 
     const advisorOk =
       (await this.tryPickSelect2ByHint(page, /advisor|sales/i, args.advisorName)) ||
@@ -800,9 +855,9 @@ export class TurbolyFlowRpa {
     await this.session.ensureLoggedIn();
     const page = this.session.page_();
     const paths = [
-      `/wholesale_customers?search_term=${encodeURIComponent(name.trim())}`,
-      `/wholesale_customers?q=${encodeURIComponent(name.trim())}`,
-      '/wholesale_customers',
+      `/customers/wholesale?search_term=${encodeURIComponent(name.trim())}`,
+      `/customers/wholesale?q=${encodeURIComponent(name.trim())}`,
+      '/customers/wholesale',
     ];
     for (const path of paths) {
       const ok = await page

@@ -53,7 +53,10 @@ for (const ls of liveStores) {
     okStores.push(st._id);
     const seen = new Set();
     for (const a of advisors) { await collections.tbMechanics().updateOne({ _id: `${st._id}:${a.v}` }, { $set: { _id: `${st._id}:${a.v}`, mechanicCode: a.v, name: a.t, storeCode: st._id, role: 'advisor', syncedAt: now } }, { upsert: true }); seen.add(a.v); }
-    for (const p of sales) { if (seen.has(p.v)) continue; await collections.tbMechanics().updateOne({ _id: `${st._id}:${p.v}` }, { $set: { _id: `${st._id}:${p.v}`, mechanicCode: p.v, name: p.t, storeCode: st._id, role: 'salesperson', syncedAt: now } }, { upsert: true }); }
+    for (const p of sales) {
+      if (seen.has(p.v)) { await collections.tbMechanics().updateOne({ _id: `${st._id}:${p.v}` }, { $set: { alsoSalesperson: true } }); continue; }
+      await collections.tbMechanics().updateOne({ _id: `${st._id}:${p.v}` }, { $set: { _id: `${st._id}:${p.v}`, mechanicCode: p.v, name: p.t, storeCode: st._id, role: 'salesperson', syncedAt: now } }, { upsert: true });
+    }
     advTotal += advisors.length;
   } catch (e) {
     console.log(`  ${st._id} advisors ERROR: ${e.message.slice(0, 60)}`);

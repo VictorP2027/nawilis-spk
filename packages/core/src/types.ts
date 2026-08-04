@@ -327,6 +327,9 @@ export interface SpkDoc {
     }>;
   };
 
+  /** Salesperson for Turboly's separate Salesperson field (defaults to advisor). */
+  salespersonName?: string | null;
+
   /** Optional appointment time (ISO). Future value drives Turboly's plan date/time. */
   scheduledAt?: string | null;
 

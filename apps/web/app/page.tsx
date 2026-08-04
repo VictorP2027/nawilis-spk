@@ -67,6 +67,8 @@ export default function Intake() {
   const [models, setModels] = useState<string[]>([]);
   const [makeKnown, setMakeKnown] = useState(false);
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
+  const [salesperson, setSalesperson] = useState('');
   const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
 
   useEffect(() => {
@@ -85,7 +87,7 @@ export default function Intake() {
     if (!branch) { setAdvisors([]); return; }
     let live = true;
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`).then((r) => r.json())
-      .then((d) => { if (live) setAdvisors(d.advisors ?? []); }).catch(() => {});
+      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } }).catch(() => {});
     return () => { live = false; };
   }, [branch]);
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
@@ -184,7 +186,7 @@ export default function Intake() {
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
-      salespersonName: advisor || null,
+      salespersonName: salesperson.trim() || advisor || null,
       signatures: {
         menyerahkanPresent: !!sigCust.current?.get(),
         menyerahkanNamaJelas: nama || null,
@@ -465,6 +467,12 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
+          <div className="label" style={{ marginTop: 12 }}>Salesperson <span style={{ fontWeight: 400, color: '#8a94a6' }}>(kosong = sama dengan advisor)</span></div>
+          <input list="sales-list-q" value={salesperson} onChange={(e) => setSalesperson(e.target.value)} placeholder={salespeople.length ? 'Pilih dari daftar' : '= advisor'} />
+          <datalist id="sales-list-q">{salespeople.map((a) => <option key={a.code} value={a.name} />)}</datalist>
+          {salespeople.length > 0 && !salesperson.trim() && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
+            <div className="warn-note">⚠ Advisor bukan salesperson di cabang ini — pilih salesperson dari daftar, atau order gagal (&quot;Salesperson can&apos;t be blank&quot;).</div>
+          )}
         </div>
 
         {/* Optional fields collapsed behind one toggle — keeps the form neat. */}
