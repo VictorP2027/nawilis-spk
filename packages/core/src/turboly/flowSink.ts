@@ -1113,7 +1113,10 @@ export class TurbolyFlowRpa {
         headers: { accept: 'application/json' },
       })
       .catch(() => null);
-    if (!res) return null;
+    // FAIL CLOSED. Returning null here means "nobody holds this phone", which
+    // authorises a create — so an unanswered lookup became a duplicate customer.
+    // Only a genuine 200 with a customers array may say that.
+    if (!res) throw new TransientError('cek duplikat customer tidak terjawab (jaringan) — dicoba ulang otomatis');
     // A kicked session answers this JSON endpoint with the sign-in HTML — which
     // parses as "no customers found" and would defeat the duplicate guard,
     // registering the SAME company twice. Treat it as transient, never as empty.
@@ -1121,10 +1124,13 @@ export class TurbolyFlowRpa {
     if (/\/users\/sign_in/.test(res.url()) || (res.ok() && !ctype.includes('json'))) {
       throw new TransientError('sesi Turboly ter-kick saat cek duplikat customer — dicoba ulang otomatis');
     }
+    if (res.status() >= 500) {
+      throw new TransientError(`cek duplikat customer dijawab HTTP ${res.status()} oleh Turboly — dicoba ulang otomatis`);
+    }
     try {
-      if (!res.ok()) return null;
+      if (!res.ok()) throw new TransientError(`cek duplikat customer dijawab HTTP ${res.status()} — dicoba ulang otomatis`);
       const j = (await res.json()) as { customers?: Array<{ id?: unknown; name?: unknown; phone?: unknown }> };
-      if (!Array.isArray(j.customers)) return null;
+      if (!Array.isArray(j.customers)) throw new TransientError('cek duplikat customer menjawab bukan JSON customers — dicoba ulang otomatis');
       return j.customers
         .filter((c): c is { id: number; name?: unknown; phone?: unknown } => typeof c.id === 'number')
         .map((c) => ({
@@ -1132,8 +1138,9 @@ export class TurbolyFlowRpa {
           name: typeof c.name === 'string' ? c.name : '',
           phone: typeof c.phone === 'string' ? c.phone : null,
         }));
-    } catch {
-      return null;
+    } catch (e) {
+      if (e instanceof TransientError) throw e;
+      throw new TransientError('cek duplikat customer gagal dibaca — dicoba ulang otomatis');
     }
   }
 
@@ -1182,13 +1189,19 @@ export class TurbolyFlowRpa {
         headers: { accept: 'application/json' },
       })
       .catch(() => null);
-    if (!res) return null;
+    // Same rule as the customer probe: the company create is irreversible and
+    // this is the only guard in front of it, so silence must never read as "new".
+    if (!res) throw new TransientError('cek duplikat perusahaan tidak terjawab (jaringan) — dicoba ulang otomatis');
+    if (res.status() >= 500) throw new TransientError(`cek duplikat perusahaan dijawab HTTP ${res.status()} — dicoba ulang otomatis`);
     const ctype = (res.headers()['content-type'] ?? '').toLowerCase();
     if (/\/users\/sign_in/.test(res.url()) || (res.ok() && !ctype.includes('json'))) {
       throw new TransientError('sesi Turboly ter-kick saat cek duplikat perusahaan — dicoba ulang otomatis');
     }
-    if (!res.ok()) return null;
+    if (!res.ok()) throw new TransientError(`cek duplikat perusahaan dijawab HTTP ${res.status()} — dicoba ulang otomatis`);
     const j = (await res.json().catch(() => null)) as { customers?: Array<{ id?: unknown; name?: unknown }> } | null;
+    if (!j || !Array.isArray(j.customers)) {
+      throw new TransientError('cek duplikat perusahaan menjawab bukan JSON — dicoba ulang otomatis');
+    }
     const hits = (j?.customers ?? [])
       .filter((c) => typeof c.id === 'number' && String(c.name ?? '').trim().toUpperCase().replace(/\s+/g, ' ') === want)
       .sort((a, b) => Number(a.id) - Number(b.id));

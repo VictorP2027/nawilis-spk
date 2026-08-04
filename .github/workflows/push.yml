@@ -16,7 +16,12 @@ on:
     types: [spk-assigned]    # fired by the web app the instant an SPK is assigned → near-instant push
   schedule:
     - cron: '*/5 * * * *'    # safety net: catch anything the instant-trigger missed
-  workflow_dispatch: {}       # + a manual "Run workflow" button
+  workflow_dispatch:
+    inputs:
+      debug_screenshots:
+        description: 'Upload RPA screenshots on failure (contains customer PII — public repo)'
+        type: boolean
+        default: false       # + a manual "Run workflow" button
 
 # Never let two pushes overlap (belt-and-braces on top of the DB lease/CAS).
 concurrency:
@@ -127,8 +132,12 @@ jobs:
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
         run: node --import tsx apps/worker/src/push-once.ts
 
+      # PUBLIC REPO: these are full-page shots of Turboly forms holding a real
+      # customer's name, phone and home address, and an artifact on a public
+      # repo is downloadable by anyone. Only ever upload them when a run FAILED
+      # and someone explicitly asked for the evidence.
       - name: Upload RPA screenshots (debug evidence)
-        if: always()
+        if: failure() && inputs.debug_screenshots == true
         uses: actions/upload-artifact@v4
         with:
           name: rpa-screenshots-${{ github.run_id }}

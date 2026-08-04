@@ -181,7 +181,14 @@ export default function Intake() {
         km,
       },
       complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
-      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: j.price ? Number(j.price) : null, chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
+      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: (() => {
+        // Staff type Rupiah the Indonesian way — "350.000" is three hundred
+        // and fifty thousand. Number("350.000") is 350, so the order went to
+        // Turboly at one thousandth of the price. Strip the separators, as the
+        // sheet form already does.
+        const n = j.price ? Number(String(j.price).replace(/[^\d]/g, '')) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : null;
+      })(), chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
       conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] === 'OK' ? [] : [condQ[c.code]!] })),
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,

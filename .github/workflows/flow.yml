@@ -18,6 +18,10 @@ on:
     - cron: '*/5 * * * *'    # safety net: requeued/missed jobs
   workflow_dispatch:
     inputs:
+      debug_screenshots:
+        description: 'Upload RPA screenshots on failure (contains customer PII — public repo)'
+        type: boolean
+        default: false
       skip_browser:
         description: 'Lewati pemasangan Chromium — HANYA jika semua job di antrean berjalan lewat HTTP (mis. pendaftaran customer). Salah pilih = job gagal permanen.'
         type: boolean
@@ -147,8 +151,12 @@ jobs:
       # Skipped on a browser-free run: there is nothing to collect, and the
       # upload holds the turboly-push concurrency group open a few more seconds
       # while the next registration waits behind it.
+      # PUBLIC REPO: these are full-page shots of Turboly forms holding a real
+      # customer's name, phone and home address, and an artifact on a public
+      # repo is downloadable by anyone. Only ever upload them when a run FAILED
+      # and someone explicitly asked for the evidence.
       - name: Upload RPA screenshots (debug evidence)
-        if: always() && env.SKIP_BROWSER != 'true'
+        if: failure() && inputs.debug_screenshots == true
         uses: actions/upload-artifact@v4
         with:
           name: flow-screenshots-${{ github.run_id }}
