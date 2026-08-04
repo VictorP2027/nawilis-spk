@@ -204,6 +204,15 @@ export class TurbolySession {
       baseURL: this.cfg.baseUrl,
       viewport: { width: 1440, height: 900 },
     });
+    // tsx/esbuild compiles a NAMED function inside page.evaluate into a
+    // __name(...) call — a helper that exists in the bundle, not in the browser.
+    // Every such evaluate therefore threw ReferenceError, and callers that catch
+    // and treat a throw as "no result" silently decided an EXISTING customer or
+    // vehicle was absent, and created it again. Defining the helper page-side
+    // fixes every evaluate at once, including ones not written yet.
+    await this.context.addInitScript({
+      content: 'window.__name = window.__name || function (f) { return f; };',
+    });
     await this.trimSubresources(this.context);
     this.page = await this.context.newPage();
     this.watchForKick(this.page);

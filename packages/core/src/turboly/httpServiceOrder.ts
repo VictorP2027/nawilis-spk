@@ -419,6 +419,9 @@ function blockFrom(html: string, from: number, tag: string): string {
  * failure notice, so it must not be replaced with our paraphrase. .alert-error
  * is the Bootstrap 2 class this tenant renders (3+ renamed it).
  */
+/** Tenant-wide banners that are never a validation result. */
+const STANDING_NOTICE = /email is unverified|verify your email|mohon melakukan pembayaran|payment reminder/i;
+
 function extractFormError(html: string): string | null {
   const scan = (match: (attrs: Attrs) => boolean): string | null => {
     for (const tag of BLOCK_TAGS) {
@@ -427,7 +430,10 @@ function extractFormError(html: string): string | null {
       while ((m = re.exec(html)) !== null) {
         if (!match(attrsOf(m[1] ?? ''))) continue;
         const text = collapse(stripTags(blockFrom(html, re.lastIndex, tag)).replace(/[×✕✖]/g, ' '));
-        if (text && !/^success/i.test(text)) return text.slice(0, 500);
+        // Skip the tenant-wide banners Turboly renders on every page — they live
+        // in the same .alert-error box and reading one as the failure reason hid
+        // a real 422 behind "Email is unverified".
+        if (text && !/^success/i.test(text) && !STANDING_NOTICE.test(text)) return text.slice(0, 500);
       }
     }
     return null;

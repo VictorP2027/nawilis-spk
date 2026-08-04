@@ -35,13 +35,8 @@ export class RpaSink implements ServiceOrderSink {
   /** Extra note lines accumulated during a push (e.g. model-fallback substitutions). */
   private notesExtra: string[] = [];
 
-  /** The customer search term Turboly's prefix search actually matched this push
-   *  — i.e. the spelling the record is stored in, reused by /vehicles/new. */
-  private lastCustomerQuery = '';
-
   async pushServiceOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult> {
     this.notesExtra = [];
-    this.lastCustomerQuery = '';
     let page: Page;
     try {
       await this.session.ensureLoggedIn();
@@ -98,37 +93,12 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     // Verified sequence (proved live 2026-08-01, created SRO/BKS/26080001).
     await page.goto(`${this.baseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
-    // Was a flat 3000ms. The form's HTML is server-rendered but its widgets are
-    // wired by jQuery on ready, so the real precondition is "the store list is
-    // there AND select2 has built the customer box" — normally well under 1s.
-    await this.waitUntil(
-      'form Service Order',
-      () => {
-        const store = document.querySelector('#store-id') as HTMLSelectElement | null;
-        if (!store || !Array.from(store.options).some((o) => o.value)) return false;
-        return !!document.querySelector('#s2id_select2-input-customer');
-      },
-      [],
-      15000,
-    );
+    await page.waitForTimeout(3000);
 
     // 1. Header native <select>s (Select2-enhanced; selectOption drives them).
     await page.selectOption('#order-type', { label: payload.type || 'General' }).catch(() => {});
     await page.selectOption('#store-id', { value: payload.storeTurbolyId });
-    // Was a flat 2800ms "advisors load after store". The form opens with NO store
-    // picked, so this select starts empty (that is why a kicked session leaves it
-    // empty and surfaces as "Service Advisor can't be blank") — meaning the first
-    // valued <option> IS the AJAX landing, typically in a few hundred ms. Soft:
-    // if it never lands, selectByLabelExact's own empty-list path still runs
-    // assertSessionAlive and produces the same honest verdict it does today.
-    await this.settle(
-      () => {
-        const el = document.querySelector('#service-advisor-id') as HTMLSelectElement | null;
-        return !!el && Array.from(el.options).some((o) => o.value);
-      },
-      [],
-      6000,
-    );
+    await page.waitForTimeout(2800); // advisors load after store (AJAX)
 
     await this.selectByLabelExact('#service-advisor-id', payload.serviceAdvisorName);
     await this.selectByLabelExact('#salesperson-id', payload.salespersonName);
@@ -161,29 +131,13 @@ export class RpaSink implements ServiceOrderSink {
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
     const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone) : false;
+    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH effNama="${effNama}" effPhone="${effPhone}" custOk=${custOk} owner=${JSON.stringify(owner)}`);
     if (custOk) {
-      // Was 1200ms. Picking the customer re-scopes the vehicle widget to them;
-      // what the next line needs is that widget present and no longer disabled.
-      await this.settle(
-        () => {
-          const c = document.querySelector('#s2id_select2-input-vehicle');
-          return !!c && !c.classList.contains('select2-container-disabled');
-        },
-        [],
-        1200,
-      );
+      await page.waitForTimeout(1200);
       const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
       if (vehOk) {
         attached = true;
-        // Was 1200ms waiting for a modal that usually never comes. The vehicle
-        // pick is what raises the in-progress-docs warning, so wait for it to
-        // RENDER — and only briefly, because the dismissModals calls before the
-        // tab click and before Save catch a late one anyway.
-        await this.settle(
-          () => Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
-          [],
-          600,
-        );
+        await page.waitForTimeout(1200);
         await this.dismissModals();
       } else {
         throw new NeedAddVehicleError(`customer "${create?.nama}" found but vehicle ${reg} not in Turboly`);
@@ -191,24 +145,7 @@ export class RpaSink implements ServiceOrderSink {
     }
     if (!attached) {
       await this.createCustomerAndVehicle(payload);
-      // Was 1200ms. Turboly auto-selects the customer+vehicle it just created
-      // into the form, and THAT attachment is the precondition — going on
-      // without it saves an order that fails "Customer can't be blank" and books
-      // a human a review ticket, so this one is bounded well above the old guess
-      // rather than at it.
-      await this.settle(
-        () => {
-          const chosen = (id: string) => {
-            const el = document.querySelector('#' + id) as HTMLInputElement | HTMLSelectElement | null;
-            if (el && el.value) return true;
-            const box = document.querySelector('#s2id_' + id + ' .select2-chosen') as HTMLElement | null;
-            return !!box && (box.innerText || '').trim() !== '';
-          };
-          return chosen('select2-input-customer') && chosen('select2-input-vehicle');
-        },
-        [],
-        5000,
-      );
+      await page.waitForTimeout(1200);
       await this.dismissModals();
     }
 
@@ -220,17 +157,13 @@ export class RpaSink implements ServiceOrderSink {
     // PUSH_DEBUG_FORM=1: dump every account/salesperson-ish + non-empty hidden
     // field the SO form would submit — for diffing robot vs manual saves.
     if (process.env.PUSH_DEBUG_FORM) {
-      await page.evaluate((all) => { (window as unknown as { __dumpAll?: boolean }).__dumpAll = all; }, process.env.PUSH_DEBUG_FORM === 'all');
       const dump = await page.evaluate(() => {
         const form = document.querySelector('form[action*="service_order"], form#new_service_order, form') as HTMLFormElement | null;
         if (!form) return ['(no form found)'];
         const out: string[] = [];
         new FormData(form).forEach((v, k) => {
           const val = String(v);
-          // PUSH_DEBUG_FORM=all dumps EVERY field: the filtered view hid the
-          // service-line rows, which are the fields the HTTP path must replicate.
-          const all = (window as unknown as { __dumpAll?: boolean }).__dumpAll === true;
-          if (all || /account|salesperson|advisor|store_id|reference|customer_id|vehicle/i.test(k) || (val !== '' && /hidden/i.test((form.querySelector(`[name="${CSS.escape(k)}"]`) as HTMLInputElement | null)?.type ?? ''))) {
+          if (/account|salesperson|advisor|store_id|reference|customer_id|vehicle/i.test(k) || (val !== '' && /hidden/i.test((form.querySelector(`[name="${CSS.escape(k)}"]`) as HTMLInputElement | null)?.type ?? ''))) {
             out.push(`${k} = ${val.slice(0, 60)}`);
           }
         });
@@ -247,43 +180,16 @@ export class RpaSink implements ServiceOrderSink {
     // count to grow, then verify at the end that every line made it.
     await this.dismissModals();
     await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
-    // Was 700ms. The pane is switched client-side; its Add control appearing is
-    // the signal. Soft — the click below still auto-waits exactly as today.
-    await page.locator('a.btn-add-item').first().waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(700);
     const rowSel = '.select2-container.input-service-product';
     for (const line of payload.serviceLines) {
       const before = await page.locator(rowSel).count();
       await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
-      // Same 5s budget as the old 25×200ms poll, at 60ms resolution: the row is
-      // appended by client JS in ~100ms, so the granularity cost more than the work.
-      const grew = await this.settle(([sel = '', n = '0']) => document.querySelectorAll(sel).length > Number(n), [rowSel, String(before)], 5000);
-      if (!grew) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
-      // Was 400ms. A row can be in the DOM a beat before select2 has rendered its
-      // .select2-choice, and clicking a bare container opens nothing.
-      await this.settle(
-        ([sel = '']) => {
-          const els = document.querySelectorAll(sel);
-          const last = els[els.length - 1];
-          return !!last && !!last.querySelector('.select2-choice');
-        },
-        [rowSel],
-        2000,
-      );
+      for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
+      if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
+      await page.waitForTimeout(400);
       await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
-      // Was 600ms. The pick makes Turboly fill the row from the catalog, and
-      // setLastServiceRow overwrites those same fields — the fill must land FIRST
-      // or the quoted price is silently replaced by the catalog's afterwards.
-      // Capped at the old guess: a row the catalog never touches costs the same.
-      await this.settle(
-        () => {
-          const rows = document.querySelectorAll('tr.additional-line-item-row');
-          const row = rows[rows.length - 1];
-          const d = row?.querySelector('input[name*="[description]"], textarea[name*="[description]"]') as HTMLInputElement | null;
-          return !!d && d.value.trim() !== '';
-        },
-        [],
-        600,
-      );
+      await page.waitForTimeout(600);
       await this.setLastServiceRow(page, line.qty, line.description || line.serviceName, line.priceIncTax);
     }
     const rowCount = await page.locator(rowSel).count();
@@ -309,26 +215,12 @@ export class RpaSink implements ServiceOrderSink {
     }
     await this.dismissModals(); // clear any stray warning before the click can be intercepted
     await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
-    // Was 1500ms. The click either raises the confirm modal or goes straight to
-    // the redirect — wait for whichever of the two actually happens.
-    await this.settle(
-      () => {
-        if (/\/service_orders\/\d+/.test(location.pathname)) return true;
-        return Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null);
-      },
-      [],
-      1500,
-    );
+    await page.waitForTimeout(1500);
     // Because this vehicle may have in-progress docs, Turboly re-prompts a
     // confirmation modal ON save ("Continue?/Yes"). Affirm it, don't dismiss.
     await this.confirmModals();
-    // Was 3500ms + an unbounded networkidle. The save is committed when the URL
-    // becomes the created SO, and refused when the validation banner renders;
-    // racing both means a rejected save reports as fast as a good one. A timeout
-    // here is NOT an error — step 7 reads the page and produces the honest
-    // "save did not confirm" exactly as it does today.
-    await this.committedOrRefused(page, (u) => /\/service_orders\/\d+/.test(u.pathname), 12000);
-    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+    await page.waitForTimeout(3500);
+    await page.waitForLoadState('networkidle').catch(() => {});
     await this.snapshot(page, `${payload.spkId}-aftersave`);
 
     // 7. Result: success redirects to the created SO; else an inline error shows.
@@ -383,22 +275,13 @@ export class RpaSink implements ServiceOrderSink {
           })()`)
           .catch(() => false);
       }
-      // Was 1500ms. Approve either prompts a confirm or lands straight away;
-      // every wait in here stays soft because this method may never throw.
-      await this.settle(
-        () => Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
-        [],
-        1500,
-      );
+      await page.waitForTimeout(1500);
       await this.confirmModals();
-      // Was 2500ms. The read-back two lines down IS the condition, so poll it:
-      // an approve that reflects in 400ms now costs 400ms, not 2.5s.
-      for (let i = 0; i < 10 && !(await this.isApproved(page)); i++) await page.waitForTimeout(250);
-      await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle').catch(() => {});
       if (await this.isApproved(page)) return true;
       await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-      // Was 1800ms. isApproved() needs the detail page's body — wait for that.
-      await this.settle(() => /document\s*number/i.test(document.body?.innerText ?? ''), [], 1800);
+      await page.waitForTimeout(1800);
     }
     await this.snapshot(page, 'approve-not-confirmed').catch(() => null);
     return this.isApproved(page);
@@ -457,33 +340,22 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     // Identity-first query: the ORIGINAL record's exact stored phone (Turboly's
     // search is prefix-based, so only the stored form is guaranteed to match),
-    // else the spelling the SO form's search just matched, else 0-form phone,
-    // else name. A miss here fails the push; it never creates a customer.
+    // else 0-form phone, else name.
     const cr = payload.customer.create;
     const phoneKey = cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '';
-    let q = this.lastCustomerQuery || (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    let q = (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
+      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
       if (orig) q = orig.phone.trim();
     }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
-    // Was a flat 2500ms — the form's own fields are the readiness signal.
-    await this.waitUntil(
-      'form /vehicles/new',
-      () => !!document.querySelector('#vehicle_registration') && !!document.querySelector('#s2id_select2-input-customer'),
-      [],
-      15000,
-    );
+    await page.waitForTimeout(2500);
     await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
-    // KEPT as a sleep: the type change re-scopes the make lookup server-side and
-    // leaves no DOM trace to wait on (on /vehicle_models/new the same change is
-    // observable — it repopulates a native <select> — but here the make widget is
-    // a REMOTE select2 with nothing to watch). Racing it would search makes under
-    // the wrong type and read as "make missing", which creates a duplicate make.
     await page.waitForTimeout(600);
     if (payload.vehicleMake) {
       try {
@@ -497,13 +369,7 @@ export class RpaSink implements ServiceOrderSink {
         throw e;
       }
     }
-    // Was a flat 900ms. pickModelLoose's list is fetched with vehicle_make read
-    // off #vehicle-make-select (see modelLookupPath) — so the thing being waited
-    // for is select2 having written the make id back into it. No make typed means
-    // no id will ever arrive and there is nothing to wait for.
-    if (payload.vehicleMake) {
-      await this.settle(() => !!(document.querySelector('#vehicle-make-select') as HTMLSelectElement | null)?.value, [], 900);
-    }
+    await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
     await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
@@ -519,9 +385,7 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     });
     if (!clicked) throw new DataError('new-vehicle save button not found');
-    // Was 4500ms. The save either redirects off /vehicles/new — including onto
-    // the bare 422 page handled below — or re-renders the form with a banner.
-    await this.committedOrRefused(page, (u) => !/\/vehicles\/new/.test(u.pathname), 12000);
+    await page.waitForTimeout(4500);
     // Registering a plate that exists under ANOTHER customer makes Turboly show
     // a bare "rejected (422)" page on the post-save redirect — but the vehicle
     // IS created (proven live: duplicate registrations are allowed, one per
@@ -572,19 +436,17 @@ export class RpaSink implements ServiceOrderSink {
   }
   private async dropPick(query: string): Promise<void> {
     const page = this.session.page_();
-    // Was 400ms. The drop's search box IS the "it opened" signal, and a click
-    // that opened nothing should fail here rather than 30s later filling void.
-    await page.locator('#select2-drop input').first().waitFor({ state: 'visible', timeout: 8000 });
+    await page.waitForTimeout(400);
     let ready = false;
     for (let round = 0; round < 2 && !ready; round++) {
       // Re-typing the query re-triggers the remote search (round 2 = in-place retry).
-      await page.locator('#select2-drop input').first().fill('');
-      await page.waitForTimeout(150); // irreducible: select2-v3 re-queries on keyup, so the clear needs its own tick
-      await page.locator('#select2-drop input').first().fill(query);
-      for (let i = 0; i < 60; i++) { // same ~21s budget as before, half the granularity
+      await this.typeInSelect2(page, '');
+      await page.waitForTimeout(150);
+      await this.typeInSelect2(page, query);
+      for (let i = 0; i < 30; i++) { // sandbox remote search can take >15s under load
         const st = await page.evaluate(() => {
           const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
-          return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
+          return { sel: l.filter((x) => !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className)).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
         });
         if (st.sel > 0) { ready = true; break; }
         if (st.txt && !/searching/i.test(st.txt)) {
@@ -592,11 +454,11 @@ export class RpaSink implements ServiceOrderSink {
           await this.assertSessionAlive(`cari "${query}"`);
           throw new DataError(`no Turboly match for "${query}"`);
         }
-        await page.waitForTimeout(350);
+        await page.waitForTimeout(700);
       }
     }
     if (!ready) throw new TransientError(`Turboly search for "${query}" timed out (still searching)`);
-    await page.locator('#select2-drop .select2-results li.select2-result-selectable').first().click({ timeout: 4000 });
+    await page.locator('#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').first().click({ timeout: 4000 });
   }
 
   /** Like pickSelect2 but returns false (and closes the drop) instead of throwing on no-match. */
@@ -610,41 +472,39 @@ export class RpaSink implements ServiceOrderSink {
       // goes on to register the plate again.
       if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
-      await this.dropClosed(300);
+      await page.waitForTimeout(300);
       return false;
     }
   }
 
+  /**
+   * Attach to an existing customer ONLY on an exact name match (or a matching
+   * phone) — never a first/partial result. Prevents "FRANK" wrongly attaching to
+   * an existing "FRANKI". Returns false (→ create a new customer) if none matches.
+   */
   /**
    * Resolve the ORIGINAL Turboly customer for a phone via the in-session JSON
    * lookup (`/lookup/customers.json`). Turboly's search is PREFIX-based on the
    * stored string, so every stored form (0812…, 812…, 62812…, +62812…) is
    * queried; among matches the LOWEST id (oldest registration) wins — the
    * original record owns the person. Returns the record's exact stored phone
-   * (the only search term guaranteed to find it), null when every spelling
-   * really answered and nobody holds the number, or undefined when a lookup
-   * hiccuped — a half-answered sweep must not read as "not in Turboly", that
-   * verdict registers the same person twice.
+   * (the only search term guaranteed to find it) or null when the phone is not
+   * in Turboly at all. Throws nothing — a lookup hiccup returns undefined.
    */
   private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
     try {
-      const byId = new Map<number, { id: number; name: string; phone: string }>();
-      let complete = true;
+      const all: Array<{ id: number; name: string; phone: string }> = [];
       for (const t of ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]) {
         const j = await this.lookupJson<{ customers?: Array<{ id: number; name?: unknown; phone?: unknown }> }>(
           `/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`,
           'cari customer asli',
         );
-        if (j === null) { complete = false; continue; } // endpoint misbehaved — not an answer about this phone
-        for (const c of j.customers ?? []) {
-          // The search also matches names/addresses; identity is the phone key.
-          if (canonPhoneKey(String(c.phone ?? '')) !== phoneKey) continue;
-          byId.set(c.id, { id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
-        }
+        for (const c of j?.customers ?? []) all.push({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
       }
-      const mine = [...byId.values()].sort((a, b) => a.id - b.id);
-      if (mine[0]) return { name: mine[0].name, phone: mine[0].phone };
-      return complete ? null : undefined;
+      const mine = all
+        .filter((c) => canonPhoneKey(c.phone) === phoneKey)
+        .sort((a, b) => a.id - b.id);
+      return mine[0] ?? null;
     } catch (e) {
       // "Logged out" is not "phone not in Turboly" — null here would register the
       // same person a second time.
@@ -675,104 +535,112 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
+
   /**
-   * Attach to an existing customer ONLY on a matching phone (or, with no phone,
-   * an exact name) — never a first/partial result, so a new "FRANK" can't take
-   * over an existing "FRANKI". The phone side is format-agnostic; the name side
-   * stays exact. Returns false (→ create a new customer) if none matches.
+   * Type into a select2-v3 remote search box.
+   *
+   * fill() sets .value and fires `input`; select2-v3 only re-queries on KEY
+   * events, so a filled box searches for nothing — the drop stays empty, the
+   * caller reads "no match", and an EXISTING customer is created a second time.
+   * Proven live: the same term found the customer in 3.2s when typed and never
+   * when filled.
    */
+  private async typeInSelect2(page: Page, query: string): Promise<void> {
+    const input = page.locator('#select2-drop input').first();
+    await input.waitFor({ state: 'visible', timeout: 8000 });
+    await input.click({ timeout: 4000 }).catch(() => {});
+    await input.press('Control+A').catch(() => {});
+    await input.press('Meta+A').catch(() => {});
+    await input.press('Backspace').catch(() => {});
+    await page.waitForTimeout(120);
+    await input.type(query, { delay: 25 });
+  }
+
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const page = this.session.page_();
     // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
     // Canonical key: 0223456789 / 223456789 / +62223456789 are all the SAME person.
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
-    // Turboly's search is a PREFIX match on the STORED string, so one spelling
-    // only finds records saved in that spelling: searching "081271777717" missed
-    // "+6281271777717" and we registered a SECOND "DRIVER CORP W3" (4872591)
-    // beside 4872590 — unlinked from its company, holding the car. So try every
-    // spelling: the resolved original's own stored form first, then `phone` as
-    // handed to us (the vehicle owner's stored string when the plate was known),
-    // then the canonical forms.
-    const terms: string[] = [];
-    let origName = '';
+    let query = (phoneKey ? localPhone(phone) : nama || '').trim();
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
-      if (orig === null) return false; // every spelling answered, nobody holds it → create new (stored 0-form)
-      if (orig) { origName = orig.name; terms.push(orig.phone); }
-      terms.push(phone, localPhone(phoneKey), phoneKey, '62' + phoneKey, '+62' + phoneKey);
-    } else {
-      terms.push(nama);
+      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
+      if (orig === null) return false; // phone not in Turboly → create new (stored 0-form)
+      if (orig) query = orig.phone.trim(); // exact stored form — prefix search will find it
     }
-    // Select2 remote search needs ≥3 chars.
-    const queries = [...new Set(terms.map((t) => (t ?? '').trim()).filter((t) => t.length >= 3))];
-    if (!queries.length) return false;
+    if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
-      // Was 400ms — the drop's search box appearing is what that sleep meant.
-      await page.locator('#select2-drop input').first().waitFor({ state: 'visible', timeout: 8000 });
-      for (const query of queries) {
-        // Re-typing in the OPEN drop re-runs the remote search (the same in-place
-        // retry the service-row picker uses); re-clicking the choice would toggle
-        // the drop shut.
-        const input = page.locator('#select2-drop input').first();
-        await input.fill('');
-        await page.waitForTimeout(150); // irreducible: select2-v3 re-queries on keyup, so the clear needs its own tick
-        await input.fill(query);
-        for (let i = 0; i < 36; i++) { // same ~10.8s budget as before, half the granularity
-          const st = await page.evaluate(() => {
-            const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
-            return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
-          });
-          if (st.sel > 0) break;
-          if (st.txt && !/searching|more characters/i.test(st.txt)) break;
-          await page.waitForTimeout(300);
+      await page.waitForTimeout(400);
+      await this.typeInSelect2(page, query);
+      let empties = 0;
+      for (let i = 0; i < 18; i++) {
+        const st = await page.evaluate(() => {
+          // A result row is any <li> that is not one of select2's placeholders.
+          // Requiring the class `select2-result-selectable` looked reasonable and
+          // was FATAL: this build does not set it, so a drop showing the right
+          // customer counted as zero results and the push created a duplicate.
+          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
+          const pick = l.filter((x) => !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className));
+          return { sel: pick.length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
+        });
+        if (st.sel > 0) break;
+        // "No matches found" is NOT a verdict: select2-v3 renders it between
+        // queries while the request is still in flight. Treating the first
+        // sighting as final is what made an existing customer look absent — and
+        // "absent" means create, which means a duplicate. Require it to persist.
+        if (st.txt && !/searching|more characters/i.test(st.txt)) {
+          if (++empties >= 3) break;
+        } else {
+          empties = 0;
         }
-        const idx = await page.evaluate(({ nama, phoneKey, origName }) => {
-          const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-          const canon = (s: string) => { // mirrors canonPhoneKey — page context can't import it
-            let d = s.replace(/\D/g, '');
-            if (d.startsWith('62')) d = d.slice(2);
-            if (d.startsWith('0')) d = d.slice(1);
-            return d;
-          };
-          const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
-          let loose = -1;
-          for (let i = 0; i < lis.length; i++) {
-            const text = (lis[i] as HTMLElement).innerText || '';
-            const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
-            if (phoneKey) {
-              // Identity = phone ONLY, on the canonical key: whichever spelling
-              // the row shows, it is the same person. Containment backs the
-              // token test up because the row also carries address/plate digits.
-              const tokens = text.match(/\+?\d[\d\s.()-]{5,}\d/g) ?? [];
-              if (!tokens.some((t) => canon(t) === phoneKey) && !text.replace(/\D/g, '').includes(phoneKey)) continue;
-              // Twins share the phone; the ORIGINAL (lowest id, resolved from the
-              // JSON lookup) owns the person — prefer it over any later copy.
-              if (origName && norm(name) === norm(origName)) return i;
-              if (loose < 0) loose = i;
-            } else if (nama && norm(name) === norm(nama)) {
-              // No phone typed → EXACT name only, so a new "FRANK" never merges
-              // into an existing "FRANKI".
-              return i;
+        await page.waitForTimeout(600);
+      }
+      if (process.env.PUSH_DEBUG_MATCH) {
+        const dbg = await page.evaluate(() => ({
+          dropVisible: !!document.querySelector('#select2-drop'),
+          inputVal: (document.querySelector('#select2-drop input') as HTMLInputElement | null)?.value ?? '(no input)',
+          rows: Array.from(document.querySelectorAll('#select2-drop .select2-results li')).map((x) => (x as HTMLElement).innerText.replace(/\s+/g, ' ').slice(0, 70)),
+        }));
+        console.log(`MATCH query="${query}" drop=${JSON.stringify(dbg)}`);
+      }
+      // STRING-form evaluate on purpose: a named arrow inside a function-form
+      // page.evaluate is compiled by tsx/esbuild into a __name(...) call that
+      // does not exist in the browser, so the whole callback threw ReferenceError
+      // and the catch below turned it into "no match" — i.e. every returning
+      // customer was created again. A string is never transformed.
+      const idx = (await page.evaluate(
+        `(() => {
+          var want = ${JSON.stringify(phoneKey)};
+          var wantName = ${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\s+/g, ' '))};
+          var lis = Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
+            .filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); });
+          for (var i = 0; i < lis.length; i++) {
+            var text = lis[i].innerText || '';
+            if (want) {
+              if (text.replace(/\\D/g, '').indexOf(want) >= 0) return i;
+            } else if (wantName) {
+              var name = (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
+              if (name === wantName) return i;
             }
           }
-          return loose;
-        }, { nama, phoneKey, origName });
-        if (idx >= 0) {
-          await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
-          await this.dropClosed(500); // was 500ms flat; select2 closes the drop when the pick commits
-          this.lastCustomerQuery = query; // the stored spelling — /vehicles/new hits the same prefix search
-          return true;
-        }
+          return -1;
+        })()`,
+      )) as number;
+      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH idx=${idx}`);
+      if (idx < 0) {
+        // No match here means "create a new customer" — a verdict we may not
+        // reach on a drop that was empty only because we'd been kicked.
+        await this.assertSessionAlive('cari customer');
+        await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false;
       }
-      // No spelling matched, which means "create a new customer" — a verdict we
-      // may not reach on drops that were empty only because we'd been kicked.
-      await this.assertSessionAlive('cari customer');
-      await page.keyboard.press('Escape').catch(() => {}); await this.dropClosed(200); return false;
+      await page.locator('#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').nth(idx).click({ timeout: 4000 });
+      await page.waitForTimeout(500);
+      return true;
     } catch (e) {
       if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
-      await this.dropClosed(300);
+      await page.waitForTimeout(300);
       return false;
     }
   }
@@ -790,18 +658,7 @@ export class RpaSink implements ServiceOrderSink {
       const el = Array.from(document.querySelectorAll('a,button,input')).find((n) => /add new customer/i.test(((n as HTMLElement).textContent || (n as HTMLInputElement).value || '').trim()));
       if (el) (el as HTMLElement).click();
     });
-    // Was a flat 2500ms. The modal rendering with the two fields we fill first is
-    // the condition; bounded so a modal that never opens fails in 15s with a
-    // clear message instead of 30s into a fill on nothing.
-    await this.waitUntil(
-      'modal Add New Customer',
-      () => {
-        const n = document.querySelector('#customer_name') as HTMLElement | null;
-        return !!n && n.offsetParent !== null && !!document.querySelector('#customer_vehicles_attributes_0_registration');
-      },
-      [],
-      15000,
-    );
+    await page.waitForTimeout(2500);
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
@@ -812,9 +669,6 @@ export class RpaSink implements ServiceOrderSink {
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
-    // KEPT as a sleep, same reason as /vehicles/new: the type change re-scopes the
-    // make lookup server-side with no DOM trace to wait on, and searching makes
-    // under the wrong type reads as "make missing" — which creates a duplicate make.
     await page.waitForTimeout(700);
     if (payload.vehicleMake) {
       try {
@@ -827,11 +681,7 @@ export class RpaSink implements ServiceOrderSink {
         throw e;
       }
     }
-    // Same condition as /vehicles/new: pickModelLoose queries with vehicle_make
-    // read off #vehicle-make-select, so wait for select2 to have written it.
-    if (payload.vehicleMake) {
-      await this.settle(() => !!(document.querySelector('#vehicle-make-select') as HTMLSelectElement | null)?.value, [], 900);
-    }
+    await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
     await page.fill('#customer_vehicles_attributes_0_odometer', payload.odometer).catch(() => {});
@@ -851,19 +701,7 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     });
     if (!clicked) throw new DataError('could not find the New Customer save button');
-    // Was a flat 5000ms, and the check below reads "still saving" as "rejected" —
-    // so wait for the modal to actually close, with headroom ABOVE the old guess
-    // rather than at it: a save that lands in 1.5s now costs 1.5s, and one that
-    // takes 6s no longer books a bogus review ticket.
-    await this.settle(
-      () =>
-        !Array.from(document.querySelectorAll('input[class*="turbo-btn-save-cust"]')).some((x) => {
-          const r = (x as HTMLElement).getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        }),
-      [],
-      9000,
-    );
+    await page.waitForTimeout(5000);
 
     // If the modal's save button is still visible, the save was rejected — surface why.
     const stillOpen = await page.evaluate(() =>
@@ -889,14 +727,7 @@ export class RpaSink implements ServiceOrderSink {
     const name = makeName.trim().toUpperCase();
     // 1. Create the make.
     await page.goto(`${this.baseUrl}/vehicle_makes/new`, { waitUntil: 'domcontentloaded' });
-    // Was 2000ms. Either the form rendered or Turboly bounced us for want of the
-    // permission — the URL test right below reads exactly that, so wait for
-    // whichever of the two settles first.
-    await this.settle(
-      () => !!document.querySelector('#vehicle_make_name, input[name="vehicle_make[name]"]') || !/vehicle_makes\/new/.test(location.pathname),
-      [],
-      8000,
-    );
+    await page.waitForTimeout(2000);
     if (!/vehicle_makes\/new/.test(page.url())) {
       throw new DataError(`akun Turboly tidak punya izin membuat Vehicle Make baru ("${name}") — aktifkan izin di Setup → Users & Permissions, atau tambah manual`);
     }
@@ -906,9 +737,7 @@ export class RpaSink implements ServiceOrderSink {
     // A vehicle-type select may exist — pick Car when present.
     await page.selectOption('#vehicle-type-select, select[name*="vehicle_type"]', { label: 'Car' }).catch(() => {});
     await page.locator('input[name=commit], input[type=submit]').first().click();
-    // Was 2500ms; the URL test below is the verdict, so wait for the redirect or
-    // for the form to come back with its banner.
-    await this.committedOrRefused(page, (u) => !/vehicle_makes\/new/.test(u.pathname), 10000);
+    await page.waitForTimeout(2500);
     if (/vehicle_makes\/new/.test(page.url())) {
       const err = await this.readInlineError(page).catch(() => null);
       throw new DataError(`gagal membuat merk "${name}"${err ? `: ${err}` : ''}`);
@@ -917,28 +746,15 @@ export class RpaSink implements ServiceOrderSink {
     // 2. A brand-new make has zero models — create a first model (the typed tipe).
     const modelName = (firstModel || 'STANDARD').trim().toUpperCase();
     await page.goto(`${this.baseUrl}/vehicle_models/new`, { waitUntil: 'domcontentloaded' });
-    // Was 2200ms — the two selects this function drives are the readiness signal.
-    await this.settle(() => !!document.querySelector('#vehicle-type-select') && !!document.querySelector('#vehicle-make-select'), [], 8000);
+    await page.waitForTimeout(2200);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
-    // Was 1200ms. Here the type change IS observable: it reloads the native make
-    // <select> by AJAX. Wait for the make we just created to be IN that list —
-    // which also stops us selecting out of the pre-change list.
-    await this.settle(
-      ([want = '']) => {
-        const el = document.querySelector('#vehicle-make-select') as HTMLSelectElement | null;
-        return !!el && Array.from(el.options).some((o) => o.text.trim().toUpperCase() === want);
-      },
-      [name],
-      6000,
-    );
+    await page.waitForTimeout(1200);
     const picked = await page.selectOption('#vehicle-make-select', { label: name }).then(() => true).catch(() => false);
     if (picked) {
-      // Was 400ms; the model-name input is what the next line fills.
-      await page.locator('#vehicle_model_name').first().waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
+      await page.waitForTimeout(400);
       await page.fill('#vehicle_model_name', modelName).catch(() => {});
       await page.locator('input[name=commit], input[type=submit]').first().click().catch(() => {});
-      // Was 2500ms; the URL test below is the verdict.
-      await this.committedOrRefused(page, (u) => !/vehicle_models\/new/.test(u.pathname), 10000);
+      await page.waitForTimeout(2500);
       if (!/vehicle_models\/new/.test(page.url())) this.notesExtra.push(`Model baru dibuat: ${name} ${modelName}`);
     }
   }
@@ -973,20 +789,17 @@ export class RpaSink implements ServiceOrderSink {
     }
     // Poll: the model list is a remote fetch — "Searching…" until it lands.
     let items: string[] = [];
-    // The head start before the first read is deliberate and stays: the drop we
-    // just cleared is still showing the FAILED search's results, and reading it
-    // too early adopts them. Halved, not removed — same ~8s budget below.
-    for (let i = 0; i < 32; i++) {
-      await page.waitForTimeout(250);
+    for (let i = 0; i < 16; i++) {
+      await page.waitForTimeout(500);
       const st = await page.evaluate(() => {
         const lis = Array.from(document.querySelectorAll('.select2-drop .select2-results li, #select2-drop .select2-results li'));
         return {
           searching: lis.some((l) => l.classList.contains('select2-searching')),
-          texts: lis.filter((l) => l.classList.contains('select2-result-selectable')).map((l) => (l as HTMLElement).innerText.trim()),
+          texts: lis.filter((l) => !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(l.className)).map((l) => (l as HTMLElement).innerText.trim()),
         };
       });
       if (!st.searching && st.texts.length) { items = st.texts; break; }
-      if (!st.searching && i > 7) break; // resolved to empty — same ~2s grace as the old i>3 at 500ms
+      if (!st.searching && i > 3) break; // resolved to empty
     }
     if (!items.length) {
       // This is where a kicked session became a permanent verdict: the drop is
@@ -1010,8 +823,8 @@ export class RpaSink implements ServiceOrderSink {
       if (score > bestScore) { bestScore = score; bestIdx = i; }
     });
     const label = items[bestIdx] ?? items[0]!;
-    await page.locator('.select2-drop .select2-results li.select2-result-selectable, #select2-drop .select2-results li.select2-result-selectable').nth(bestIdx).click({ timeout: 4000 });
-    await this.dropClosed(400); // was 400ms flat
+    await page.locator('.select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results), #select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').nth(bestIdx).click({ timeout: 4000 });
+    await page.waitForTimeout(400);
     this.notesExtra.push(q ? `Tipe diketik "${q}" tidak ada di katalog — model paling mirip dipakai: ${label}` : `Tipe kosong — model Turboly dipakai: ${label}`);
   }
 
@@ -1020,13 +833,11 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     const q = query.trim(); // a trailing space can hang Turboly's remote search forever
     await page.locator(`#${containerId} .select2-choice, #${containerId} .select2-choices, #${containerId}`).first().click({ timeout: 8000 });
-    const dropInput = page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first();
-    // Was 400ms — the drop's search box appearing is what that sleep meant.
-    await dropInput.waitFor({ state: 'visible', timeout: 8000 });
-    await dropInput.fill(q);
-    const results = '.select2-drop:visible .select2-results li.select2-result-selectable, #select2-drop:visible .select2-results li.select2-result-selectable';
+    await page.waitForTimeout(400);
+    await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(q);
+    const results = '.select2-drop:visible .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results), #select2-drop:visible .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)';
     let found = false;
-    for (let i = 0; i < 40; i++) { // same ~10s budget as before, half the granularity
+    for (let i = 0; i < 20; i++) {
       if ((await page.locator(results).count()) > 0) { found = true; break; }
       const txt = await page.locator('.select2-drop:visible .select2-results, #select2-drop:visible .select2-results').first().innerText().catch(() => '');
       if (txt && !/searching|loading|more characters/i.test(txt)) {
@@ -1035,12 +846,12 @@ export class RpaSink implements ServiceOrderSink {
         await this.assertSessionAlive(`cari "${q}"`);
         throw new DataError(`no Turboly match for "${q}"`);
       }
-      await page.waitForTimeout(250);
+      await page.waitForTimeout(500);
     }
     // Search never resolved (stuck "Searching…") — a data/timeout condition, not a broken page.
     if (!found) throw new TransientError(`Turboly search for "${q}" returned no results (timed out)`);
     await page.locator(results).first().click({ timeout: 5000 });
-    await this.dropClosed(500); // was 500ms flat; the drop closing is the pick committing
+    await page.waitForTimeout(500);
   }
 
   /** Dismiss any visible Turboly warning/info modal (e.g. in-progress-docs) by clicking OK. */
@@ -1056,13 +867,7 @@ export class RpaSink implements ServiceOrderSink {
         return false;
       });
       if (!clicked) break;
-      // Was 600ms. Bootstrap fades the modal out; its disappearance is the
-      // condition, and a stacked second modal still costs what it used to.
-      await this.settle(
-        () => !Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
-        [],
-        600,
-      );
+      await page.waitForTimeout(600);
     }
   }
 
@@ -1077,14 +882,7 @@ export class RpaSink implements ServiceOrderSink {
         return false;
       });
       if (!clicked) break;
-      // Was 1200ms. Affirming closes the modal and often submits, so the modal
-      // going away — or the navigation destroying the context, which resolves
-      // this the same way — is the signal.
-      await this.settle(
-        () => !Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
-        [],
-        1200,
-      );
+      await page.waitForTimeout(1200);
     }
   }
 
@@ -1145,17 +943,10 @@ export class RpaSink implements ServiceOrderSink {
           await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
           navOk = true;
         } catch {
-          await page.waitForTimeout(1500); // backoff between failed navigations, not a readiness guess
+          await page.waitForTimeout(1500);
         }
       }
-      // Was 1500ms. readbackFromDetail reads #service_order_reference_no off this
-      // page; wait for the page to actually carry it, with headroom — a read-back
-      // that fires early reports a real Service Order as unverified.
-      await this.settle(
-        () => !!document.querySelector('#service_order_reference_no') || /document\s*number/i.test(document.body?.innerText ?? ''),
-        [],
-        6000,
-      );
+      await page.waitForTimeout(1500);
       return this.readbackFromDetail(page, doc);
     }
 
@@ -1244,69 +1035,6 @@ export class RpaSink implements ServiceOrderSink {
   // ── helpers ──────────────────────────────────────────────────────────────
 
   /**
-   * Bounded wait for a page condition, in place of a fixed sleep.
-   *
-   * On timeout it throws a PLAIN Error deliberately: classifyFailure() then runs
-   * its kicked-session and inline-error probes exactly as it did when the NEXT
-   * Playwright action used to time out here instead — same failure class as
-   * today, minus the 30s default it burned getting there. A hang is worse than a
-   * sleep, so every one of these is capped.
-   */
-  private async waitUntil(what: string, fn: (a: string[]) => boolean, args: string[], timeoutMs: number): Promise<void> {
-    try {
-      const h = await this.session.page_().waitForFunction(fn, args, { timeout: timeoutMs, polling: 60 });
-      await h.dispose().catch(() => {});
-    } catch {
-      throw new Error(`Turboly UI belum siap: ${what} (>${timeoutMs}ms)`);
-    }
-  }
-
-  /**
-   * Never-throws variant, for the sleeps that were only ever optimistic: the
-   * step after them already carries the real guard (a select2 poll, the
-   * stillOpen check, the inline-error read), so a condition that never holds
-   * must degrade to "carry on", not invent a new failure class. Capped at the
-   * sleep it replaces unless noted, which makes the worst case exactly today's
-   * cost and the common case the truth.
-   */
-  private async settle(fn: (a: string[]) => boolean, args: string[], timeoutMs: number): Promise<boolean> {
-    return this.session
-      .page_()
-      .waitForFunction(fn, args, { timeout: timeoutMs, polling: 60 })
-      .then(async (h) => {
-        await h.dispose().catch(() => {});
-        return true;
-      })
-      .catch(() => false);
-  }
-
-  /** A select2 pick/Escape has committed when the drop is gone — that, not a
-   *  clock, is what the 300–500ms sleeps after every result click were for. */
-  private async dropClosed(capMs: number): Promise<boolean> {
-    return this.settle(
-      () => !Array.from(document.querySelectorAll('#select2-drop, .select2-drop')).some((d) => (d as HTMLElement).offsetParent !== null),
-      [],
-      capMs,
-    );
-  }
-
-  /** Either the navigation the click was supposed to cause has landed, or the
-   *  page came back with a validation banner. Racing both means a REJECTED save
-   *  reports as fast as a good one instead of waiting out the optimistic cap.
-   *  Only a banner that appears AFTER the click counts: one already on the page
-   *  would end the wait early and report a save still in flight as failed — and
-   *  retrying a save that actually committed is a SECOND Service Order. Both
-   *  branches swallow their own timeout, so the loser of the race can never
-   *  surface as an unhandled rejection. */
-  private async committedOrRefused(page: Page, urlGone: (u: URL) => boolean, capMs: number): Promise<void> {
-    const banners = '.alert-error, .alert-danger, #error_explanation';
-    const before = await page.evaluate((sel) => document.querySelectorAll(sel).length, banners).catch(() => 0);
-    const moved = page.waitForURL(urlGone, { timeout: capMs }).catch(() => false);
-    const refused = this.settle(([sel = '', n = '0']) => document.querySelectorAll(sel).length > Number(n), [banners, String(before)], capMs);
-    await Promise.race([moved, refused]);
-  }
-
-  /**
    * Turboly = ONE SESSION PER USER, and a kicked session answers the /lookup/*
    * JSON endpoints with the SIGN-IN HTML instead of JSON. Parsed as "no
    * results", that became a confident PERMANENT data verdict — TOYOTA / Avanza
@@ -1377,9 +1105,13 @@ export class RpaSink implements ServiceOrderSink {
     // "Can't create Service Order: Error — Service Advisor can't be blank".
     for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
       const loc = page.locator(sel);
-      if ((await loc.count()) > 0) {
-        const t = (await loc.first().innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
-        if (t && !/success/i.test(t)) return t;
+      const n = await loc.count();
+      for (let i = 0; i < n; i++) {
+        // Turboly renders tenant-wide banners ("Email is unverified") in the same
+        // .alert-error box as validation output; taking the first hit reported
+        // that as the reason a save failed and hid the real cause.
+        const t = (await loc.nth(i).innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
+        if (t && !/success/i.test(t) && !/email is unverified|verify your email|mohon melakukan pembayaran/i.test(t)) return t;
       }
     }
     return null;

@@ -32,10 +32,12 @@ export async function selectTypeahead(page: Page, ta: Typeahead, query: string, 
   // Some widgets reuse the trigger as the search box; others open a separate one.
   const search = resolve(page, ta.search);
   const searchBox = (await search.count()) > 0 ? search : trigger;
-  await searchBox.fill(query, { timeout }).catch(async () => {
-    await searchBox.click();
-    await searchBox.type(query, { delay: 20 });
-  });
+  // Type, never fill: select2-v3 re-queries on KEY events only, so a filled box
+  // searches for nothing and the caller concludes the record does not exist.
+  await searchBox.click({ timeout }).catch(() => {});
+  await searchBox.press('Control+A').catch(() => {});
+  await searchBox.press('Backspace').catch(() => {});
+  await searchBox.type(query, { delay: 20 });
 
   const option = resolve(page, ta.optionByText(query));
   await option.first().click({ timeout });
