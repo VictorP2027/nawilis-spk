@@ -677,14 +677,18 @@ export class TurbolyFlowRpa {
 
     await this.selectNativeOption(page, /currency|mata\s*uang/i, 'IDR');
     await page.selectOption('#customer_service_tax_id', { label: 'PPN' }).catch(() => {});
-    if (args.advisorName) await page.selectOption('#salesperson-id', { label: args.advisorName }).catch(() => {});
-
-    const advisorOk =
-      (await this.tryPickSelect2ByHint(page, /advisor|sales/i, args.advisorName)) ||
-      (await this.selectNativeOption(page, /advisor|sales/i, args.advisorName));
-    if (!advisorOk) {
-      throw new DiscoveryError(
-        `Customer Wholesale: kontrol Sales Advisor tidak ditemukan ("${args.advisorName}"). Kontrol terlihat: ${await this.controlHints(page)}`,
+    // "* Salesperson" (select#salesperson-id) is REQUIRED on this form. Match the
+    // requested name exactly; if it isn't in the list, fail with the real options
+    // instead of silently crediting the wrong person.
+    const salesOk = args.advisorName
+      ? await page.selectOption('#salesperson-id', { label: args.advisorName }).then(() => true).catch(() => false)
+      : false;
+    if (!salesOk) {
+      const opts = await page
+        .$$eval('#salesperson-id option', (os) => os.map((o) => (o.textContent ?? '').trim()).filter(Boolean).slice(0, 12))
+        .catch(() => [] as string[]);
+      throw new DataError(
+        `Customer Wholesale: Salesperson "${args.advisorName || '(kosong)'}" tidak ada di daftar Turboly. Pilihan: ${opts.join(', ') || '(kosong)'}`,
       );
     }
 
