@@ -830,6 +830,47 @@ function productLookupUrls(page: string, rowTemplate: string): string[] {
   return out.slice(0, 6);
 }
 
+/**
+ * The store's users (advisors/salespeople) as Turboly's own form JS loads them:
+ * the select ships EMPTY in the HTML and is populated from this endpoint once a
+ * store is chosen. Best-effort — an unreachable endpoint just leaves the caller
+ * to supply ids, and never silently picks somebody.
+ */
+async function fetchStoreUsers(
+  cfg: HttpServiceOrderConfig,
+  cookie: string,
+  storeId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/lookup/store_users.json?store_id=${encodeURIComponent(storeId)}&context=ServiceOrder`;
+  const res = await fetch(url, { headers: { cookie, accept: 'application/json' } }).catch(() => null);
+  if (!res || !res.ok) return [];
+  const ctype = (res.headers.get('content-type') ?? '').toLowerCase();
+  if (!ctype.includes('json')) return [];
+  const j = (await res.json().catch(() => null)) as unknown;
+  const rows = Array.isArray(j)
+    ? j
+    : ((j as { users?: unknown[]; store_users?: unknown[]; results?: unknown[] })?.users ??
+       (j as { store_users?: unknown[] })?.store_users ??
+       (j as { results?: unknown[] })?.results ??
+       []);
+  // Turboly answers with select2 PAIRS — [["DEVI FITRIANI", 21797], …] — not
+  // objects; an object-shaped parser reads that as an empty list and then
+  // refuses to save because "the advisor is not in the list".
+  return (rows as unknown[])
+    .map((row) => {
+      if (Array.isArray(row)) {
+        const [a, b] = row as [unknown, unknown];
+        return { id: String(b ?? ''), name: String(a ?? '') };
+      }
+      const r = row as Record<string, unknown>;
+      return {
+        id: String(r['id'] ?? r['value'] ?? ''),
+        name: String(r['name'] ?? r['text'] ?? r['full_name'] ?? ''),
+      };
+    })
+    .filter((r) => r.id && r.name);
+}
+
 /** Override a field. set() collapses Rails' hidden-companion pair to one value. */
 function setField(body: URLSearchParams, name: string, value: string): void {
   body.set(name, value);
@@ -839,7 +880,7 @@ function setField(body: URLSearchParams, name: string, value: string): void {
  * Every header field the RPA fills, by the ids it proved live. Order-of-truth:
  * the id locates the control, the control tells us the POST name.
  */
-function applyHeader(form: OrderForm, payload: TurbolyServiceOrderPayload, cfg: HttpServiceOrderConfig, parties: ServiceOrderParties, notes: string): void {
+async function applyHeader(form: OrderForm, payload: TurbolyServiceOrderPayload, cfg: HttpServiceOrderConfig, parties: ServiceOrderParties, notes: string, cookie: string): Promise<void> {
   const store = ctlFor(form, 'store-id', /\[store_id\]$/);
   if (!store?.attrs['name']) throw new DataError(`${WHAT}: kontrol Store tidak ada di form Turboly`);
   const storeOpts = optionsOf(store.inner);
@@ -858,8 +899,11 @@ function applyHeader(form: OrderForm, payload: TurbolyServiceOrderPayload, cfg: 
     if (opt) setField(form.body, type.attrs['name'], opt.value);
   }
 
-  applyPerson(form, 'service-advisor-id', /\[(service_advisor_id|advisor_id)\]$/, payload.serviceAdvisorName, cfg.serviceAdvisorId, 'Service Advisor');
-  applyPerson(form, 'salesperson-id', /\[salesperson_id\]$/, payload.salespersonName, cfg.salespersonId, 'Salesperson');
+  // The store's user list is AJAX, so the fetched HTML has an EMPTY advisor
+  // select — the same endpoint Turboly's own JS calls fills it.
+  const storeUsers = await fetchStoreUsers(cfg, cookie, payload.storeTurbolyId);
+  applyPerson(form, 'service-advisor-id', /\[(service_advisor_id|advisor_id)\]$/, payload.serviceAdvisorName, cfg.serviceAdvisorId, 'Service Advisor', storeUsers);
+  applyPerson(form, 'salesperson-id', /\[salesperson_id\]$/, payload.salespersonName, cfg.salespersonId, 'Salesperson', storeUsers);
 
   // The Select2 pickers post ids, not names — these are the hidden inputs behind
   // #s2id_select2-input-customer / #s2id_select2-input-vehicle.
@@ -883,14 +927,19 @@ function applyHeader(form: OrderForm, payload: TurbolyServiceOrderPayload, cfg: 
  * then only an id supplied by the caller (tb_mechanics) can fill it. Never
  * auto-pick a first option: the wrong advisor gets the sales credit.
  */
-function applyPerson(form: OrderForm, id: string, namePattern: RegExp, wantedName: string, explicitId: string | undefined, label: string): void {
+function applyPerson(form: OrderForm, id: string, namePattern: RegExp, wantedName: string, explicitId: string | undefined, label: string, storeUsers: Array<{ id: string; name: string }>): void {
   const ctl = ctlFor(form, id, namePattern);
   if (!ctl?.attrs['name']) throw new DataError(`${WHAT}: kontrol ${label} tidak ada di form Turboly`);
   if (explicitId) {
     setField(form.body, ctl.attrs['name'], explicitId);
     return;
   }
-  const opts = optionsOf(ctl.inner).filter((o) => o.value);
+  const opts = [
+    ...optionsOf(ctl.inner).filter((o) => o.value),
+    ...storeUsers.map((u) => ({ value: u.id, text: u.name, selected: false, disabled: false })),
+  ];
+  // EXACT match only, never a first-option fallback: the wrong name here takes
+  // another person's sales credit, which is worse than refusing to save.
   const hit = opts.find((o) => normText(o.text) === normText(wantedName));
   if (!hit) {
     throw new DataError(
@@ -1130,7 +1179,7 @@ async function prepareForm(
 
     const notes = [payload.notes, parties.carrierNote].filter(Boolean).join('\n');
     try {
-      applyHeader(form, payload, cfg, parties, notes);
+      await applyHeader(form, payload, cfg, parties, notes, cookie);
     } catch (e) {
       // Only the per-store user lists justify a second GET; anything else is a
       // real structural problem and re-fetching would just hide it.

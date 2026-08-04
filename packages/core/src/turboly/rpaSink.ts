@@ -220,13 +220,17 @@ export class RpaSink implements ServiceOrderSink {
     // PUSH_DEBUG_FORM=1: dump every account/salesperson-ish + non-empty hidden
     // field the SO form would submit — for diffing robot vs manual saves.
     if (process.env.PUSH_DEBUG_FORM) {
+      await page.evaluate((all) => { (window as unknown as { __dumpAll?: boolean }).__dumpAll = all; }, process.env.PUSH_DEBUG_FORM === 'all');
       const dump = await page.evaluate(() => {
         const form = document.querySelector('form[action*="service_order"], form#new_service_order, form') as HTMLFormElement | null;
         if (!form) return ['(no form found)'];
         const out: string[] = [];
         new FormData(form).forEach((v, k) => {
           const val = String(v);
-          if (/account|salesperson|advisor|store_id|reference|customer_id|vehicle/i.test(k) || (val !== '' && /hidden/i.test((form.querySelector(`[name="${CSS.escape(k)}"]`) as HTMLInputElement | null)?.type ?? ''))) {
+          // PUSH_DEBUG_FORM=all dumps EVERY field: the filtered view hid the
+          // service-line rows, which are the fields the HTTP path must replicate.
+          const all = (window as unknown as { __dumpAll?: boolean }).__dumpAll === true;
+          if (all || /account|salesperson|advisor|store_id|reference|customer_id|vehicle/i.test(k) || (val !== '' && /hidden/i.test((form.querySelector(`[name="${CSS.escape(k)}"]`) as HTMLInputElement | null)?.type ?? ''))) {
             out.push(`${k} = ${val.slice(0, 60)}`);
           }
         });
