@@ -35,8 +35,13 @@ export class RpaSink implements ServiceOrderSink {
   /** Extra note lines accumulated during a push (e.g. model-fallback substitutions). */
   private notesExtra: string[] = [];
 
+  /** The customer search term Turboly's prefix search actually matched this push
+   *  — i.e. the spelling the record is stored in, reused by /vehicles/new. */
+  private lastCustomerQuery = '';
+
   async pushServiceOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult> {
     this.notesExtra = [];
+    this.lastCustomerQuery = '';
     let page: Page;
     try {
       await this.session.ensureLoggedIn();
@@ -339,10 +344,11 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     // Identity-first query: the ORIGINAL record's exact stored phone (Turboly's
     // search is prefix-based, so only the stored form is guaranteed to match),
-    // else 0-form phone, else name.
+    // else the spelling the SO form's search just matched, else 0-form phone,
+    // else name. A miss here fails the push; it never creates a customer.
     const cr = payload.customer.create;
     const phoneKey = cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '';
-    let q = (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    let q = this.lastCustomerQuery || (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (orig) q = orig.phone.trim();
@@ -476,33 +482,35 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /**
-   * Attach to an existing customer ONLY on an exact name match (or a matching
-   * phone) — never a first/partial result. Prevents "FRANK" wrongly attaching to
-   * an existing "FRANKI". Returns false (→ create a new customer) if none matches.
-   */
-  /**
    * Resolve the ORIGINAL Turboly customer for a phone via the in-session JSON
    * lookup (`/lookup/customers.json`). Turboly's search is PREFIX-based on the
    * stored string, so every stored form (0812…, 812…, 62812…, +62812…) is
    * queried; among matches the LOWEST id (oldest registration) wins — the
    * original record owns the person. Returns the record's exact stored phone
-   * (the only search term guaranteed to find it) or null when the phone is not
-   * in Turboly at all. Throws nothing — a lookup hiccup returns undefined.
+   * (the only search term guaranteed to find it), null when every spelling
+   * really answered and nobody holds the number, or undefined when a lookup
+   * hiccuped — a half-answered sweep must not read as "not in Turboly", that
+   * verdict registers the same person twice.
    */
   private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
     try {
-      const all: Array<{ id: number; name: string; phone: string }> = [];
+      const byId = new Map<number, { id: number; name: string; phone: string }>();
+      let complete = true;
       for (const t of ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]) {
         const j = await this.lookupJson<{ customers?: Array<{ id: number; name?: unknown; phone?: unknown }> }>(
           `/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`,
           'cari customer asli',
         );
-        for (const c of j?.customers ?? []) all.push({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+        if (j === null) { complete = false; continue; } // endpoint misbehaved — not an answer about this phone
+        for (const c of j.customers ?? []) {
+          // The search also matches names/addresses; identity is the phone key.
+          if (canonPhoneKey(String(c.phone ?? '')) !== phoneKey) continue;
+          byId.set(c.id, { id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+        }
       }
-      const mine = all
-        .filter((c) => canonPhoneKey(c.phone) === phoneKey)
-        .sort((a, b) => a.id - b.id);
-      return mine[0] ?? null;
+      const mine = [...byId.values()].sort((a, b) => a.id - b.id);
+      if (mine[0]) return { name: mine[0].name, phone: mine[0].phone };
+      return complete ? null : undefined;
     } catch (e) {
       // "Logged out" is not "phone not in Turboly" — null here would register the
       // same person a second time.
@@ -533,56 +541,99 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
+  /**
+   * Attach to an existing customer ONLY on a matching phone (or, with no phone,
+   * an exact name) — never a first/partial result, so a new "FRANK" can't take
+   * over an existing "FRANKI". The phone side is format-agnostic; the name side
+   * stays exact. Returns false (→ create a new customer) if none matches.
+   */
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const page = this.session.page_();
     // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
     // Canonical key: 0223456789 / 223456789 / +62223456789 are all the SAME person.
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
-    let query = (phoneKey ? localPhone(phone) : nama || '').trim();
+    // Turboly's search is a PREFIX match on the STORED string, so one spelling
+    // only finds records saved in that spelling: searching "081271777717" missed
+    // "+6281271777717" and we registered a SECOND "DRIVER CORP W3" (4872591)
+    // beside 4872590 — unlinked from its company, holding the car. So try every
+    // spelling: the resolved original's own stored form first, then `phone` as
+    // handed to us (the vehicle owner's stored string when the plate was known),
+    // then the canonical forms.
+    const terms: string[] = [];
+    let origName = '';
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
-      if (orig === null) return false; // phone not in Turboly → create new (stored 0-form)
-      if (orig) query = orig.phone.trim(); // exact stored form — prefix search will find it
+      if (orig === null) return false; // every spelling answered, nobody holds it → create new (stored 0-form)
+      if (orig) { origName = orig.name; terms.push(orig.phone); }
+      terms.push(phone, localPhone(phoneKey), phoneKey, '62' + phoneKey, '+62' + phoneKey);
+    } else {
+      terms.push(nama);
     }
-    if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
+    // Select2 remote search needs ≥3 chars.
+    const queries = [...new Set(terms.map((t) => (t ?? '').trim()).filter((t) => t.length >= 3))];
+    if (!queries.length) return false;
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
       await page.waitForTimeout(400);
-      await page.locator('#select2-drop input').first().fill(query);
-      for (let i = 0; i < 18; i++) {
-        const st = await page.evaluate(() => {
-          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
-          return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
-        });
-        if (st.sel > 0) break;
-        if (st.txt && !/searching|more characters/i.test(st.txt)) break;
-        await page.waitForTimeout(600);
-      }
-      const idx = await page.evaluate(({ nama, phoneKey }) => {
-        const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-        const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
-        for (let i = 0; i < lis.length; i++) {
-          const text = (lis[i] as HTMLElement).innerText || '';
-          if (phoneKey) {
-            // Identity = phone ONLY (canonical: contains works for 0/62/bare forms).
-            if (text.replace(/\D/g, '').includes(phoneKey)) return i;
-          } else {
-            // No phone typed → fall back to exact-name matching (as before).
-            const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
-            if (!!nama && norm(name) === norm(nama)) return i;
-          }
+      for (const query of queries) {
+        // Re-typing in the OPEN drop re-runs the remote search (the same in-place
+        // retry the service-row picker uses); re-clicking the choice would toggle
+        // the drop shut.
+        const input = page.locator('#select2-drop input').first();
+        await input.fill('');
+        await page.waitForTimeout(150);
+        await input.fill(query);
+        for (let i = 0; i < 18; i++) {
+          const st = await page.evaluate(() => {
+            const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
+            return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
+          });
+          if (st.sel > 0) break;
+          if (st.txt && !/searching|more characters/i.test(st.txt)) break;
+          await page.waitForTimeout(600);
         }
-        return -1;
-      }, { nama, phoneKey });
-      if (idx < 0) {
-        // No match here means "create a new customer" — a verdict we may not
-        // reach on a drop that was empty only because we'd been kicked.
-        await this.assertSessionAlive('cari customer');
-        await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false;
+        const idx = await page.evaluate(({ nama, phoneKey, origName }) => {
+          const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+          const canon = (s: string) => { // mirrors canonPhoneKey — page context can't import it
+            let d = s.replace(/\D/g, '');
+            if (d.startsWith('62')) d = d.slice(2);
+            if (d.startsWith('0')) d = d.slice(1);
+            return d;
+          };
+          const lis = Array.from(document.querySelectorAll('#select2-drop .select2-results li.select2-result-selectable'));
+          let loose = -1;
+          for (let i = 0; i < lis.length; i++) {
+            const text = (lis[i] as HTMLElement).innerText || '';
+            const name = text.split(/\s[-–—]\s|\n/)[0] ?? '';
+            if (phoneKey) {
+              // Identity = phone ONLY, on the canonical key: whichever spelling
+              // the row shows, it is the same person. Containment backs the
+              // token test up because the row also carries address/plate digits.
+              const tokens = text.match(/\+?\d[\d\s.()-]{5,}\d/g) ?? [];
+              if (!tokens.some((t) => canon(t) === phoneKey) && !text.replace(/\D/g, '').includes(phoneKey)) continue;
+              // Twins share the phone; the ORIGINAL (lowest id, resolved from the
+              // JSON lookup) owns the person — prefer it over any later copy.
+              if (origName && norm(name) === norm(origName)) return i;
+              if (loose < 0) loose = i;
+            } else if (nama && norm(name) === norm(nama)) {
+              // No phone typed → EXACT name only, so a new "FRANK" never merges
+              // into an existing "FRANKI".
+              return i;
+            }
+          }
+          return loose;
+        }, { nama, phoneKey, origName });
+        if (idx >= 0) {
+          await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
+          await page.waitForTimeout(500);
+          this.lastCustomerQuery = query; // the stored spelling — /vehicles/new hits the same prefix search
+          return true;
+        }
       }
-      await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
-      await page.waitForTimeout(500);
-      return true;
+      // No spelling matched, which means "create a new customer" — a verdict we
+      // may not reach on drops that were empty only because we'd been kicked.
+      await this.assertSessionAlive('cari customer');
+      await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false;
     } catch (e) {
       if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});

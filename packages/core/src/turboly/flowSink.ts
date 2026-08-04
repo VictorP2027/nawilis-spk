@@ -3,7 +3,7 @@ import { SELECTOR_MAP as S } from './selmap.js';
 import { resolve, exists } from './locators.js';
 import { TurbolySession } from './session.js';
 import { DataError, TransientError } from './rpaSink.js';
-import { canonPhoneKey } from '../indonesia.js';
+import { canonPhoneKey, localPhone } from '../indonesia.js';
 
 /**
  * FLOW v2 — browser automation for the Turboly lifecycle AFTER the Service
@@ -591,9 +591,14 @@ export class TurbolyFlowRpa {
   }
 
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
+    // Store the LOCAL 0… spelling like the rest of Turboly does: its customer
+    // search is a prefix match on the stored string, so a "+62…" record and a
+    // "0…" record never find each other — the web form's E.164 made the SO push
+    // miss this customer and create a second, company-less duplicate.
+    const phone = localPhone(args.phone);
     // Dedupe by phone BEFORE registering: a retried job may have already saved
     // this customer (save click landed, then the session died before read-back).
-    const dup = await this.findExistingCustomerByPhone(args.phone);
+    const dup = await this.findExistingCustomerByPhone(phone);
     if (dup) return dup;
     const page = await this.openFormPage(
       ['/customers/new'],
@@ -603,7 +608,7 @@ export class TurbolyFlowRpa {
     );
 
     await this.fillSelectorOrPattern(page, '#customer_name', /customer.*name|^name$|nama/i, args.nama, 'nama customer');
-    await this.fillSelectorOrPattern(page, '#customer_phone', /phone|telepon|hp/i, args.phone, 'nomor HP');
+    await this.fillSelectorOrPattern(page, '#customer_phone', /phone|telepon|hp/i, phone, 'nomor HP');
     // Turboly requires a customer group name mirroring the customer name.
     await page.fill('#customer_group_name', args.nama).catch(() => {});
     // Full address goes in the BOTTOM address field (no area/region granularity).

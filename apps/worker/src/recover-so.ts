@@ -21,6 +21,13 @@ async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   const doc = await collections.spk().findOne({ _id: spkId });
   if (!doc) throw new Error(`SPK ${spkId} tidak ada`);
+  // Never walk a healthy doc backwards: `confirmed` already carries a verified
+  // read-back, and rewriting it as `pushed` would throw that proof away.
+  if (['pushed', 'confirmed'].includes(doc.state)) {
+    console.log(`recover: ${spkId} sudah ${doc.state} (${doc.turboly.serviceOrderNo ?? '-'}) — tidak diubah`);
+    await close();
+    process.exit(0);
+  }
   console.log(`recover: ${spkId} state=${doc.state} plate=${doc.vehicle.noPolisi.display}`);
 
   const s = new TurbolySession({
