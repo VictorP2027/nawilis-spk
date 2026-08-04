@@ -360,12 +360,29 @@ export class TurbolyFlowRpa {
       await page.waitForLoadState('networkidle').catch(() => {});
     }
 
-    // Mark completed (control text discovered live; several candidates).
-    await this.clickControl(
-      page,
-      /mark\s*(as\s*)?complete[d]?|^complete[d]?$|^finish$|^selesai$/i,
-      'tombol Mark Completed di Work Order',
-    );
+    // Completing a Work Order is PER SERVICE LINE, not a toolbar button: each
+    // line carries a Rails PATCH link in its Progress column
+    // (/service_work_orders/<id>/start_progress_service_item?additional_line_id=…)
+    // which, once started, is replaced by the finish link. Only when every line
+    // is done does the order move to WAITING FOR QC. The old code hunted for a
+    // "Mark Completed" control that this build simply does not have.
+    const PROGRESS_LINK = 'a[href*="progress_service_item"]';
+    for (let i = 0; i < 12; i++) {
+      const link = page.locator(PROGRESS_LINK).first();
+      if ((await link.count().catch(() => 0)) === 0) break;
+      const href = (await link.getAttribute('href').catch(() => null)) ?? '(?)';
+      await link.click({ timeout: 6000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1200);
+      await this.confirmModals(page);
+      await page.waitForTimeout(800);
+      if (await this.statusVisible(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i)) break;
+      // A link that survives its own click would loop forever.
+      const still = await page.locator(`a[href="${href}"]`).count().catch(() => 0);
+      if (still > 0 && i > 6) break;
+    }
+    // Some tenants still expose a toolbar control; harmless when absent.
+    await this.clickControlIfPresent(page, /mark\s*(as\s*)?complete[d]?|^complete[d]?$|^finish$|^selesai$/i);
     await page.waitForTimeout(1200);
     await this.confirmModals(page);
     await page.waitForTimeout(2500);
@@ -1538,32 +1555,51 @@ export class TurbolyFlowRpa {
    * class's helper is private and rpaSink must not be edited.)
    */
   private async dropPick(page: Page, query: string): Promise<void> {
-    await page.waitForTimeout(400);
+    // Works for BOTH select2 flavours. A single-select puts its search box in
+    // the drop (#select2-drop input); a MULTI-select — which is what the Work
+    // Order's Assignee column is — keeps it inside the container and gives the
+    // drop no id at all, so typing into '#select2-drop input' typed into
+    // nothing, the search never ran, no assignee was set, and Turboly rejected
+    // the Work Order with "Assignee can't be blank". Typing at the keyboard
+    // instead lands wherever select2 just focused, whichever flavour it is.
+    await page.waitForTimeout(300);
     let ready = false;
     for (let round = 0; round < 2 && !ready; round++) {
-      const input = page.locator('#select2-drop input, .select2-drop:visible input.select2-input').first();
-      await input.fill('');
-      await page.waitForTimeout(150);
-      await input.fill(query);
+      await page.keyboard.press('Control+A').catch(() => {});
+      await page.keyboard.press('Meta+A').catch(() => {});
+      await page.keyboard.press('Backspace').catch(() => {});
+      await page.waitForTimeout(120);
+      // select2-v3 re-queries on KEY events only — fill() would search nothing.
+      await page.keyboard.type(query, { delay: 25 });
+      let empties = 0;
       for (let i = 0; i < 30; i++) {
-        const st = await page.evaluate(() => {
-          const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li, .select2-drop .select2-results li'));
+        const st = await page.evaluate(`(() => {
+          var drops = Array.prototype.slice.call(document.querySelectorAll('#select2-drop, .select2-drop'))
+            .filter(function (d) { var r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+          var li = [];
+          for (var d of drops) li = li.concat(Array.prototype.slice.call(d.querySelectorAll('.select2-results li')));
           return {
-            sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length,
-            txt: l.map((x) => (x as HTMLElement).innerText).join(' '),
+            sel: li.filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); }).length,
+            txt: li.map(function (x) { return x.innerText; }).join(' '),
           };
-        });
+        })()`) as { sel: number; txt: string };
         if (st.sel > 0) {
           ready = true;
           break;
         }
-        if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`tidak ada hasil Turboly untuk "${query}"`);
+        // "No matches" also renders between queries while the request is still
+        // in flight, so it only counts once it has held.
+        if (st.txt && !/searching/i.test(st.txt)) {
+          if (++empties >= 3) throw new DataError(`tidak ada hasil Turboly untuk "${query}"`);
+        } else {
+          empties = 0;
+        }
         await page.waitForTimeout(700);
       }
     }
     if (!ready) throw new TransientError(`pencarian Turboly "${query}" timeout (masih searching)`);
     await page
-      .locator('#select2-drop .select2-results li.select2-result-selectable, .select2-drop .select2-results li.select2-result-selectable')
+      .locator(`#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results), .select2-drop:visible .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)`)
       .first()
       .click({ timeout: 4000 });
   }
@@ -1728,9 +1764,14 @@ export class TurbolyFlowRpa {
   private async readInlineError(page: Page): Promise<string | null> {
     for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
       const loc = page.locator(sel);
-      if ((await loc.count().catch(() => 0)) > 0) {
-        const t = (await loc.first().innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
-        if (t && !/success/i.test(t)) return t;
+      const n = await loc.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        // Turboly shows tenant-wide banners ("Email is unverified") in the same
+        // .alert-error box as validation output. Taking the first hit turned a
+        // SUCCESSFUL save into a reported failure — and a failed create is
+        // retried, which is how one document becomes two.
+        const t = (await loc.nth(i).innerText().catch(() => ''))?.trim().replace(/\s*\n\s*/g, ' • ');
+        if (t && !/success/i.test(t) && !/email is unverified|verify your email|mohon melakukan pembayaran/i.test(t)) return t;
       }
     }
     return null;

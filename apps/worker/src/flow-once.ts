@@ -142,7 +142,10 @@ function classify(e: unknown): { transient: boolean; msg: string } {
     return { transient: true, msg };
   }
   // Session kicked / network flake / dead page → retry later logs in fresh.
-  if (/timeout|timed out|net::|ERR_|kicked|target closed|browser has been closed|navigation failed/i.test(msg)) {
+  // "Execution context was destroyed" means an evaluate raced a navigation the
+  // page was already doing — nothing was decided, so the step simply reruns.
+  // Filed as permanent it stops the lifecycle dead and pages a human for a race.
+  if (/timeout|timed out|net::|ERR_|kicked|target closed|browser has been closed|navigation failed|execution context was destroyed|frame was detached/i.test(msg)) {
     return { transient: true, msg };
   }
   // Structural (selector/control not found — DiscoveryError et al): a human/dev fix.
