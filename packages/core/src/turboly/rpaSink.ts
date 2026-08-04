@@ -212,7 +212,11 @@ export class RpaSink implements ServiceOrderSink {
     const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
     const success = onDetailPage || flashOk;
     if (!success || (inlineErr && !serviceOrderNo)) {
-      return { ...fail('data', inlineErr ?? 'save did not confirm'), screenshotRef };
+      let msg = inlineErr ?? 'save did not confirm';
+      if (/account code can't be blank/i.test(msg)) {
+        msg += ' — konfigurasi store di Turboly mewajibkan Account Code tapi daftarnya KOSONG; definisikan Account Code (Setup → Accounting) atau matikan kewajibannya untuk store ini, lalu retry';
+      }
+      return { ...fail('data', msg), screenshotRef };
     }
 
     const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;

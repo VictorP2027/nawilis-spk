@@ -273,8 +273,9 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const kmOk = km.trim() !== '';
   const tahunOk = tahun.trim() !== '';
   const tipeOk = tipe.trim() !== '';
+  const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && custSigned && advSigned && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && custSigned && advSigned && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -414,6 +415,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Pekerjaan</div>
+          {!jobsOk && <div className="req-note">⚠ pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item</div>}
           <div className="tiles">
             {SERVICES.map((s) => {
               const on = !!jobs[s.code];

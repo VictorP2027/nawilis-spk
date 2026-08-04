@@ -275,6 +275,7 @@ export default function Sheet() {
     if (!/^8\d{8,11}$/.test(waNatS)) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
     if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
+    if (!SERVICES.some((sv) => pk[sv.code]?.order)) { setResult({ ok: false, text: 'Pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item.' }); setSubmitting(false); return; }
     const requiredSheet: Array<[string, string]> = [[tanggal, 'Tanggal'], [noPol, 'Nomor Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [tipe, 'Tipe'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun'], [estimasi, 'Estimasi waktu pekerjaan'], [menyerahkan, 'Yang menyerahkan (nama customer)']];
     const missing = requiredSheet.filter(([v]) => !String(v).trim()).map(([, label]) => label);
     if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }
