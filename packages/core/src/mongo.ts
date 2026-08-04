@@ -58,12 +58,17 @@ export async function ensureIndexes(): Promise<void> {
     { key: { branchCode: 1, 'capture.businessDate': 1 }, name: 'ix_branch_day' },
     // Reconciliation harvest by token.
     { key: { 'push.correlationToken': 1 }, name: 'uq_correlation_token', unique: true },
-    // Turboly doc numbers, once known. PARTIAL (not sparse): sparse still indexes
-    // `null`, so every fresh doc (serviceOrderNo:null) would collide. Partial on
-    // $type:'string' means only real, assigned doc numbers are uniqueness-checked
-    // — this is the storage-layer guard that makes a duplicate Service Order impossible.
-    { key: { 'turboly.serviceOrderNo': 1 }, name: 'uq_turboly_so', unique: true, partialFilterExpression: { 'turboly.serviceOrderNo': { $type: 'string' } } },
-    { key: { 'turboly.workOrderNo': 1 }, name: 'uq_turboly_swo', unique: true, partialFilterExpression: { 'turboly.workOrderNo': { $type: 'string' } } },
+    // The storage-layer guard that makes "two SPKs claim ONE Turboly order"
+    // impossible. It keys on the document URL, not the printed number: the URL
+    // carries Turboly's own record id, while doc numbers are only unique within
+    // a tenant's counter — sandbox resets (and any tenant renumbering) hand the
+    // same SRO/BKS/… number to a genuinely new order, which used to fail the
+    // push AFTER the order existed. PARTIAL (not sparse): sparse still indexes
+    // `null`, so every fresh doc would collide on it.
+    { key: { 'turboly.serviceOrderUrl': 1 }, name: 'uq_turboly_so_url', unique: true, partialFilterExpression: { 'turboly.serviceOrderUrl': { $type: 'string' } } },
+    // Doc numbers stay indexed for lookup/reconciliation — NOT unique (see above).
+    { key: { 'turboly.serviceOrderNo': 1 }, name: 'ix_turboly_so' },
+    { key: { 'turboly.workOrderNo': 1 }, name: 'ix_turboly_swo' },
     // Field-meta queries MUST use $elemMatch; this supports them.
     { key: { 'fieldMeta.path': 1 }, name: 'ix_fieldmeta_path' },
     // Idempotent capture on client uploadId.

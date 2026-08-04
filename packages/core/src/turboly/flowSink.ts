@@ -547,26 +547,47 @@ export class TurbolyFlowRpa {
     await page.waitForTimeout(1500);
   }
 
-  /** Tick "Main Address" and confirm the address modal (if one is open). */
+  /**
+   * Close the address modal and mark the row as the MAIN address.
+   *
+   * Turboly's "Add Address" does two things at once: it appends a
+   * `tr.nested-fields` row to `tbody#list-address` (all values in hidden
+   * `customer[addresses_attributes][…]` inputs) and opens a modal holding the
+   * visible fields. The modal's own Save copies modal → row. The main-address
+   * pick is a RADIO in that row (`name=main_address_index`), NOT a checkbox —
+   * getting that wrong is what produced "Main Address must be one".
+   */
   private async finishAddressSection(page: Page): Promise<void> {
-    await page.evaluate(() => {
+    // 1. Confirm the ADDRESS modal (its Save, never the page's Save Customer).
+    await page.evaluate(`(() => {
+      const open = Array.from(document.querySelectorAll('.modal, .modal-scrollable')).filter((m) => getComputedStyle(m).display !== 'none');
+      const modal = open.find((m) => /address\\s*type|\\bcountry\\b/i.test(m.innerText || '')) || open[open.length - 1];
+      if (!modal) return false;
+      const btn = Array.from(modal.querySelectorAll('a, button, input[type=button], input[type=submit]')).find((n) => /^(save|simpan|ok|add|tambah)$/i.test(((n.innerText || n.value) || '').trim()));
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()`);
+    await page.waitForTimeout(1600);
+
+    // 2. Exactly ONE main address — the row radio (fallback: a labelled checkbox).
+    const marked = (await page.evaluate(`(() => {
+      const radios = Array.from(document.querySelectorAll('input[type=radio]')).filter((r) => /main_address/i.test(r.name || r.id || ''));
+      const free = radios.find((r) => !r.disabled);
+      if (free) { if (!free.checked) free.click(); return radios.some((r) => r.checked); }
       const box = Array.from(document.querySelectorAll('input[type=checkbox]')).find((c) => {
-        const el = c as HTMLInputElement;
-        const lab = (document.querySelector(`label[for="${el.id}"]`)?.textContent ?? el.closest('label')?.textContent ?? '').trim();
-        return /main\s*address|alamat\s*utama|primary/i.test(lab + ' ' + (el.id || el.name || ''));
-      }) as HTMLInputElement | undefined;
-      if (box && !box.checked) box.click();
-      // Confirm the modal (its own Save/Add button, not the page's Save Customer).
-      const modal = document.querySelector('.modal.in, .modal[style*="block"], .modal-scrollable');
-      const btn = modal
-        ? Array.from(modal.querySelectorAll('a, button, input[type=button], input[type=submit]')).find((n) => {
-            const t = ((n as HTMLElement).innerText || (n as HTMLInputElement).value || '').trim();
-            return /^(save|add|simpan|ok|tambah)/i.test(t);
-          })
-        : null;
-      (btn as HTMLElement | null)?.click();
-    });
-    await page.waitForTimeout(1800);
+        const lab = ((document.querySelector('label[for="' + c.id + '"]') || {}).textContent || (c.closest('label') || {}).textContent || '');
+        return /main\\s*address|alamat\\s*utama|primary/i.test(lab + ' ' + (c.id || c.name || ''));
+      });
+      if (box) { if (!box.checked) box.click(); return box.checked; }
+      return false;
+    })()`)) as boolean;
+    if (!marked) {
+      throw new DiscoveryError(
+        'Alamat: kontrol "Main Address" tidak ditemukan setelah Add Address — Turboly akan menolak dengan "Main Address must be one"',
+      );
+    }
+    await page.waitForTimeout(600);
   }
 
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
@@ -754,11 +775,11 @@ export class TurbolyFlowRpa {
    * and click the "new" control. Loud when neither works.
    */
   private async openFormPage(newPaths: string[], listPath: string, newButton: RegExp, what: string): Promise<Page> {
-    await this.session.ensureLoggedIn();
-    const page = this.session.page_();
     for (const p of newPaths) {
-      await page.goto(this.abs(p), { waitUntil: 'domcontentloaded' }).catch(() => {});
-      await page.waitForTimeout(2200);
+      // open() VERIFIES the landing path. Without that, a kicked session serves
+      // /users/sign_in — two visible inputs, so it passed the "looks like a
+      // form" check below and we filled and "saved" the LOGIN page.
+      const page = await this.open(p, 'form');
       const looksLikeForm = await page.evaluate(() => {
         const inputs = Array.from(document.querySelectorAll('input[type="text"], input:not([type]), textarea'));
         const visible = inputs.filter((el) => {
@@ -773,12 +794,10 @@ export class TurbolyFlowRpa {
         return page;
       }
     }
-    await page.goto(this.abs(listPath), { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await page.waitForTimeout(2200);
-    await this.dismissModals(page);
-    await this.clickControl(page, newButton, `${what} — tombol New di ${listPath}`);
-    await page.waitForTimeout(2500);
-    return page;
+    const list = await this.open(listPath, 'list');
+    await this.clickControl(list, newButton, `${what} — tombol New di ${listPath}`);
+    await list.waitForTimeout(2500);
+    return list;
   }
 
   /**
@@ -824,11 +843,20 @@ export class TurbolyFlowRpa {
     page: Page,
     term: string,
   ): Promise<Array<{ id: number; name: string; phone: string | null }> | null> {
+    const res = await page.request
+      .get(`${this.baseUrl}/lookup/customers.json?search_term=${encodeURIComponent(term)}&page_limit=10&page=1`, {
+        headers: { accept: 'application/json' },
+      })
+      .catch(() => null);
+    if (!res) return null;
+    // A kicked session answers this JSON endpoint with the sign-in HTML — which
+    // parses as "no customers found" and would defeat the duplicate guard,
+    // registering the SAME company twice. Treat it as transient, never as empty.
+    const ctype = (res.headers()['content-type'] ?? '').toLowerCase();
+    if (/\/users\/sign_in/.test(res.url()) || (res.ok() && !ctype.includes('json'))) {
+      throw new TransientError('sesi Turboly ter-kick saat cek duplikat customer — dicoba ulang otomatis');
+    }
     try {
-      const res = await page.request.get(
-        `${this.baseUrl}/lookup/customers.json?search_term=${encodeURIComponent(term)}&page_limit=10&page=1`,
-        { headers: { accept: 'application/json' } },
-      );
       if (!res.ok()) return null;
       const j = (await res.json()) as { customers?: Array<{ id?: unknown; name?: unknown; phone?: unknown }> };
       if (!Array.isArray(j.customers)) return null;
@@ -879,36 +907,37 @@ export class TurbolyFlowRpa {
     if (!want) return null;
     await this.session.ensureLoggedIn();
     const page = this.session.page_();
-    const paths = [
-      `/customers/wholesale?search_term=${encodeURIComponent(name.trim())}`,
-      `/customers/wholesale?q=${encodeURIComponent(name.trim())}`,
-      '/customers/wholesale',
-    ];
-    for (const path of paths) {
-      const ok = await page
-        .goto(this.abs(path), { waitUntil: 'domcontentloaded' })
-        .then(() => true)
-        .catch(() => false);
-      if (!ok) continue;
-      await page.waitForTimeout(1500);
-      const row = await page.evaluate(
-        ({ want }) => {
-          const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
-          const anchors = Array.from(document.querySelectorAll('a[href]')) as HTMLAnchorElement[];
-          const a = anchors.find(
-            (x) =>
-              /\/(wholesale_customers|companies)\/\d+/.test(x.getAttribute('href') ?? '') &&
-              norm(x.innerText ?? '') === want,
-          );
-          if (!a) return null;
-          const id = /\/(?:wholesale_customers|companies)\/(\d+)/.exec(a.getAttribute('href') ?? '')?.[1] ?? null;
-          return { href: a.href, id };
-        },
-        { want },
-      );
-      if (row) return { customerId: row.id, customerUrl: row.href, existing: true };
+    // Companies live in the SAME /customers/<id> space as retail customers, so
+    // the list page has no distinguishing href to scrape (the old scrape looked
+    // for /wholesale_customers/<id> links that Turboly never renders — which is
+    // why the same company got created twice). Their own select2 endpoint is
+    // authoritative; on a duplicate name the LOWEST id is the original.
+    const res = await page.request
+      .get(`${this.baseUrl}/lookup/wholesale_customers.json?search_term=${encodeURIComponent(name.trim())}&page_limit=20&page=1`, {
+        headers: { accept: 'application/json' },
+      })
+      .catch(() => null);
+    if (!res) return null;
+    const ctype = (res.headers()['content-type'] ?? '').toLowerCase();
+    if (/\/users\/sign_in/.test(res.url()) || (res.ok() && !ctype.includes('json'))) {
+      throw new TransientError('sesi Turboly ter-kick saat cek duplikat perusahaan — dicoba ulang otomatis');
     }
-    return null;
+    if (!res.ok()) return null;
+    const j = (await res.json().catch(() => null)) as { customers?: Array<{ id?: unknown; name?: unknown }> } | null;
+    const hits = (j?.customers ?? [])
+      .filter((c) => typeof c.id === 'number' && String(c.name ?? '').trim().toUpperCase().replace(/\s+/g, ' ') === want)
+      .sort((a, b) => Number(a.id) - Number(b.id));
+    const hit = hits[0];
+    if (!hit) return null;
+    return {
+      customerId: String(hit.id),
+      customerUrl: this.abs(`/customers/${hit.id}`),
+      existing: true,
+      note:
+        hits.length > 1
+          ? `perusahaan "${name.trim()}" ada ${hits.length}× di Turboly — dipakai yang paling awal (id ${hit.id})`
+          : undefined,
+    };
   }
 
   /** All visible clickable texts — the payload of every DiscoveryError. */
@@ -1361,6 +1390,14 @@ export class TurbolyFlowRpa {
     const inline = await this.readInlineError(page);
     const m = urlRe.exec(page.url());
     const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
+    // A save that lands on the sign-in page means ANOTHER login kicked us
+    // mid-form (Turboly allows one session per user) — nothing was written and
+    // nothing is wrong with the data, so this must retry, not page a human.
+    if (!m && (/\/users\/sign_in/.test(page.url()) || /you have been logged out|please login again|sign in or sign up/i.test(inline ?? ''))) {
+      throw new TransientError(
+        `${what}: sesi Turboly ter-kick oleh login lain sebelum simpan — data belum tersimpan, dicoba ulang otomatis`,
+      );
+    }
     if (!m && !flashOk) {
       throw new DataError(
         `${what}: simpan tidak terkonfirmasi (URL ${page.url()})${inline ? ` — error Turboly: ${inline}` : ''}. ` +

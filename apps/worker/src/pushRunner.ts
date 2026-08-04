@@ -118,9 +118,26 @@ export async function pushQueued(
         continue;
       }
       const pushedTurboly = { ...claimed.turboly, serviceOrderNo: res.serviceOrderNo, serviceOrderUrl: res.serviceOrderUrl ?? null };
-      await transition(doc._id, 'pushing', 'pushed', { turboly: pushedTurboly });
+      try {
+        await transition(doc._id, 'pushing', 'pushed', { turboly: pushedTurboly });
+      } catch (e) {
+        // Storage refused the read-back keys (the order's identity is already
+        // claimed by another doc). The Service Order EXISTS — parking this in
+        // manual_intervention is the only safe answer, because a `failed` doc
+        // gets retried and the retry would create a SECOND order in Turboly.
+        await transition(doc._id, 'pushing', 'manual_intervention', {
+          push: {
+            ...claimed.push,
+            failureClass: 'structural',
+            lastError: `SO ${res.serviceOrderNo} (${res.serviceOrderUrl ?? '-'}) sudah diklaim dokumen lain di Mongo — JANGAN retry, order sudah ada di Turboly: ${(e as Error).message ?? e}`,
+          },
+        }).catch(() => {});
+        out.failed++;
+        log(`⚠ ${doc._id}: SO ${res.serviceOrderNo} sudah diklaim dokumen lain — dipindah ke manual_intervention (order sudah ada, jangan retry)`);
+        continue;
+      }
       out.pushed++;
-      log(`✓ ${doc._id} → Service Order ${res.serviceOrderNo}`);
+      log(`✓ ${doc._id} → Service Order ${res.serviceOrderNo}${res.approved === false ? ' ⚠ MASIH DRAFT (approve tidak terkonfirmasi)' : res.approved ? ' [APPROVED]' : ''}`);
 
       const v = await branchSinks.withSink(claimed.branchCode, (sink) =>
         sink.verifyByToken({ ...claimed, turboly: pushedTurboly }),

@@ -73,6 +73,13 @@ export interface PushResult {
   error?: string;
   /** Evidence: path to a screenshot taken at submit. */
   screenshotRef?: string | null;
+  /**
+   * DRAFT→APPROVED outcome when the push asked for it, VERIFIED (not just
+   * "the click didn't throw"): true = approved, false = still Draft, null =
+   * approval wasn't requested. A false here never fails the push — the order
+   * exists, and a retry would create a second one.
+   */
+  approved?: boolean | null;
 }
 
 export interface VerifyResult {

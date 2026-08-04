@@ -237,13 +237,77 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;
-    if (ctx.approve && (await exists(page, S.actions.approve, 4000))) {
+    let approved: boolean | null = null;
+    if (ctx.approve) {
       this.assertLease(ctx);
-      await resolve(page, S.actions.approve).click().catch(() => {});
-      await page.waitForTimeout(2500);
+      approved = await this.approveNow(page);
     }
     await this.session.noteJobDone();
-    return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl };
+    return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl, approved };
+  }
+
+  /**
+   * DRAFT → APPROVED on the just-saved Service Order, VERIFIED.
+   *
+   * The click alone proves nothing: "Approve" is a toolbar `<a class="btn">`
+   * (the workflow bar's APPROVED chip is a status, not a control), and a
+   * kicked/stale page swallows clicks silently — that combination is exactly
+   * why orders kept sitting in Draft. So: click → confirm → read back, twice.
+   * NEVER throws: the order already exists, and turning a failed approve into
+   * a retry would create a SECOND order.
+   */
+  private async approveNow(page: Page): Promise<boolean> {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (await this.isApproved(page)) return true;
+      const clicked = await resolve(page, S.actions.approve)
+        .first()
+        .click({ timeout: 6000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!clicked) {
+        await page
+          .evaluate(`(() => {
+            const hit = Array.from(document.querySelectorAll('a, button, input[type=submit]')).find((n) => /^approved?$/i.test(((n.innerText || n.value) || '').trim()));
+            if (!hit) return false;
+            hit.click();
+            return true;
+          })()`)
+          .catch(() => false);
+      }
+      await page.waitForTimeout(1500);
+      await this.confirmModals();
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle').catch(() => {});
+      if (await this.isApproved(page)) return true;
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      await page.waitForTimeout(1800);
+    }
+    await this.snapshot(page, 'approve-not-confirmed').catch(() => null);
+    return this.isApproved(page);
+  }
+
+  /**
+   * Is this Service Order past DRAFT? Two independent signals, both required to
+   * be meaningful: the page must still BE a Service Order detail page (a kicked
+   * session shows neither the chip nor the action, which would otherwise read
+   * as "approved"), and either the APPROVED chip is highlighted or the Approve
+   * action is gone.
+   */
+  private async isApproved(page: Page): Promise<boolean> {
+    return (await page
+      .evaluate(`(() => {
+        const body = document.body ? document.body.innerText : '';
+        if (!/document\\s*number/i.test(body)) return false;
+        const chip = Array.from(document.querySelectorAll('span, li, div')).find((el) => {
+          if (/^approved$/i.test((el.innerText || '').trim()) === false) return false;
+          const own = (el.className || '') + ' ' + (el.parentElement ? el.parentElement.className || '' : '');
+          return /(^|[\\s_-])(active|current|selected)([\\s_-]|$)/i.test(own);
+        });
+        if (chip) return true;
+        const action = Array.from(document.querySelectorAll('a, button, input[type=submit]')).find((n) => /^approved?$/i.test(((n.innerText || n.value) || '').trim()));
+        return !action;
+      })()`)
+      .catch(() => false)) as boolean;
   }
 
   /** Screenshot + classify a raised error into a typed PushResult. */

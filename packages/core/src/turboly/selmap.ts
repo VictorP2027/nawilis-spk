@@ -242,7 +242,14 @@ export const SELECTOR_MAP: TurbolySelectorMap = {
   actions: {
     save: role('button', 'Save'),
     cancel: role('button', 'Cancel'),
-    approve: role('button', 'Approved', 'CONFIRM — the DRAFT→APPROVED workflow control'),
+    // The DRAFT→APPROVED control is the toolbar ACTION labelled "Approve" (an
+    // <a class="btn">, not a <button>). The workflow bar's "APPROVED" chip is a
+    // status step, not a control — matching that was why auto-approve silently
+    // no-op'd and Service Orders stayed DRAFT.
+    approve: css(
+      'a:text-is("Approve"), button:text-is("Approve"), a:text-is("Approved"), button:text-is("Approved")',
+      'the DRAFT→APPROVED toolbar action',
+    ),
   },
   savedDocNumber: label('DOCUMENT NUMBER', 'CONFIRM — where the generated SBO/.../... number renders after save'),
   list: {
