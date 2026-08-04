@@ -359,6 +359,9 @@ export class RpaSink implements ServiceOrderSink {
       try {
         await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
       } catch (e) {
+        // Never let a kicked session count as "make missing" — that creates a
+        // duplicate make for a brand Turboly already has.
+        if (e instanceof TransientError) throw e;
         // Operator confirmed on the form: create the new make, then rebuild.
         if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
         throw e;
@@ -411,6 +414,10 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
     const opts = await page.$$eval(`${sel} option`, (els) => els.map((e) => ({ v: (e as HTMLOptionElement).value, t: (e.textContent ?? '').trim() })).filter((o) => o.v));
+    // The store's user list arrives by AJAX after the store is picked; when we've
+    // been kicked it arrives as sign-in HTML and the <select> stays empty, which
+    // later surfaces as the data error "Service Advisor can't be blank".
+    if (!opts.length) await this.assertSessionAlive('ambil daftar user store');
     const hit = opts.find((o) => norm(o.t) === norm(label));
     if (hit) await page.selectOption(sel, { value: hit.v }).catch(() => {});
   }
@@ -440,7 +447,11 @@ export class RpaSink implements ServiceOrderSink {
           return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
         });
         if (st.sel > 0) { ready = true; break; }
-        if (st.txt && !/searching/i.test(st.txt)) throw new DataError(`no Turboly match for "${query}"`);
+        if (st.txt && !/searching/i.test(st.txt)) {
+          // Same remote lookup, same trap: a logged-out drop renders "no results".
+          await this.assertSessionAlive(`cari "${query}"`);
+          throw new DataError(`no Turboly match for "${query}"`);
+        }
         await page.waitForTimeout(700);
       }
     }
@@ -454,7 +465,10 @@ export class RpaSink implements ServiceOrderSink {
     try {
       await this.pickSelect2(containerSel, query);
       return true;
-    } catch {
+    } catch (e) {
+      // A kicked session must not read as "vehicle not in Turboly" — that path
+      // goes on to register the plate again.
+      if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(300);
       return false;
@@ -476,24 +490,23 @@ export class RpaSink implements ServiceOrderSink {
    * in Turboly at all. Throws nothing — a lookup hiccup returns undefined.
    */
   private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
-    const page = this.session.page_();
     try {
-      const raw = await page.evaluate(async (terms: string[]) => {
-        const all: Array<{ id: number; name: string; phone: string }> = [];
-        for (const t of terms) {
-          const r = await fetch(`/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`, { headers: { accept: 'application/json' } });
-          if (r.ok) {
-            const j = await r.json();
-            for (const c of j.customers ?? []) all.push({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
-          }
-        }
-        return all;
-      }, ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]);
-      const mine = raw
+      const all: Array<{ id: number; name: string; phone: string }> = [];
+      for (const t of ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]) {
+        const j = await this.lookupJson<{ customers?: Array<{ id: number; name?: unknown; phone?: unknown }> }>(
+          `/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`,
+          'cari customer asli',
+        );
+        for (const c of j?.customers ?? []) all.push({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+      }
+      const mine = all
         .filter((c) => canonPhoneKey(c.phone) === phoneKey)
         .sort((a, b) => a.id - b.id);
       return mine[0] ?? null;
-    } catch {
+    } catch (e) {
+      // "Logged out" is not "phone not in Turboly" — null here would register the
+      // same person a second time.
+      if (e instanceof TransientError) throw e;
       return undefined; // endpoint hiccup — caller falls back to select2 search
     }
   }
@@ -501,22 +514,21 @@ export class RpaSink implements ServiceOrderSink {
   /** The ORIGINAL registration owns the car: lowest vehicle id among exact
    * plate matches, with that row's owner name/phone (inline in the JSON). */
   private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string } | null> {
-    const page = this.session.page_();
     try {
-      const raw = await page.evaluate(async (q: string) => {
-        const r = await fetch(`/lookup/vehicles.json?search_term=${encodeURIComponent(q)}&page_limit=30&page=1`, { headers: { accept: 'application/json' } });
-        if (!r.ok) return [] as Array<{ id: number; registration: string; name: string; phone: string }>;
-        const j = await r.json();
-        return (j.vehicles ?? []).map((v: { id: number; registration?: string; customer_name?: string; customer_phone?: string }) => ({
-          id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? ''),
-        }));
-      }, reg);
+      const j = await this.lookupJson<{
+        vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }>;
+      }>(`/lookup/vehicles.json?search_term=${encodeURIComponent(reg)}&page_limit=30&page=1`, 'cari pemilik asli kendaraan');
+      const raw = (j?.vehicles ?? []).map((v) => ({
+        id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? ''),
+      }));
       const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const mine = (raw as Array<{ id: number; registration: string; name: string; phone: string }>)
+      const mine = raw
         .filter((v) => norm(v.registration) === norm(reg))
         .sort((a, b) => a.id - b.id);
       return mine[0] ? { name: mine[0].name, phone: mine[0].phone } : null;
-    } catch {
+    } catch (e) {
+      // Logged out ≠ "plate unknown": the car would silently change owner.
+      if (e instanceof TransientError) throw e;
       return null; // lookup hiccup — fall back to the typed identity
     }
   }
@@ -562,11 +574,17 @@ export class RpaSink implements ServiceOrderSink {
         }
         return -1;
       }, { nama, phoneKey });
-      if (idx < 0) { await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false; }
+      if (idx < 0) {
+        // No match here means "create a new customer" — a verdict we may not
+        // reach on a drop that was empty only because we'd been kicked.
+        await this.assertSessionAlive('cari customer');
+        await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false;
+      }
       await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
       await page.waitForTimeout(500);
       return true;
-    } catch {
+    } catch (e) {
+      if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
       await page.waitForTimeout(300);
       return false;
@@ -602,6 +620,8 @@ export class RpaSink implements ServiceOrderSink {
       try {
         await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
       } catch (e) {
+        // Same guard as /vehicles/new: kicked ≠ missing make.
+        if (e instanceof TransientError) throw e;
         // Operator confirmed on the form: create the new make, then rebuild.
         if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
         throw e;
@@ -728,6 +748,12 @@ export class RpaSink implements ServiceOrderSink {
       if (!st.searching && i > 3) break; // resolved to empty
     }
     if (!items.length) {
+      // This is where a kicked session became a permanent verdict: the drop is
+      // fed by /lookup/vehicle_models, which answers sign-in HTML when we've
+      // been logged out, so TOYOTA/Avanza read as "no models" minutes after the
+      // same car pushed fine. Ask that endpoint directly — only a live JSON
+      // answer is allowed to be empty.
+      await this.assertSessionAlive('ambil daftar model', await this.modelLookupPath());
       await page.keyboard.press('Escape').catch(() => {});
       throw new DataError(`make has no models in Turboly (typed tipe "${q || '—'}")`);
     }
@@ -760,7 +786,12 @@ export class RpaSink implements ServiceOrderSink {
     for (let i = 0; i < 20; i++) {
       if ((await page.locator(results).count()) > 0) { found = true; break; }
       const txt = await page.locator('.select2-drop:visible .select2-results, #select2-drop:visible .select2-results').first().innerText().catch(() => '');
-      if (txt && !/searching|loading|more characters/i.test(txt)) throw new DataError(`no Turboly match for "${q}"`);
+      if (txt && !/searching|loading|more characters/i.test(txt)) {
+        // "No results" from a select2 fed sign-in HTML looks identical to a real
+        // no-match — and here it would go on to CREATE a duplicate make.
+        await this.assertSessionAlive(`cari "${q}"`);
+        throw new DataError(`no Turboly match for "${q}"`);
+      }
       await page.waitForTimeout(500);
     }
     // Search never resolved (stuck "Searching…") — a data/timeout condition, not a broken page.
@@ -948,6 +979,63 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * Turboly = ONE SESSION PER USER, and a kicked session answers the /lookup/*
+   * JSON endpoints with the SIGN-IN HTML instead of JSON. Parsed as "no
+   * results", that became a confident PERMANENT data verdict — TOYOTA / Avanza
+   * was reported as "make has no models" minutes after the same car had pushed
+   * fine. Kicked = the response lands on /users/sign_in, isn't JSON, or reads as
+   * logged-out; kicked is never an answer about the data.
+   */
+  private async readLookup(path: string): Promise<{ url: string; ok: boolean; ctype: string; body: string } | null> {
+    return this.session
+      .page_()
+      .evaluate(async (p: string) => {
+        const res = await fetch(p, { headers: { accept: 'application/json' } });
+        return { url: res.url, ok: res.ok, ctype: (res.headers.get('content-type') ?? '').toLowerCase(), body: await res.text() };
+      }, path)
+      .catch(() => null);
+  }
+
+  private lookupIsSignIn(r: { url: string; ok: boolean; ctype: string; body: string }): boolean {
+    return (
+      /\/users\/sign_in/.test(r.url) ||
+      (r.ok && !r.ctype.includes('json')) ||
+      /you have been logged out|sign in or sign up|please login again/i.test(r.body.slice(0, 4000))
+    );
+  }
+
+  /** Parsed lookup JSON. Null when the endpoint merely misbehaves (callers keep
+   *  their existing fallbacks); TransientError when we're logged out. */
+  private async lookupJson<T>(path: string, what: string): Promise<T | null> {
+    const r = await this.readLookup(path);
+    if (!r) return null;
+    if (this.lookupIsSignIn(r)) throw new TransientError(`sesi Turboly ter-kick saat ${what} — dicoba ulang otomatis`);
+    if (!r.ok) return null;
+    try {
+      return JSON.parse(r.body) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Guard for emptiness read off the DOM: select2 drops and the store's user
+   *  <select> are filled from those same lookups, so an empty one may only mean
+   *  we were kicked. Ask an endpoint before calling it a data verdict. */
+  private async assertSessionAlive(what: string, probePath = '/lookup/customers.json?search_term=zzq&page_limit=1&page=1'): Promise<void> {
+    const r = await this.readLookup(probePath);
+    if (r && this.lookupIsSignIn(r)) throw new TransientError(`sesi Turboly ter-kick saat ${what} — dicoba ulang otomatis`);
+  }
+
+  /** The exact endpoint the model select2 reads, for the make now selected. */
+  private async modelLookupPath(): Promise<string> {
+    const makeId = await this.session
+      .page_()
+      .evaluate(() => (document.querySelector('#vehicle-make-select') as HTMLSelectElement | null)?.value ?? '')
+      .catch(() => '');
+    return `/lookup/vehicle_models?search_term=&vehicle_type=&vehicle_make=${encodeURIComponent(makeId)}&page=1&page_limit=1`;
+  }
 
   private async captureDocNumber(page: Page): Promise<string | null> {
     const v = await readValue(page, S.savedDocNumber);

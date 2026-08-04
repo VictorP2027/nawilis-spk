@@ -1,4 +1,4 @@
-import { getDb, canonPhoneKey } from '@spk/core';
+import { getDb, canonPhoneKey, flowJobs } from '@spk/core';
 
 /**
  * LIVE Turboly customer lookup over plain HTTP (no browser): logs in via the
@@ -7,7 +7,8 @@ import { getDb, canonPhoneKey } from '@spk/core';
  *   GET /lookup/customers.json?search_term=<phone>  → { customers: [ …, vehicles: [...] ] }
  *
  * Session note: Turboly enforces one session per user. Re-login here only
- * happens when the cached cookie is invalid (e.g. after a cron push logged in).
+ * happens when the cached cookie is invalid (e.g. after a cron push logged in),
+ * and never while a worker holds the session — see workerSessionBusy().
  * For zero interference, set TURBOLY_LOOKUP_USERNAME/PASSWORD to a dedicated
  * second Turboly user; otherwise the main credentials are used.
  */
@@ -29,18 +30,57 @@ function cookiesFrom(res: Response): string {
   return list.map((c) => c.split(';')[0]).join('; ');
 }
 
+/** How long a queued row stays evidence that a worker is actually alive. */
+const BUSY_WINDOW_MS = 20 * 60_000;
+
+/**
+ * Is a worker holding the shared Turboly session right now?
+ *
+ * ONE SESSION PER USER: a login from the web app logs the worker out mid-write,
+ * and we have watched customer registrations and Service Order saves die
+ * half-finished with "You have been logged out". Two queues can have a worker
+ * live — the SPK push queue (`spk` queued/pushing) and the board's `flow_jobs`.
+ * A `running` job is a browser step executing right now; a `queued` one only
+ * counts while recently touched, so an abandoned row can't mute lookups forever.
+ * A dedicated TURBOLY_LOOKUP_USERNAME is a separate session and collides with
+ * nobody, so the guard is skipped entirely there.
+ */
+async function workerSessionBusy(): Promise<boolean> {
+  if (process.env.TURBOLY_LOOKUP_USERNAME) return false;
+  const since = new Date(Date.now() - BUSY_WINDOW_MS).toISOString();
+  const [pushing, flowing] = await Promise.all([
+    getDb()
+      .collection('spk')
+      .countDocuments({ state: { $in: ['queued', 'pushing'] }, updatedAt: { $gte: since } }, { limit: 1 }),
+    flowJobs().countDocuments(
+      {
+        $or: [
+          // `running` is bounded too: a runner killed mid-job (Actions timeout,
+          // crash) leaves the row stuck forever, and an unbounded check would
+          // silently degrade every prefill to Mongo until a human noticed.
+          { $and: [{ state: 'running' }, { $or: [{ startedAt: { $gte: since } }, { updatedAt: { $gte: since } }] }] },
+          { $and: [{ state: 'queued' }, { $or: [{ updatedAt: { $gte: since } }, { createdAt: { $gte: since } }] }] },
+        ],
+      },
+      { limit: 1 },
+    ),
+  ]);
+  return pushing > 0 || flowing > 0;
+}
+
+/**
+ * Only a NEW login kicks the worker — replaying the cached cookie does not, so
+ * the guard sits here rather than in front of cachedCookie(). Returns null when
+ * a worker is busy; callers then report "no live data" instead of throwing, and
+ * the API route serves its Mongo fallback rather than an error to the person
+ * filling in the form.
+ */
+async function loginUnlessWorkerBusy(): Promise<string | null> {
+  return (await workerSessionBusy()) ? null : login();
+}
+
 async function login(): Promise<string> {
   if (!USER || !PASS) throw new Error('no Turboly credentials configured');
-  // ONE SESSION PER USER: logging in here kicks the RPA pusher's session. When a
-  // push is in flight (recently-touched queued/pushing doc), skip the login — the
-  // route falls back to Mongo. Not needed with a dedicated TURBOLY_LOOKUP_* user.
-  if (!process.env.TURBOLY_LOOKUP_USERNAME) {
-    const recent = new Date(Date.now() - 20 * 60_000).toISOString();
-    const busy = await getDb()
-      .collection('spk')
-      .countDocuments({ state: { $in: ['queued', 'pushing'] }, updatedAt: { $gte: recent } }, { limit: 1 });
-    if (busy > 0) throw new Error('push in flight — skipping Turboly login to avoid kicking it');
-  }
   const r1 = await fetch(`${BASE}/users/sign_in`, { redirect: 'manual' });
   const pre = cookiesFrom(r1);
   const html = await r1.text();
@@ -90,6 +130,7 @@ export async function turbolyDebugProbe(phone: string): Promise<unknown> {
   const steps: unknown[] = [];
   const cookie = await cachedCookie();
   steps.push({ step: 'cachedCookie', present: !!cookie, len: cookie?.length ?? 0 });
+  steps.push({ step: 'guard', workerBusy: await workerSessionBusy() }); // why a live lookup went quiet
   const url = `${BASE}/lookup/customers.json?search_term=${encodeURIComponent('0' + key)}&page_limit=10&page=1`;
   try {
     const res = await fetch(url, { headers: { cookie: cookie ?? '', accept: 'application/json' }, redirect: 'manual' });
@@ -114,7 +155,9 @@ export interface TbVehicle {
 export async function turbolyVehicleByPlate(plate: string): Promise<TbVehicle | null> {
   const key = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (key.length < 4) return null;
-  let cookie = (await cachedCookie()) ?? (await login());
+  const first = (await cachedCookie()) ?? (await loginUnlessWorkerBusy());
+  if (!first) return null; // guard tripped — the route prefills from Mongo instead
+  let cookie = first;
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetch(
       `${BASE}/lookup/vehicles.json?search_term=${encodeURIComponent(key)}&page_limit=10&page=1`,
@@ -129,7 +172,9 @@ export async function turbolyVehicleByPlate(plate: string): Promise<TbVehicle | 
       const matches = (j.vehicles ?? []).filter((v) => String(v.registration ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '') === key);
       return matches.sort((a, b) => ((a as { id?: number }).id ?? 0) - ((b as { id?: number }).id ?? 0))[0] ?? null;
     }
-    cookie = await login();
+    const fresh = await loginUnlessWorkerBusy();
+    if (!fresh) return null; // cached cookie is dead and re-login would kick a worker
+    cookie = fresh;
   }
   return null;
 }
@@ -144,13 +189,21 @@ export async function turbolyVehicleByPlate(plate: string): Promise<TbVehicle | 
 export async function turbolyCustomersByPhone(phone: string): Promise<TbCustomer[]> {
   const key = canonPhoneKey(phone);
   if (key.length < 8) return [];
-  let cookie = (await cachedCookie()) ?? (await login());
+  const first = (await cachedCookie()) ?? (await loginUnlessWorkerBusy());
+  if (!first) return []; // guard tripped — the route prefills from Mongo instead
+  let cookie = first;
   for (let attempt = 0; attempt < 2; attempt++) {
     const byId = new Map<number, TbCustomer>();
     let sessionDead = false;
     for (const term of [key, '0' + key, '62' + key, '+62' + key]) {
       const out = await search(term, cookie);
-      if (out === null) { cookie = await login(); sessionDead = true; break; } // re-login, restart all terms
+      if (out === null) { // re-login, restart all terms — unless that would kick a worker
+        const fresh = await loginUnlessWorkerBusy();
+        if (!fresh) return [];
+        cookie = fresh;
+        sessionDead = true;
+        break;
+      }
       for (const c of out) {
         if (canonPhoneKey(String(c.phone ?? '')) === key) byId.set(c.id, c);
       }

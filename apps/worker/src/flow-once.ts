@@ -14,7 +14,7 @@ import { config } from './config.js';
 /**
  * Redis-free ONE-SHOT flow-job drain — the executor behind the flow board.
  * Claims every `queued` flow_jobs row (CAS queued→running), runs the Turboly
- * lifecycle step through TurbolyFlowRpa on the ONE session per branch account,
+ * lifecycle step through TurbolyFlowRpa on the process's ONE live session,
  * then updates spk.flow.* + the job row (done / failed / requeued-transient).
  * Exits when the queue is empty. Runs from flow.yml, which shares the
  * `turboly-push` concurrency group so it is NEVER parallel with the pusher.
@@ -45,14 +45,27 @@ type FlowDoc = SpkDoc & {
   checkGo?: { harga?: number | null; inspectionItems?: unknown[] | null } | null;
 };
 
-// ── one Turboly session per branch (serial; created lazily, shared per run) ─
+// ── the process's ONE Turboly session (re-made when the branch changes) ────
 
+/**
+ * Turboly allows ONE SESSION PER USER, and every branch logs in with the SAME
+ * .env credentials — so keeping a rig alive per branch kicked our own earlier
+ * rigs the moment a job for a second branch arrived, and the kicked rig then
+ * met a sign-in page mid-action (live: create_wo "dialihkan ke /dashboard 3×").
+ * Hence one live rig: a different branchCode disposes it BEFORE the new login.
+ * The drain loop is serial, so nothing is ever mid-action during the swap.
+ * A swap costs a fresh login, so same-branch jobs in a row reuse the rig.
+ */
 class BranchFlowRigs {
-  private rigs = new Map<string, { session: TurbolySession; rpa: TurbolyFlowRpa }>();
+  private rig: { branchCode: string; session: TurbolySession; rpa: TurbolyFlowRpa } | null = null;
 
   async rpaFor(branchCode: string): Promise<TurbolyFlowRpa> {
-    let rig = this.rigs.get(branchCode);
-    if (!rig) {
+    if (this.rig && this.rig.branchCode !== branchCode) {
+      const stale = this.rig;
+      this.rig = null;
+      await stale.session.dispose().catch(() => {});
+    }
+    if (!this.rig) {
       const session = new TurbolySession({
         baseUrl: config.turbolyBaseUrl,
         stateDir: config.turbolyStateDir,
@@ -60,37 +73,37 @@ class BranchFlowRigs {
         branchCode,
       });
       await session.start();
-      rig = { session, rpa: new TurbolyFlowRpa(session, { screenshotDir: config.screenshotDir }) };
-      this.rigs.set(branchCode, rig);
+      this.rig = { branchCode, session, rpa: new TurbolyFlowRpa(session, { screenshotDir: config.screenshotDir }) };
     }
-    await rig.session.ensureLoggedIn();
-    return rig.rpa;
+    await this.rig.session.ensureLoggedIn();
+    return this.rig.rpa;
   }
 
   /**
-   * ONE TURBOLY SESSION PER USER: any human login (or the web app's HTTP
-   * lookup) kicks a worker session mid-action — a routine event, and likely
-   * here because every branch rig shares the same env credentials. The kick
-   * surfaces as a Discovery/Data error (a sign-in modal blankets the page,
-   * buttons "disappear"), which classify() would mark PERMANENT. So after any
-   * failure, probe the live pages for the sign-in text (same probe as
+   * A kick is still routine even with one rig — a human login (or the web app's
+   * HTTP lookup) takes the account from us mid-action. It surfaces as a
+   * Discovery/Data error (a sign-in modal blankets the page, buttons
+   * "disappear"), which classify() would mark PERMANENT. So after any failure,
+   * probe the live page for the sign-in text (same probe as
    * rpaSink.classifyFailure) — kicked means transient: the retry's
    * ensureLoggedIn() logs back in.
    */
   async anySessionKicked(): Promise<boolean> {
-    for (const { session } of this.rigs.values()) {
-      const kicked = await session
+    const rig = this.rig;
+    if (!rig) return false;
+    try {
+      return await rig.session
         .page_()
-        .evaluate(() => /you need to sign in|you have been logged out|sign in or sign up/i.test(document.body?.innerText ?? ''))
-        .catch(() => false);
-      if (kicked) return true;
+        .evaluate(() => /you need to sign in|you have been logged out|sign in or sign up/i.test(document.body?.innerText ?? ''));
+    } catch {
+      return false;
     }
-    return false;
   }
 
   async dispose(): Promise<void> {
-    for (const { session } of this.rigs.values()) await session.dispose().catch(() => {});
-    this.rigs.clear();
+    const rig = this.rig;
+    this.rig = null;
+    await rig?.session.dispose().catch(() => {});
   }
 }
 
