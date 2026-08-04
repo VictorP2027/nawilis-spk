@@ -230,6 +230,14 @@ export class RpaSink implements ServiceOrderSink {
     const flashOk = /successfully (create|save)/i.test((await page.textContent('body').catch(() => '')) ?? '');
     const success = onDetailPage || flashOk;
     if (!success || (inlineErr && !serviceOrderNo)) {
+      // A logged-out page is not a data verdict: nothing was written and the
+      // retry logs back in. It used to be hidden behind Turboly's "Email is
+      // unverified" banner; now that the banner is filtered, the real message
+      // surfaces — and it must be classified as what it is, or every kicked
+      // push is parked as permanent and a human is paged for nothing.
+      if (/you have been logged out|please login again|you need to sign in|sign in or sign up/i.test(inlineErr ?? '')) {
+        return { ...fail('transient', 'sesi Turboly ter-kick saat simpan — data belum tersimpan, dicoba ulang otomatis'), screenshotRef };
+      }
       let msg = inlineErr ?? 'save did not confirm';
       if (/account code can't be blank/i.test(msg)) {
         msg += ' — konfigurasi store di Turboly mewajibkan Account Code tapi daftarnya KOSONG; definisikan Account Code (Setup → Accounting) atau matikan kewajibannya untuk store ini, lalu retry';
@@ -238,12 +246,18 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     const serviceOrderUrl = /\/service_orders\/\d+/.test(page.url()) ? page.url() : null;
+    // COMMIT BARRIER. The order EXISTS from here on. Anything that throws after
+    // this point — a lost lease, a kicked session during approve, a dead page —
+    // must not become a failure result, because the caller retries a failure and
+    // the retry would create a SECOND order. Approve is best-effort; its verified
+    // outcome is reported, never raised.
     let approved: boolean | null = null;
-    if (ctx.approve) {
-      this.assertLease(ctx);
-      approved = await this.approveNow(page);
+    try {
+      if (ctx.approve) approved = await this.approveNow(page);
+      await this.session.noteJobDone();
+    } catch {
+      approved = approved ?? false;
     }
-    await this.session.noteJobDone();
     return { ok: true, serviceOrderNo, workOrderNo: null, verified: null, screenshotRef, serviceOrderUrl, approved };
   }
 

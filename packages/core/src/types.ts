@@ -197,6 +197,12 @@ export interface PushPhase {
 }
 
 export interface PushInfo {
+  /**
+   * Set when a doc was reclaimed from `pushing` after its runner died. Its
+   * Turboly outcome is UNKNOWN — the Save may already have committed — so the
+   * next claim must prove the order is absent before creating another one.
+   */
+  reclaimed?: boolean;
   /** Written INTO Turboly (reference field). The sole identity used for read-back. */
   correlationToken: string;
   /** QuickServ 95 / Nawilis 50 — QS jobs finish before a lagged SWO would exist. */

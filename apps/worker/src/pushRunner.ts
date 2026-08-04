@@ -112,7 +112,9 @@ export async function pushQueued(
           .catch(() => null),
       ),
       ...orphans.map((d) =>
-        transition(d._id, 'pushing', 'queued', {})
+        // Mark it: a doc that outlived its lease may have been saved in Turboly
+        // already, and the claim path must not create a second order for it.
+        transition(d._id, 'pushing', 'queued', { push: { ...d.push, reclaimed: true } })
           .then((r) => (r ? `↻ reclaimed orphan ${d._id} (pushing since ${d.updatedAt} — runner died mid-push)` : null))
           .catch(() => null),
       ),
@@ -190,6 +192,49 @@ export async function pushQueued(
           mirror.salespersonByName.get(norm(typedSales)) ??
           { _id: 'unmatched', mechanicCode: 'unmatched', name: typedSales, storeCode: null, role: 'salesperson', syncedAt: '' };
         const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson, planServiceDate: plan.date, planServiceTime: plan.time });
+
+        // VERIFY BEFORE RECREATE. A retry means a previous attempt already ran,
+        // and the one thing we cannot know is whether it died before or AFTER
+        // Turboly committed the Save — an orphan reclaimed from `pushing` is
+        // exactly that case. Pushing blind there creates a SECOND order for one
+        // SPK, the worst outcome this pipeline has. The correlation token is on
+        // the order, so ask first; only a doc on its first attempt may skip this.
+        const wasReclaimed = (claimed.push as { reclaimed?: boolean }).reclaimed === true;
+        if (claimed.push.attempt > 1 || wasReclaimed) {
+          const prior = await branchSinks
+            .withSink(claimed.branchCode, (sink) => sink.verifyByToken(claimed))
+            .catch(() => null);
+          if (prior?.found) {
+            const adopted = { ...claimed.turboly, serviceOrderNo: prior.serviceOrderNo ?? claimed.turboly.serviceOrderNo };
+            await transition(doc._id, 'pushing', 'pushed', { turboly: adopted }).catch(() => {});
+            await transition(doc._id, 'pushed', 'confirmed', {
+              turboly: { ...adopted, readback: { matchedOn: ['reference_token'], lineCount: prior.lineCount, lineSkus: prior.lineSkus, km: prior.km } },
+            }).catch(() => {});
+            out.pushed++;
+            out.confirmed++;
+            log(`✓ ${doc._id} sudah ada di Turboly (${prior.serviceOrderNo ?? '?'}) — diadopsi, tidak dibuat ulang`);
+            continue;
+          }
+          if (wasReclaimed) {
+            // "Not found" is NOT proof of absence here: without a stored URL the
+            // read-back falls back to a list search that can simply miss. A
+            // reclaimed doc whose order we cannot SEE has an unknown outcome, and
+            // pushing on unknown is how one SPK becomes two Service Orders —
+            // which is exactly what happened when this path pushed blind. A human
+            // checks Turboly; that is cheap, a duplicate order is not.
+            await transition(doc._id, 'pushing', 'manual_intervention', {
+              push: {
+                ...claimed.push,
+                failureClass: 'structural',
+                lastError:
+                  'Runner mati saat push dan Service Order-nya tidak ditemukan lagi — CEK MANUAL di Turboly (cari nomor referensi SPK ini). Jangan push ulang sebelum yakin ordernya belum ada.',
+              },
+            }).catch(() => {});
+            out.failed++;
+            log(`⚠ ${doc._id}: orphan tidak bisa diverifikasi — dipindah ke manual_intervention (hindari order dobel)`);
+            continue;
+          }
+        }
 
         const res = await branchSinks.withSink(claimed.branchCode, (sink) =>
           sink.pushServiceOrder(payload, { workerId, epoch, approve: config.approveAfterSave, leaseExpiresAt }),
