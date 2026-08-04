@@ -42,6 +42,25 @@ const stuck = await spk
 const newStuck = stuck.filter((d) => !d.push?.stuckAlertedAt || d.push.stuckAlertedAt < d.updatedAt);
 
 const lines = [];
+
+// 0) SAFETY NET: a DISABLED workflow looks exactly like silence — records just
+// sit queued forever with nobody to push them. Alert loudly (needs GH_TOKEN,
+// which Actions provides automatically as github.token).
+const ghToken = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+const repo = process.env.GITHUB_REPOSITORY ?? 'VictorP2027/nawilis-spk';
+if (ghToken) {
+  for (const wf of ['push.yml', 'flow.yml']) {
+    try {
+      const r = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${wf}`, {
+        headers: { authorization: `Bearer ${ghToken}`, accept: 'application/vnd.github+json' },
+      });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.state && j.state !== 'active') lines.push(`## ⛔ WORKFLOW ${wf} = ${j.state} — SPK tidak akan terkirim sampai di-enable!`);
+      }
+    } catch { /* network hiccup — the record checks below still run */ }
+  }
+}
 if (newFailed.length) {
   lines.push(`## ❌ ${newFailed.length} push GAGAL`);
   for (const d of newFailed) {

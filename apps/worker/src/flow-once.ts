@@ -447,6 +447,13 @@ async function main(): Promise<void> {
         // as Discovery/Data errors, not as a typed transient. Probe the live
         // pages: kicked → transient, the retry's ensureLoggedIn re-logs in.
         const isAuth = e instanceof AuthChallengeError || (e instanceof Error && e.name === 'AuthChallengeError');
+        // Turboly maintenance windows serve a "site maintenance" page (and
+        // "You have been logged out" on XHRs) — transient, but staff deserve
+        // the real reason instead of a vague retry loop.
+        if (/site maintenance|undergoing scheduled upgrades|logged out\. please login/i.test(msg)) {
+          transient = true;
+          msg = 'Turboly sedang MAINTENANCE (upgrade terjadwal) — otomatis dilanjutkan setelah Turboly online lagi.';
+        }
         if (!transient && !isAuth && (await rigs.anySessionKicked())) {
           transient = true;
           msg = `sesi Turboly ter-kick oleh login lain — dicoba ulang otomatis. (${msg})`;

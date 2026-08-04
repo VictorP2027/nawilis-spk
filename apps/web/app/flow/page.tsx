@@ -26,7 +26,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 interface SoInfo { no: string | null; url: string | null; approved: boolean }
 interface WoInfo { no: string | null; url: string | null; status: string | null }
 interface InvInfo { no: string | null; url: string | null; status: string | null }
-interface PendingJob { jobId: string | null; action: string; state: string; error: string | null }
+interface PendingJob {
+  attempts?: number | null; jobId: string | null; action: string; state: string; error: string | null }
 
 interface FlowRow {
   _id: string; // = spkId on the wire
@@ -135,7 +136,8 @@ function normJob(raw: unknown): PendingJob | null {
   const j = obj(raw);
   const action = j ? str(j.action) : null;
   if (!j || !action) return null;
-  return { jobId: str(j.jobId) ?? str(j._id), action, state: str(j.state) ?? 'queued', error: str(j.error) };
+  const att = typeof j.attempts === 'number' ? j.attempts : null;
+  return { jobId: str(j.jobId) ?? str(j._id), action, state: str(j.state) ?? 'queued', error: str(j.error), attempts: att };
 }
 
 function normRow(raw: unknown): FlowRow | null {
@@ -449,7 +451,18 @@ function Card({ row, onAction, onRetry }: {
       </div>
 
       {inFlight && (
-        <div className="fb-wait"><span className="fb-spin" /> {pj.state === 'running' ? 'Menjalankan' : 'Antri'}: {pjLabel}…</div>
+        <div className="fb-wait">
+          <div><span className="fb-spin" /> {pj.state === 'running' ? 'Menjalankan' : 'Antri'}: {pjLabel}…</div>
+          {/* A queued job that already failed once carries the retry reason —
+              show it so a vendor outage never looks like a silent hang. */}
+          {pj.error && (
+            <div className="fb-waitwhy">
+              {/maintenance/i.test(pj.error) ? '🛠 ' : '↻ '}
+              {pj.error}
+              {pj.attempts != null && pj.attempts > 0 ? ` (percobaan ${pj.attempts})` : ''}
+            </div>
+          )}
+        </div>
       )}
 
       {failed && (
@@ -521,7 +534,7 @@ export default function FlowBoard() {
   // After a job is enqueued: optimistic spinner now, real state shortly after.
   const onActionDone = useCallback((spkId: string, action: string) => {
     setModal(null);
-    setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, pendingJob: { jobId: null, action, state: 'queued', error: null } } : r)));
+    setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, pendingJob: { jobId: null, action, state: 'queued', error: null, attempts: 0 } } : r)));
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => { void load(); }, 1500);
   }, [load]);

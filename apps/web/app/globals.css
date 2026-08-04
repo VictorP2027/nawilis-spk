@@ -236,3 +236,6 @@ svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-
 
 /* Compact confirmation hint — plain tiny text, no pill */
 .ok-sm { font-size: 10.5px; color: #1c7c43; margin-top: 3px; line-height: 1.4; }
+
+/* Flow board: why a queued job is waiting (retry reason / vendor outage) */
+.fb-waitwhy { font-size: 10.5px; color: #8a6d3b; margin-top: 3px; line-height: 1.35; }
