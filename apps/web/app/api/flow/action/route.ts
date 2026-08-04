@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import {
   collections, flowJobs, enqueueFlowJob, retryFlowJob, ensureFlowInitialized,
   effectiveFlow, canRunFlowAction, isFlowAction,
@@ -47,6 +47,29 @@ const ACTION_ALIASES: Record<string, FlowActionType> = {
   registerwholesalecustomer: 'register_customer_wholesale',
 };
 
+/**
+ * The dispatch is an ACCELERATOR, never the source of truth: the job is already
+ * durable in flow_jobs and flow.yml's 5-minute cron drains it either way. So it
+ * runs AFTER the response is flushed — the operator gets their job id without paying
+ * the GitHub API round-trip (up to the helper's 4s abort cap when GitHub is slow).
+ *
+ * `after()` rather than a floating promise: on Vercel the invocation is frozen
+ * the instant the response returns, so an un-awaited fetch would simply never be
+ * sent and the job would silently fall back to the cron.
+ */
+function dispatchAfterResponse(jobId: string, spkId: string, action: string): void {
+  after(async () => {
+    try {
+      await triggerFlowAction(jobId, spkId, action);
+    } catch (e) {
+      // triggerFlowAction swallows its own HTTP errors; this catches a dispatch
+      // that throws outright. Log the job id — the helper's own line carries the
+      // status but not WHICH job just lost its head start.
+      console.error(`flow dispatch failed for job ${jobId} (${action}) — cron will pick it up: ${(e as Error).message ?? e}`);
+    }
+  });
+}
+
 function normalizeAction(raw: unknown): FlowActionType | null {
   if (typeof raw !== 'string') return null;
   const s = raw.trim().toLowerCase();
@@ -71,7 +94,7 @@ export async function POST(req: Request): Promise<Response> {
     if (!ok) {
       return NextResponse.json({ error: 'job_not_failed', message: 'Job tidak ditemukan atau tidak dalam status gagal' }, { status: 404 });
     }
-    await triggerFlowAction(json.retryJobId, '', 'retry');
+    dispatchAfterResponse(json.retryJobId, '', 'retry');
     return NextResponse.json({ jobId: json.retryJobId, state: 'queued', retried: true }, { status: 202 });
   }
 
@@ -119,6 +142,14 @@ export async function POST(req: Request): Promise<Response> {
     // returned as-is instead of queueing the same Turboly step twice.
     const existing = await flowJobs().findOne({ spkId, action, state: { $in: ['queued', 'running'] } });
     if (existing) {
+      // A second click on a still-QUEUED job re-fires the dispatch: the reason an
+      // operator clicks again is that nothing visibly happened, which is exactly
+      // what a lost dispatch looks like — and without this the job waits out the
+      // full cron tick. Waking the drain twice cannot run the job twice
+      // (claimNextFlowJob CAS-claims queued→running, and flow.yml shares the
+      // turboly-push concurrency group). Skipped when already `running`: a worker
+      // is demonstrably alive.
+      if (existing.state === 'queued') dispatchAfterResponse(existing._id, spkId, action);
       return NextResponse.json({ jobId: existing._id, spkId, action, state: existing.state, deduped: true }, { status: 200 });
     }
 
@@ -127,7 +158,7 @@ export async function POST(req: Request): Promise<Response> {
 
   try {
     const job = await enqueueFlowJob(spkId, action, params, by);
-    await triggerFlowAction(job._id, spkId, action);
+    dispatchAfterResponse(job._id, spkId, action);
     return NextResponse.json({ jobId: job._id, spkId: spkId || null, action, state: job.state }, { status: 202 });
   } catch (e) {
     console.error('flow action enqueue error', e);

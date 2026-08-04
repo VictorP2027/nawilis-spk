@@ -3,6 +3,7 @@ import { SELECTOR_MAP as S } from './selmap.js';
 import { resolve, exists } from './locators.js';
 import { TurbolySession } from './session.js';
 import { DataError, TransientError } from './rpaSink.js';
+import { registerRetailHttp, registerWholesaleHttp, type HttpRegisterConfig, type HttpRegisterResult } from './httpRegister.js';
 import { canonPhoneKey, localPhone } from '../indonesia.js';
 
 /**
@@ -73,6 +74,12 @@ export interface RegisterRetailArgs {
   storeTurbolyId?: string | null;
   /** Link to a wholesale company (corporate customers only). */
   companyName?: string | null;
+  /**
+   * The company's Turboly id, when the corporate flow already knows it. The
+   * HTTP path links by id (exact); the browser path can only pick by visible
+   * name, so both are passed and neither replaces the other.
+   */
+  companyId?: string | null;
 }
 
 export interface RegisterCustomerResult {
@@ -108,6 +115,88 @@ export class DiscoveryError extends Error {
     super(msg);
     this.name = 'DiscoveryError';
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// HTTP fast path policy
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The one switch that takes customer registration back to the browser.
+ * Defaults ON: the browser path costs ~2 minutes and holds the single Turboly
+ * session for every one of them, so any other login kills it mid-form.
+ */
+function httpRegisterEnabled(): boolean {
+  const raw = (process.env.TURBOLY_HTTP_REGISTER ?? '').trim().toLowerCase();
+  return !['0', 'off', 'false', 'no'].includes(raw);
+}
+
+/**
+ * Errors httpRegister raises while BUILDING the request — our reading of the
+ * form was wrong, so the browser (which runs the page's own JS: select2 remote
+ * lists, the address modal) may well succeed where the scraper could not.
+ *
+ * It reports these as DataError, the same class it uses for "Turboly rejected
+ * our values", so the split has to be made on the message. Every pattern here
+ * is thrown BEFORE the POST, which is what makes falling back safe: nothing was
+ * written, so the browser cannot create a second customer. Nothing raised after
+ * the POST ("… ditolak Turboly: …", "simpan tidak terkonfirmasi") may ever be
+ * added to this list.
+ */
+const HTTP_FORM_UNREADABLE: RegExp[] = [
+  /form customer tidak ada/i,
+  /authenticity_token tidak ada/i,
+  /template baris alamat/i,
+  /kontrol .{0,40} tidak ada di form/i,
+  /SALES TAX tidak bisa diset ke PPN/i,
+  // An empty option list is the scraper seeing nothing, not Turboly refusing a
+  // value: a select2 filled by remote JS renders as <select> with no options.
+  /Pilihan:\s*\(kosong\)/i,
+  // Nothing was posted yet, and the browser has its own stored session — so a
+  // failed HTTP login is worth the slow path rather than a review ticket.
+  /Login Turboly ditolak|Kredensial Turboly belum diisi/i,
+];
+
+/**
+ * Should this HTTP failure fall back to the browser?
+ *
+ * - TransientError: the vendor or the session is the problem. A browser attempt
+ *   would hit the same outage, only 2 minutes slower — let it requeue.
+ * - DataError: Turboly rejected our values; the browser posts the same values
+ *   and gets the same rejection. Surface it, EXCEPT for the pre-POST parse
+ *   failures above.
+ * - anything else (a TypeError out of the regex scanning, a dead socket): our
+ *   HTTP assumption broke in a way nobody classified. Fall back — but only
+ *   after the caller has re-checked for a customer the failed attempt may
+ *   still have created.
+ */
+function shouldFallBackToBrowser(err: unknown): boolean {
+  if (err instanceof TransientError) return false;
+  if (err instanceof DataError) return HTTP_FORM_UNREADABLE.some((re) => re.test(err.message));
+  return true;
+}
+
+/**
+ * A vendor-side error page rather than Turboly.
+ *
+ * A 502 today rendered a blank page, and the job died with the useless
+ * 'Tombol terlihat: [TIDAK ADA tombol terlihat]' — a review ticket for an
+ * outage that fixed itself in minutes. `body` is null when the read itself
+ * failed (that is not evidence of anything); '' means the page really is blank.
+ * Proxy error pages are tiny, so the length guard keeps a real Turboly page
+ * that merely mentions "gateway" out of this.
+ */
+function isVendorOutagePage(status: number, body: string | null, title: string): boolean {
+  if (status >= 500) return true;
+  if (body !== null && body.trim() === '') return true;
+  const text = `${title}\n${(body ?? '').length < 4000 ? (body ?? '') : ''}`;
+  // A BARE "502" is not enough: Indonesian amounts are dot-grouped, so an
+  // invoice showing Rp 1.502.000 would read as an outage and stall the job
+  // forever on a page that is perfectly fine. The number only counts next to
+  // error wording.
+  return /bad gateway|gateway time-?out|service unavailable|temporarily unavailable|cloudflare|\bnginx\b|\b(error|http)\s*50[234]\b|\b50[234]\s+(bad|service|gateway|error)\b/i.test(
+    text,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -590,6 +679,92 @@ export class TurbolyFlowRpa {
     await page.waitForTimeout(600);
   }
 
+  /**
+   * "* SALES TAX" = PPN, read back to prove it stuck.
+   *
+   * Two traps here. The field has a DIFFERENT id on each form —
+   * #customer_service_tax_id on retail, #customer_tax_id on wholesale (and
+   * #customer_tax_no next to it is NPWP, not this) — so the retail id alone
+   * silently matched nothing on a company. And it is a select2 over a hidden
+   * native <select>, which Playwright's selectOption cannot act on; the old
+   * call swallowed that too. Setting `.value` isn't enough either: select2
+   * only notices a jQuery `change`. Loud on failure — nothing is saved yet at
+   * this point, so a throw here is retry-safe.
+   */
+  private async setSalesTaxPPN(page: Page, what: string): Promise<void> {
+    const set = (await page.evaluate(`(() => {
+      const sels = ['#customer_service_tax_id', '#customer_tax_id']
+        .map((s) => document.querySelector(s))
+        .filter(Boolean);
+      const sel = sels.find((s) => Array.from(s.options).some((o) => /^ppn$/i.test((o.textContent || '').trim()))) || sels[0];
+      if (!sel) return { ok: false, why: 'kontrol tidak ada', options: [] };
+      const options = Array.from(sel.options).map((o) => (o.textContent || '').trim());
+      const want = Array.from(sel.options).find((o) => /^ppn$/i.test((o.textContent || '').trim()));
+      if (!want) return { ok: false, why: 'PPN tidak ada di daftar', options };
+      sel.value = want.value;
+      // Native + jQuery: Turboly's select2 listens on the jQuery event only.
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      // select2's own change handler can throw on a form whose tax data hasn't
+      // loaded yet — cosmetic. The native <select> is the posted field, so a
+      // failed widget sync must not abort the fill.
+      try { if (window.jQuery) window.jQuery(sel).val(want.value).trigger('change'); } catch (e) { /* widget only */ }
+      const now = sel.options[sel.selectedIndex];
+      return { ok: /^ppn$/i.test(((now && now.textContent) || '').trim()), why: 'read-back', options };
+    })()`)) as { ok: boolean; why: string; options: string[] };
+    if (!set.ok) {
+      throw new DataError(`${what}: SALES TAX tidak bisa diset ke PPN (${set.why}). Pilihan: ${set.options.join(', ') || '(kosong)'}`);
+    }
+  }
+
+  /**
+   * Credentials for the HTTP path — deliberately the SAME account the browser
+   * session logs in with. One session per user means a second account would be
+   * a second session; the per-branch encrypted credential is resolved by the
+   * session itself (same reach-into-cfg shape as `baseUrl` above), with the env
+   * pair as the fallback, so there is exactly one source of truth.
+   */
+  private async httpConfig(): Promise<HttpRegisterConfig | null> {
+    const resolve = (
+      this.session as unknown as {
+        resolveCredentials?: () => Promise<{ username: string; password: string } | null>;
+      }
+    ).resolveCredentials;
+    const cred = resolve ? await resolve.call(this.session).catch(() => null) : null;
+    const username = cred?.username ?? process.env.TURBOLY_USERNAME ?? '';
+    const password = cred?.password ?? process.env.TURBOLY_PASSWORD ?? '';
+    if (!username || !password) return null;
+    return { baseUrl: this.baseUrl, username, password };
+  }
+
+  /**
+   * Run the HTTP registration, or say why the browser has to. Null means "run
+   * the slow path"; a throw means the browser would not have helped (see
+   * shouldFallBackToBrowser). Every reason is pushed onto `notes` so the
+   * operator reading the job can tell WHICH path registered their customer.
+   */
+  private async tryHttpRegister(
+    run: (cfg: HttpRegisterConfig) => Promise<HttpRegisterResult>,
+    notes: string[],
+  ): Promise<HttpRegisterResult | null> {
+    if (!httpRegisterEnabled()) {
+      notes.push('jalur cepat (HTTP) dimatikan lewat TURBOLY_HTTP_REGISTER — dipakai robot browser');
+      return null;
+    }
+    const cfg = await this.httpConfig();
+    if (!cfg) {
+      notes.push('kredensial Turboly untuk jalur cepat (HTTP) tidak tersedia — dipakai robot browser');
+      return null;
+    }
+    try {
+      return await run(cfg);
+    } catch (err) {
+      if (!shouldFallBackToBrowser(err)) throw err;
+      const why = err instanceof Error ? err.message : String(err);
+      notes.push(`jalur cepat (HTTP) tidak bisa membaca form Turboly (${why}) — dilanjutkan robot browser`);
+      return null;
+    }
+  }
+
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
     // Store the LOCAL 0… spelling like the rest of Turboly does: its customer
     // search is a prefix match on the stored string, so a "+62…" record and a
@@ -600,6 +775,30 @@ export class TurbolyFlowRpa {
     // this customer (save click landed, then the session died before read-back).
     const dup = await this.findExistingCustomerByPhone(phone);
     if (dup) return dup;
+
+    const notes: string[] = [];
+    const fast = await this.tryHttpRegister(
+      (cfg) =>
+        registerRetailHttp(cfg, {
+          nama: args.nama,
+          phone,
+          alamat: args.alamat,
+          storeTurbolyId: args.storeTurbolyId ?? null,
+          companyName: args.companyName ?? null,
+          companyId: args.companyId ?? null,
+        }),
+      notes,
+    );
+    if (fast) {
+      return { customerId: fast.customerId, customerUrl: fast.customerUrl, note: 'didaftarkan lewat jalur cepat (HTTP)' };
+    }
+    // An unclassified HTTP failure can also be a socket that died AFTER the POST
+    // was sent, which looks identical to one that died before. Re-run the same
+    // guard rather than trust that: the browser attempt below would otherwise
+    // create the second customer this guard exists to prevent.
+    const late = await this.findExistingCustomerByPhone(phone);
+    if (late) return { ...late, note: [late.note, ...notes].filter(Boolean).join(' • ') };
+
     const page = await this.openFormPage(
       ['/customers/new'],
       '/customers',
@@ -636,10 +835,7 @@ export class TurbolyFlowRpa {
       }
     }
 
-    // Service Tax: the real control is #customer_service_tax_id (PPN / Always Use Tax).
-    await page.selectOption('#customer_service_tax_id', { label: 'PPN' }).catch(async () => {
-      await page.selectOption('#customer_service_tax_id', { label: 'Always Use Tax' }).catch(() => {});
-    });
+    await this.setSalesTaxPPN(page, 'Customer Retail');
 
     if (args.companyName) {
       const companyOk =
@@ -661,7 +857,9 @@ export class TurbolyFlowRpa {
     await page.waitForLoadState('networkidle').catch(() => {});
     await this.snapshot(page, 'flow-cust-retail-saved');
 
-    return this.readCustomerSaveResult(page, /(retail_customers|customers)\/(\d+)/, 'Customer Retail');
+    const saved = await this.readCustomerSaveResult(page, /(retail_customers|customers)\/(\d+)/, 'Customer Retail');
+    notes.push('didaftarkan lewat robot browser');
+    return { ...saved, note: [saved.note, ...notes].filter(Boolean).join(' • ') };
   }
 
   /**
@@ -674,17 +872,45 @@ export class TurbolyFlowRpa {
     // after a mid-retail failure, the company must NOT be created twice.
     const dupCo = await this.findExistingCompanyByName(args.companyName);
     if (dupCo) {
-      const result: RegisterWholesaleResult = {
+      return this.withLinkedRetail(args, {
         companyId: dupCo.customerId,
         companyUrl: dupCo.customerUrl,
         existing: true,
         note: `perusahaan "${args.companyName}" sudah terdaftar — tidak dibuat ulang (guard duplikat)`,
-      };
-      if (args.retail) {
-        result.retail = await this.registerRetailCustomer({ ...args.retail, companyName: args.companyName });
-      }
-      return result;
+      });
     }
+
+    const notes: string[] = [];
+    const fast = await this.tryHttpRegister(
+      (cfg) =>
+        registerWholesaleHttp(cfg, {
+          companyName: args.companyName,
+          picName: args.picName,
+          npwp: args.npwp,
+          alamat: args.alamat,
+          advisorName: args.advisorName,
+        }),
+      notes,
+    );
+    if (fast) {
+      return this.withLinkedRetail(args, {
+        companyId: fast.customerId,
+        companyUrl: fast.customerUrl,
+        note: 'perusahaan didaftarkan lewat jalur cepat (HTTP)',
+      });
+    }
+    // Same reasoning as the retail path: an unclassified HTTP failure may have
+    // POSTed. Re-probe before letting the browser create a second company.
+    const lateCo = await this.findExistingCompanyByName(args.companyName);
+    if (lateCo) {
+      return this.withLinkedRetail(args, {
+        companyId: lateCo.customerId,
+        companyUrl: lateCo.customerUrl,
+        existing: true,
+        note: [`perusahaan "${args.companyName}" ternyata sudah tersimpan — tidak dibuat ulang`, ...notes].join(' • '),
+      });
+    }
+
     const page = await this.openFormPage(
       ['/customers/new?wholesale=1'],
       '/customers/wholesale',
@@ -702,7 +928,7 @@ export class TurbolyFlowRpa {
     await this.finishAddressSection(page);
 
     await this.selectNativeOption(page, /currency|mata\s*uang/i, 'IDR');
-    await page.selectOption('#customer_service_tax_id', { label: 'PPN' }).catch(() => {});
+    await this.setSalesTaxPPN(page, 'Customer Wholesale');
     // "* Salesperson" (select#salesperson-id) is REQUIRED on this form. Match the
     // requested name exactly; if it isn't in the list, fail with the real options
     // instead of silently crediting the wrong person.
@@ -727,11 +953,36 @@ export class TurbolyFlowRpa {
     await this.snapshot(page, 'flow-cust-wholesale-saved');
 
     const company = await this.readCustomerSaveResult(page, /(wholesale_customers|companies|customers)\/(\d+)/, 'Customer Wholesale');
-    const result: RegisterWholesaleResult = { companyId: company.customerId, companyUrl: company.customerUrl };
-    if (args.retail) {
-      result.retail = await this.registerRetailCustomer({ ...args.retail, companyName: args.companyName });
-    }
-    return result;
+    notes.push('perusahaan didaftarkan lewat robot browser');
+    return this.withLinkedRetail(args, {
+      companyId: company.customerId,
+      companyUrl: company.customerUrl,
+      note: notes.join(' • '),
+    });
+  }
+
+  /**
+   * Corporate order, in one place: the company exists by the time this runs,
+   * and only then is the linked retail customer registered. It carries the
+   * company's id so it links to THIS company rather than a same-named one, and
+   * the name too because the browser path can only pick by visible text. A
+   * failure in the retail half leaves the company created on purpose — the name
+   * guard at the top of registerWholesaleCustomer is what stops the retry from
+   * making a second one.
+   */
+  private async withLinkedRetail(
+    args: RegisterWholesaleArgs,
+    company: RegisterWholesaleResult,
+  ): Promise<RegisterWholesaleResult> {
+    if (!args.retail) return company;
+    return {
+      ...company,
+      retail: await this.registerRetailCustomer({
+        ...args.retail,
+        companyName: args.companyName,
+        companyId: company.companyId,
+      }),
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -749,12 +1000,21 @@ export class TurbolyFlowRpa {
     // confusing button list scraped from the dashboard.
     const wantPath = new URL(target).pathname;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await page.goto(target, { waitUntil: 'domcontentloaded' });
+      const res = await page.goto(target, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(2500);
       const here = new URL(page.url()).pathname;
-      const body = (await page.evaluate(() => document.body?.innerText ?? '').catch(() => '')) as string;
-      if (/site maintenance|undergoing scheduled upgrades/i.test(body)) {
+      // null (not '') when the read itself failed — a failed read is not
+      // evidence of a blank page, and isVendorOutagePage relies on the two
+      // being distinguishable.
+      const body = (await page.evaluate(() => document.body?.innerText ?? '').catch(() => null)) as string | null;
+      if (/site maintenance|undergoing scheduled upgrades/i.test(body ?? '')) {
         throw new TransientError('Turboly sedang MAINTENANCE (upgrade terjadwal) — dilanjutkan otomatis setelah online lagi');
+      }
+      const status = res?.status() ?? 0;
+      if (isVendorOutagePage(status, body, await page.title().catch(() => ''))) {
+        throw new TransientError(
+          `Turboly sedang bermasalah (gangguan vendor${status >= 400 ? `, HTTP ${status}` : ''}) — dicoba ulang otomatis`,
+        );
       }
       if (here === wantPath) break;
       if (attempt === 3) {

@@ -7,6 +7,7 @@ export * from './apiSink.js';
 export * from './manualSink.js';
 export * from './payload.js';
 export * from './flowSink.js';
+export * from './httpRegister.js';
 
 import { RpaSink } from './rpaSink.js';
 import { ApiSink, type ApiConfig } from './apiSink.js';

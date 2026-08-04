@@ -25,6 +25,28 @@ import { config } from './config.js';
 
 const TIME_BUDGET_MS = 50 * 60_000; // stay under the workflow's 60-min timeout
 
+/**
+ * How long an idle-but-warm runner waits for the next board action before it
+ * exits.
+ *
+ * The board enqueues ONE job per click (Approve SO, then Buat WO, then Start…),
+ * and each click fires its own repository_dispatch. Without this, every click
+ * pays a fresh runner: 60-90s of checkout + npm ci + Playwright install before
+ * the process exists, then another Turboly login — for a step that takes a few
+ * seconds. Staying alive across a burst of clicks reuses both. Registration is
+ * the same story: the owner registering two customers in a row used to queue
+ * the second behind the first run AND a second cold start.
+ *
+ * Bounded and only after real work, because push.yml/sync.yml share the
+ * `turboly-push` concurrency group — every idle second here is a second the
+ * pusher waits. Holding the session idle is safe: a kick while we do nothing
+ * costs nothing, the next job's ensureLoggedIn logs back in.
+ */
+const GRACE_MS = Number.isFinite(Number(process.env.FLOW_DRAIN_GRACE_MS)) ? Number(process.env.FLOW_DRAIN_GRACE_MS) : 20_000;
+const GRACE_POLL_MS = 1_500;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 // ── small param helpers (board clients vary in key spelling) ───────────────
 
 function num(v: unknown): number | null {
@@ -314,9 +336,16 @@ async function executeJob(
     case 'register_customer_retail': {
       const nama = str(p.nama) ?? str(p.name);
       if (!nama) throw new DataError('Nama customer (params.nama) wajib');
-      let storeTurbolyId = str(p.storeTurbolyId);
-      if (!storeTurbolyId) storeTurbolyId = (await collections.tbStores().findOne({ _id: branchCode }))?.turbolyStoreId ?? null;
-      const rpa = await rigs.rpaFor(branchCode);
+      // The store lookup and the browser launch + login are independent, and the
+      // browser is by far the slower of the two — pay them together instead of
+      // adding an Atlas round trip in front of it.
+      const storeIdParam = str(p.storeTurbolyId);
+      const [storeTurbolyId, rpa] = await Promise.all([
+        storeIdParam
+          ? Promise.resolve<string | null>(storeIdParam)
+          : collections.tbStores().findOne({ _id: branchCode }).then((s) => s?.turbolyStoreId ?? null),
+        rigs.rpaFor(branchCode),
+      ]);
       const r = await rpa.registerRetailCustomer({
         nama,
         phone: str(p.phone) ?? str(p.wa) ?? '',
@@ -334,11 +363,15 @@ async function executeJob(
       // params.retail {...} or flat nama/phone params when provided.
       const rp = (p.retail && typeof p.retail === 'object' ? p.retail : {}) as Record<string, unknown>;
       const retailNama = str(rp.nama) ?? str(rp.name) ?? str(p.nama) ?? str(p.name);
-      let storeTurbolyId = str(rp.storeTurbolyId) ?? str(p.storeTurbolyId);
-      if (retailNama && !storeTurbolyId) {
-        storeTurbolyId = (await collections.tbStores().findOne({ _id: branchCode }))?.turbolyStoreId ?? null;
-      }
-      const rpa = await rigs.rpaFor(branchCode);
+      // Same overlap as the retail case: the store lookup rides alongside the
+      // browser launch + login rather than delaying it.
+      const storeIdParam = str(rp.storeTurbolyId) ?? str(p.storeTurbolyId);
+      const [storeTurbolyId, rpa] = await Promise.all([
+        !retailNama || storeIdParam
+          ? Promise.resolve<string | null>(storeIdParam)
+          : collections.tbStores().findOne({ _id: branchCode }).then((s) => s?.turbolyStoreId ?? null),
+        rigs.rpaFor(branchCode),
+      ]);
 
       // Two-step with a job-row CHECKPOINT: the company save is irreversible,
       // so when the retail half fails (e.g. the fresh company is not yet
@@ -405,7 +438,13 @@ async function claimJob(onlyId: string | undefined): Promise<FlowJob | null> {
 async function main(): Promise<void> {
   const onlyId = process.argv.find((a) => a.startsWith('--id='))?.slice(5);
   await connect(config.mongoUri, config.mongoDb);
-  await ensureFlowIndexes();
+  // createIndexes is a full Atlas round trip paid on EVERY invocation (a */5
+  // cron plus one dispatch per board click) and nothing below waits on it:
+  // flow_jobs is small, so a missing ix_flow_queue costs the claim a scan, not
+  // a stall. Overlap it with the first claim rather than gating on it.
+  const indexesReady = ensureFlowIndexes().catch((e: unknown) => {
+    console.warn(`flow-once: ensureFlowIndexes failed (ignored) — ${e instanceof Error ? e.message : String(e)}`);
+  });
   const rigs = new BranchFlowRigs();
   console.log(`flow-once: base=${config.turbolyBaseUrl}`);
 
@@ -415,13 +454,23 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
 
   try {
+    let graceUntil = 0;
     for (;;) {
       if (Date.now() - startedAt > TIME_BUDGET_MS) {
         console.log('flow-once: time budget reached — exiting (the next run resumes)');
         break;
       }
       const job = await claimJob(onlyId);
-      if (!job) break;
+      if (!job) {
+        // Empty from the start (the cron safety net) → exit now; the runner has
+        // nothing to be warm for. Otherwise linger: see GRACE_MS.
+        if (onlyId || done + failed + requeued === 0) break;
+        if (graceUntil === 0) graceUntil = Date.now() + GRACE_MS;
+        if (Date.now() >= graceUntil) break;
+        await sleep(GRACE_POLL_MS);
+        continue;
+      }
+      graceUntil = 0; // a job arrived — restart the window, the operator is mid-burst
       const label = `${String(job.action)} spk=${job.spkId || '-'} job=${job._id} attempt=${job.attempts}`;
       console.log(`flow-once: run ${label}`);
 
@@ -486,6 +535,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await rigs.dispose();
+    await indexesReady;
     await close();
   }
 

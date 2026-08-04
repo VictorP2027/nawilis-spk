@@ -98,12 +98,37 @@ export class RpaSink implements ServiceOrderSink {
     const page = this.session.page_();
     // Verified sequence (proved live 2026-08-01, created SRO/BKS/26080001).
     await page.goto(`${this.baseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(3000);
+    // Was a flat 3000ms. The form's HTML is server-rendered but its widgets are
+    // wired by jQuery on ready, so the real precondition is "the store list is
+    // there AND select2 has built the customer box" — normally well under 1s.
+    await this.waitUntil(
+      'form Service Order',
+      () => {
+        const store = document.querySelector('#store-id') as HTMLSelectElement | null;
+        if (!store || !Array.from(store.options).some((o) => o.value)) return false;
+        return !!document.querySelector('#s2id_select2-input-customer');
+      },
+      [],
+      15000,
+    );
 
     // 1. Header native <select>s (Select2-enhanced; selectOption drives them).
     await page.selectOption('#order-type', { label: payload.type || 'General' }).catch(() => {});
     await page.selectOption('#store-id', { value: payload.storeTurbolyId });
-    await page.waitForTimeout(2800); // advisors load after store (AJAX)
+    // Was a flat 2800ms "advisors load after store". The form opens with NO store
+    // picked, so this select starts empty (that is why a kicked session leaves it
+    // empty and surfaces as "Service Advisor can't be blank") — meaning the first
+    // valued <option> IS the AJAX landing, typically in a few hundred ms. Soft:
+    // if it never lands, selectByLabelExact's own empty-list path still runs
+    // assertSessionAlive and produces the same honest verdict it does today.
+    await this.settle(
+      () => {
+        const el = document.querySelector('#service-advisor-id') as HTMLSelectElement | null;
+        return !!el && Array.from(el.options).some((o) => o.value);
+      },
+      [],
+      6000,
+    );
 
     await this.selectByLabelExact('#service-advisor-id', payload.serviceAdvisorName);
     await this.selectByLabelExact('#salesperson-id', payload.salespersonName);
@@ -137,11 +162,28 @@ export class RpaSink implements ServiceOrderSink {
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
     const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone) : false;
     if (custOk) {
-      await page.waitForTimeout(1200);
+      // Was 1200ms. Picking the customer re-scopes the vehicle widget to them;
+      // what the next line needs is that widget present and no longer disabled.
+      await this.settle(
+        () => {
+          const c = document.querySelector('#s2id_select2-input-vehicle');
+          return !!c && !c.classList.contains('select2-container-disabled');
+        },
+        [],
+        1200,
+      );
       const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
       if (vehOk) {
         attached = true;
-        await page.waitForTimeout(1200);
+        // Was 1200ms waiting for a modal that usually never comes. The vehicle
+        // pick is what raises the in-progress-docs warning, so wait for it to
+        // RENDER — and only briefly, because the dismissModals calls before the
+        // tab click and before Save catch a late one anyway.
+        await this.settle(
+          () => Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
+          [],
+          600,
+        );
         await this.dismissModals();
       } else {
         throw new NeedAddVehicleError(`customer "${create?.nama}" found but vehicle ${reg} not in Turboly`);
@@ -149,7 +191,24 @@ export class RpaSink implements ServiceOrderSink {
     }
     if (!attached) {
       await this.createCustomerAndVehicle(payload);
-      await page.waitForTimeout(1200);
+      // Was 1200ms. Turboly auto-selects the customer+vehicle it just created
+      // into the form, and THAT attachment is the precondition — going on
+      // without it saves an order that fails "Customer can't be blank" and books
+      // a human a review ticket, so this one is bounded well above the old guess
+      // rather than at it.
+      await this.settle(
+        () => {
+          const chosen = (id: string) => {
+            const el = document.querySelector('#' + id) as HTMLInputElement | HTMLSelectElement | null;
+            if (el && el.value) return true;
+            const box = document.querySelector('#s2id_' + id + ' .select2-chosen') as HTMLElement | null;
+            return !!box && (box.innerText || '').trim() !== '';
+          };
+          return chosen('select2-input-customer') && chosen('select2-input-vehicle');
+        },
+        [],
+        5000,
+      );
       await this.dismissModals();
     }
 
@@ -184,16 +243,43 @@ export class RpaSink implements ServiceOrderSink {
     // count to grow, then verify at the end that every line made it.
     await this.dismissModals();
     await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
-    await page.waitForTimeout(700);
+    // Was 700ms. The pane is switched client-side; its Add control appearing is
+    // the signal. Soft — the click below still auto-waits exactly as today.
+    await page.locator('a.btn-add-item').first().waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
     const rowSel = '.select2-container.input-service-product';
     for (const line of payload.serviceLines) {
       const before = await page.locator(rowSel).count();
       await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
-      for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
-      if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
-      await page.waitForTimeout(400);
+      // Same 5s budget as the old 25×200ms poll, at 60ms resolution: the row is
+      // appended by client JS in ~100ms, so the granularity cost more than the work.
+      const grew = await this.settle(([sel = '', n = '0']) => document.querySelectorAll(sel).length > Number(n), [rowSel, String(before)], 5000);
+      if (!grew) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
+      // Was 400ms. A row can be in the DOM a beat before select2 has rendered its
+      // .select2-choice, and clicking a bare container opens nothing.
+      await this.settle(
+        ([sel = '']) => {
+          const els = document.querySelectorAll(sel);
+          const last = els[els.length - 1];
+          return !!last && !!last.querySelector('.select2-choice');
+        },
+        [rowSel],
+        2000,
+      );
       await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
-      await page.waitForTimeout(600);
+      // Was 600ms. The pick makes Turboly fill the row from the catalog, and
+      // setLastServiceRow overwrites those same fields — the fill must land FIRST
+      // or the quoted price is silently replaced by the catalog's afterwards.
+      // Capped at the old guess: a row the catalog never touches costs the same.
+      await this.settle(
+        () => {
+          const rows = document.querySelectorAll('tr.additional-line-item-row');
+          const row = rows[rows.length - 1];
+          const d = row?.querySelector('input[name*="[description]"], textarea[name*="[description]"]') as HTMLInputElement | null;
+          return !!d && d.value.trim() !== '';
+        },
+        [],
+        600,
+      );
       await this.setLastServiceRow(page, line.qty, line.description || line.serviceName, line.priceIncTax);
     }
     const rowCount = await page.locator(rowSel).count();
@@ -219,12 +305,26 @@ export class RpaSink implements ServiceOrderSink {
     }
     await this.dismissModals(); // clear any stray warning before the click can be intercepted
     await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
-    await page.waitForTimeout(1500);
+    // Was 1500ms. The click either raises the confirm modal or goes straight to
+    // the redirect — wait for whichever of the two actually happens.
+    await this.settle(
+      () => {
+        if (/\/service_orders\/\d+/.test(location.pathname)) return true;
+        return Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null);
+      },
+      [],
+      1500,
+    );
     // Because this vehicle may have in-progress docs, Turboly re-prompts a
     // confirmation modal ON save ("Continue?/Yes"). Affirm it, don't dismiss.
     await this.confirmModals();
-    await page.waitForTimeout(3500);
-    await page.waitForLoadState('networkidle').catch(() => {});
+    // Was 3500ms + an unbounded networkidle. The save is committed when the URL
+    // becomes the created SO, and refused when the validation banner renders;
+    // racing both means a rejected save reports as fast as a good one. A timeout
+    // here is NOT an error — step 7 reads the page and produces the honest
+    // "save did not confirm" exactly as it does today.
+    await this.committedOrRefused(page, (u) => /\/service_orders\/\d+/.test(u.pathname), 12000);
+    await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
     await this.snapshot(page, `${payload.spkId}-aftersave`);
 
     // 7. Result: success redirects to the created SO; else an inline error shows.
@@ -279,13 +379,22 @@ export class RpaSink implements ServiceOrderSink {
           })()`)
           .catch(() => false);
       }
-      await page.waitForTimeout(1500);
+      // Was 1500ms. Approve either prompts a confirm or lands straight away;
+      // every wait in here stays soft because this method may never throw.
+      await this.settle(
+        () => Array.from(document.querySelectorAll('.modal-scrollable, .modal, [role=dialog]')).some((m) => (m as HTMLElement).offsetParent !== null),
+        [],
+        1500,
+      );
       await this.confirmModals();
-      await page.waitForTimeout(2500);
-      await page.waitForLoadState('networkidle').catch(() => {});
+      // Was 2500ms. The read-back two lines down IS the condition, so poll it:
+      // an approve that reflects in 400ms now costs 400ms, not 2.5s.
+      for (let i = 0; i < 10 && !(await this.isApproved(page)); i++) await page.waitForTimeout(250);
+      await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => {});
       if (await this.isApproved(page)) return true;
       await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-      await page.waitForTimeout(1800);
+      // Was 1800ms. isApproved() needs the detail page's body — wait for that.
+      await this.settle(() => /document\s*number/i.test(document.body?.innerText ?? ''), [], 1800);
     }
     await this.snapshot(page, 'approve-not-confirmed').catch(() => null);
     return this.isApproved(page);
@@ -355,11 +464,22 @@ export class RpaSink implements ServiceOrderSink {
     }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
+    // Was a flat 2500ms — the form's own fields are the readiness signal.
+    await this.waitUntil(
+      'form /vehicles/new',
+      () => !!document.querySelector('#vehicle_registration') && !!document.querySelector('#s2id_select2-input-customer'),
+      [],
+      15000,
+    );
     await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
     await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    // KEPT as a sleep: the type change re-scopes the make lookup server-side and
+    // leaves no DOM trace to wait on (on /vehicle_models/new the same change is
+    // observable — it repopulates a native <select> — but here the make widget is
+    // a REMOTE select2 with nothing to watch). Racing it would search makes under
+    // the wrong type and read as "make missing", which creates a duplicate make.
     await page.waitForTimeout(600);
     if (payload.vehicleMake) {
       try {
@@ -373,7 +493,13 @@ export class RpaSink implements ServiceOrderSink {
         throw e;
       }
     }
-    await page.waitForTimeout(900);
+    // Was a flat 900ms. pickModelLoose's list is fetched with vehicle_make read
+    // off #vehicle-make-select (see modelLookupPath) — so the thing being waited
+    // for is select2 having written the make id back into it. No make typed means
+    // no id will ever arrive and there is nothing to wait for.
+    if (payload.vehicleMake) {
+      await this.settle(() => !!(document.querySelector('#vehicle-make-select') as HTMLSelectElement | null)?.value, [], 900);
+    }
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
     await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
@@ -389,7 +515,9 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     });
     if (!clicked) throw new DataError('new-vehicle save button not found');
-    await page.waitForTimeout(4500);
+    // Was 4500ms. The save either redirects off /vehicles/new — including onto
+    // the bare 422 page handled below — or re-renders the form with a banner.
+    await this.committedOrRefused(page, (u) => !/\/vehicles\/new/.test(u.pathname), 12000);
     // Registering a plate that exists under ANOTHER customer makes Turboly show
     // a bare "rejected (422)" page on the post-save redirect — but the vehicle
     // IS created (proven live: duplicate registrations are allowed, one per
@@ -440,14 +568,16 @@ export class RpaSink implements ServiceOrderSink {
   }
   private async dropPick(query: string): Promise<void> {
     const page = this.session.page_();
-    await page.waitForTimeout(400);
+    // Was 400ms. The drop's search box IS the "it opened" signal, and a click
+    // that opened nothing should fail here rather than 30s later filling void.
+    await page.locator('#select2-drop input').first().waitFor({ state: 'visible', timeout: 8000 });
     let ready = false;
     for (let round = 0; round < 2 && !ready; round++) {
       // Re-typing the query re-triggers the remote search (round 2 = in-place retry).
       await page.locator('#select2-drop input').first().fill('');
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(150); // irreducible: select2-v3 re-queries on keyup, so the clear needs its own tick
       await page.locator('#select2-drop input').first().fill(query);
-      for (let i = 0; i < 30; i++) { // sandbox remote search can take >15s under load
+      for (let i = 0; i < 60; i++) { // same ~21s budget as before, half the granularity
         const st = await page.evaluate(() => {
           const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
           return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join(' ') };
@@ -458,7 +588,7 @@ export class RpaSink implements ServiceOrderSink {
           await this.assertSessionAlive(`cari "${query}"`);
           throw new DataError(`no Turboly match for "${query}"`);
         }
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(350);
       }
     }
     if (!ready) throw new TransientError(`Turboly search for "${query}" timed out (still searching)`);
@@ -476,7 +606,7 @@ export class RpaSink implements ServiceOrderSink {
       // goes on to register the plate again.
       if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
-      await page.waitForTimeout(300);
+      await this.dropClosed(300);
       return false;
     }
   }
@@ -574,23 +704,24 @@ export class RpaSink implements ServiceOrderSink {
     if (!queries.length) return false;
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
-      await page.waitForTimeout(400);
+      // Was 400ms — the drop's search box appearing is what that sleep meant.
+      await page.locator('#select2-drop input').first().waitFor({ state: 'visible', timeout: 8000 });
       for (const query of queries) {
         // Re-typing in the OPEN drop re-runs the remote search (the same in-place
         // retry the service-row picker uses); re-clicking the choice would toggle
         // the drop shut.
         const input = page.locator('#select2-drop input').first();
         await input.fill('');
-        await page.waitForTimeout(150);
+        await page.waitForTimeout(150); // irreducible: select2-v3 re-queries on keyup, so the clear needs its own tick
         await input.fill(query);
-        for (let i = 0; i < 18; i++) {
+        for (let i = 0; i < 36; i++) { // same ~10.8s budget as before, half the granularity
           const st = await page.evaluate(() => {
             const l = Array.from(document.querySelectorAll('#select2-drop .select2-results li'));
             return { sel: l.filter((x) => x.classList.contains('select2-result-selectable')).length, txt: l.map((x) => (x as HTMLElement).innerText).join('||') };
           });
           if (st.sel > 0) break;
           if (st.txt && !/searching|more characters/i.test(st.txt)) break;
-          await page.waitForTimeout(600);
+          await page.waitForTimeout(300);
         }
         const idx = await page.evaluate(({ nama, phoneKey, origName }) => {
           const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
@@ -625,7 +756,7 @@ export class RpaSink implements ServiceOrderSink {
         }, { nama, phoneKey, origName });
         if (idx >= 0) {
           await page.locator('#select2-drop .select2-results li.select2-result-selectable').nth(idx).click({ timeout: 4000 });
-          await page.waitForTimeout(500);
+          await this.dropClosed(500); // was 500ms flat; select2 closes the drop when the pick commits
           this.lastCustomerQuery = query; // the stored spelling — /vehicles/new hits the same prefix search
           return true;
         }
@@ -633,11 +764,11 @@ export class RpaSink implements ServiceOrderSink {
       // No spelling matched, which means "create a new customer" — a verdict we
       // may not reach on drops that were empty only because we'd been kicked.
       await this.assertSessionAlive('cari customer');
-      await page.keyboard.press('Escape').catch(() => {}); await page.waitForTimeout(200); return false;
+      await page.keyboard.press('Escape').catch(() => {}); await this.dropClosed(200); return false;
     } catch (e) {
       if (e instanceof TransientError) throw e;
       await page.keyboard.press('Escape').catch(() => {});
-      await page.waitForTimeout(300);
+      await this.dropClosed(300);
       return false;
     }
   }
@@ -1030,6 +1161,68 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * Bounded wait for a page condition, in place of a fixed sleep.
+   *
+   * On timeout it throws a PLAIN Error deliberately: classifyFailure() then runs
+   * its kicked-session and inline-error probes exactly as it did when the NEXT
+   * Playwright action used to time out here instead — same failure class as
+   * today, minus the 30s default it burned getting there. A hang is worse than a
+   * sleep, so every one of these is capped.
+   */
+  private async waitUntil(what: string, fn: (a: string[]) => boolean, args: string[], timeoutMs: number): Promise<void> {
+    try {
+      const h = await this.session.page_().waitForFunction(fn, args, { timeout: timeoutMs, polling: 60 });
+      await h.dispose().catch(() => {});
+    } catch {
+      throw new Error(`Turboly UI belum siap: ${what} (>${timeoutMs}ms)`);
+    }
+  }
+
+  /**
+   * Never-throws variant, for the sleeps that were only ever optimistic: the
+   * step after them already carries the real guard (a select2 poll, the
+   * stillOpen check, the inline-error read), so a condition that never holds
+   * must degrade to "carry on", not invent a new failure class. Capped at the
+   * sleep it replaces unless noted, which makes the worst case exactly today's
+   * cost and the common case the truth.
+   */
+  private async settle(fn: (a: string[]) => boolean, args: string[], timeoutMs: number): Promise<boolean> {
+    return this.session
+      .page_()
+      .waitForFunction(fn, args, { timeout: timeoutMs, polling: 60 })
+      .then(async (h) => {
+        await h.dispose().catch(() => {});
+        return true;
+      })
+      .catch(() => false);
+  }
+
+  /** A select2 pick/Escape has committed when the drop is gone — that, not a
+   *  clock, is what the 300–500ms sleeps after every result click were for. */
+  private async dropClosed(capMs: number): Promise<boolean> {
+    return this.settle(
+      () => !Array.from(document.querySelectorAll('#select2-drop, .select2-drop')).some((d) => (d as HTMLElement).offsetParent !== null),
+      [],
+      capMs,
+    );
+  }
+
+  /** Either the navigation the click was supposed to cause has landed, or the
+   *  page came back with a validation banner. Racing both means a REJECTED save
+   *  reports as fast as a good one instead of waiting out the optimistic cap.
+   *  Both branches swallow their own timeout so the loser can never surface as
+   *  an unhandled rejection. */
+  private async committedOrRefused(page: Page, urlGone: (u: URL) => boolean, capMs: number): Promise<void> {
+    const moved = page.waitForURL(urlGone, { timeout: capMs }).catch(() => {});
+    const refused = page
+      .locator('.alert-error, .alert-danger, #error_explanation')
+      .first()
+      .waitFor({ state: 'visible', timeout: capMs })
+      .catch(() => {});
+    await Promise.race([moved, refused]);
+  }
 
   /**
    * Turboly = ONE SESSION PER USER, and a kicked session answers the /lookup/*
