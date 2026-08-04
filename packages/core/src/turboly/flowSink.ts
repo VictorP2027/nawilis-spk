@@ -712,8 +712,29 @@ export class TurbolyFlowRpa {
   private async open(url: string, tag: string): Promise<Page> {
     await this.session.ensureLoggedIn();
     const page = this.session.page_();
-    await page.goto(this.abs(url), { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
+    const target = this.abs(url);
+    // Turboly bounces the FIRST navigation after a (re)login to /dashboard, and
+    // serves a maintenance page during upgrades. Verify we actually landed on
+    // the requested document and retry — otherwise every verb "fails" with a
+    // confusing button list scraped from the dashboard.
+    const wantPath = new URL(target).pathname;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await page.goto(target, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(2500);
+      const here = new URL(page.url()).pathname;
+      const body = (await page.evaluate(() => document.body?.innerText ?? '').catch(() => '')) as string;
+      if (/site maintenance|undergoing scheduled upgrades/i.test(body)) {
+        throw new TransientError('Turboly sedang MAINTENANCE (upgrade terjadwal) — dilanjutkan otomatis setelah online lagi');
+      }
+      if (here === wantPath) break;
+      if (attempt === 3) {
+        throw new TransientError(
+          `navigasi ke ${wantPath} dialihkan ke ${here} (3×) — kemungkinan sesi Turboly ter-kick; dicoba ulang otomatis`,
+        );
+      }
+      await this.session.ensureLoggedIn();
+      await page.waitForTimeout(1200);
+    }
     await this.dismissModals(page);
     await this.snapshot(page, `flow-${tag}-open`);
     return page;
