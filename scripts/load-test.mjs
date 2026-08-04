@@ -10,7 +10,9 @@ import { MongoClient } from 'mongodb';
 
 const N = Number(process.argv[2] || 30);
 const BASE = process.env.LOADTEST_BASE ?? 'https://nawilis-spk.vercel.app';
-const PASSWORD = process.env.STAFF_PASSWORD ?? 'nawilis2026';
+// No default: a literal here ends up in git history, and history is public the
+// moment the repo is.
+const PASSWORD = process.env.STAFF_PASSWORD ?? '';
 
 // ── login ────────────────────────────────────────────────────────────────
 const login = await fetch(`${BASE}/api/login`, {

@@ -26,3 +26,6 @@ coverage/
 .mongo-data/
 .vercel
 .env*
+
+# Throwaway probes: they hold live credentials and customer data.
+*-tmp.mjs

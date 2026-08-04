@@ -39,11 +39,12 @@ const SESSION_STATE_COLLECTION = 'turboly_sessions';
 const HTTP_SESSION_COLLECTION = 'turboly_http_session';
 
 /**
- * Cheap authenticated probe. Turboly's own select2 endpoint: a few hundred
- * bytes of JSON instead of rendering the Service Order list (a full ERP grid,
- * ~2.5-4s with the fixed 900ms settle that used to follow it). ensureLoggedIn()
- * is called 3-5x per registration job, so that page load was ~10s of the ~25s
- * the owner is complaining about.
+ * Cheap authenticated probe. Turboly's own select2 endpoint (the one flowSink
+ * already trusts for the duplicate guard): a few hundred bytes of JSON instead
+ * of rendering the Service Order list — a full ERP grid plus the fixed 900ms
+ * settle that followed it. One corporate registration calls ensureLoggedIn()
+ * 3-5x (flow-once, the company dedupe probe, the retail dedupe probe, each
+ * flowSink.open()), so the check itself was several seconds per job.
  */
 const AUTH_PROBE_PATH = '/lookup/customers.json?search_term=__spk_auth_probe__&page_limit=1&page=1';
 
@@ -150,10 +151,15 @@ function stateFromCookieHeader(cookie: string, baseUrl: string): StorageState | 
 
 /** Cookie names+values only — enough to tell "same session" from "someone re-logged in". */
 function signature(state: StorageState): string {
-  return state.cookies
+  return (state?.cookies ?? [])
     .map((c) => `${c.name}=${c.value}`)
     .sort()
     .join('|');
+}
+
+/** A hand-edited or truncated state file must not take the whole session down. */
+function isStorageState(v: unknown): v is StorageState {
+  return !!v && Array.isArray((v as StorageState).cookies);
 }
 
 export class TurbolySession {
@@ -447,7 +453,8 @@ export class TurbolySession {
     if (!existsSync(path)) return null;
     try {
       const [raw, st] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
-      return { src, at: st.mtimeMs, state: JSON.parse(raw) as StorageState };
+      const state: unknown = JSON.parse(raw);
+      return isStorageState(state) ? { src, at: st.mtimeMs, state } : null;
     } catch {
       return null;
     }
@@ -477,7 +484,8 @@ export class TurbolySession {
       const doc = (await getDb()
         .collection(SESSION_STATE_COLLECTION)
         .findOne({ _id: await this.accountKey() } as never)) as { state?: string; at?: string } | null;
-      if (doc?.state) out.push({ src: 'mongo:state', at: Date.parse(doc.at ?? '') || 0, state: JSON.parse(doc.state) as StorageState });
+      const state: unknown = doc?.state ? JSON.parse(doc.state) : null;
+      if (isStorageState(state)) out.push({ src: 'mongo:state', at: Date.parse(doc?.at ?? '') || 0, state });
     } catch {
       /* no Mongo, or nothing stored yet */
     }
