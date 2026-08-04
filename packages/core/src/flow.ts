@@ -95,7 +95,10 @@ export function effectiveFlow(doc: {
   turboly?: { serviceOrderNo?: string | null; workOrderNo?: string | null } | null;
 }): FlowState {
   const f: FlowState = { ...initFlow(), ...(doc.flow ?? {}) };
-  if (f.so == null && doc.turboly?.serviceOrderNo) f.so = 'created';
+  // The pusher already clicks Approve right after saving (PUSH_APPROVE=true, and
+  // verified live: pushed SOs sit on the "Approved" workflow step). So a pushed
+  // Service Order is APPROVED — the board must not ask staff to approve again.
+  if (f.so == null && doc.turboly?.serviceOrderNo) f.so = 'approved';
   if (f.wo == null && doc.turboly?.workOrderNo) {
     f.wo = 'created';
     f.workOrderNo = f.workOrderNo ?? doc.turboly.workOrderNo ?? null;
@@ -143,8 +146,8 @@ export function stageLabel(flow: FlowState | null | undefined): string {
   if (f.wo === 'waiting_qc') return 'Menunggu QC';
   if (f.wo === 'in_progress') return 'Sedang dikerjakan';
   if (f.wo === 'created') return 'WO menunggu start';
-  if (f.so === 'approved') return 'SO approved';
-  if (f.so === 'created') return 'SO dibuat';
+  if (f.so === 'approved') return 'SO approved (otomatis)';
+  if (f.so === 'created') return 'SO dibuat — belum approve';
   return 'Belum masuk Turboly';
 }
 
