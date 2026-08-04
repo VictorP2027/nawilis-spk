@@ -51,6 +51,7 @@ export default function Intake() {
   const sigCust = useRef<SigHandle>(null);
   const sigAdv = useRef<SigHandle>(null);
   const [custSigned, setCustSigned] = useState(false);
+  const [advSigned, setAdvSigned] = useState(false);
   // Pengecekan awal (paper section, required): every item answered; OK default,
   // tap to mark the exception.
   const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
@@ -273,7 +274,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const tahunOk = tahun.trim() !== '';
   const tipeOk = tipe.trim() !== '';
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && custSigned && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && custSigned && advSigned && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -466,7 +467,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         {/* Optional fields collapsed behind one toggle — keeps the form neat. */}
         <button type="button" className="btn ghost" style={{ width: '100%', marginBottom: 14 }} onClick={() => setOptOpen((o) => !o)}>
-          {optOpen ? '▾' : '▸'} Opsional: keluhan, kerusakan bodi, TTD advisor
+          {optOpen ? '▾' : '▸'} Opsional: keluhan, kerusakan bodi
           {!optOpen && (keluhan.trim() || dmg.size > 0) ? ` — terisi: ${[keluhan.trim() && 'keluhan', dmg.size > 0 && `${dmg.size} kerusakan`].filter(Boolean).join(', ')}` : ''}
         </button>
 
@@ -501,8 +502,6 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {dmg.size > 0 && (
             <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
           )}
-          <div className="label" style={{ marginTop: 12 }}>Tanda tangan Yang menerima (Service Advisor) — opsional</div>
-          <SignaturePad ref={sigAdv} />
         </div>
         )}
 
@@ -527,6 +526,9 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <div className="label">Tanda tangan customer (Yang menyerahkan) — WAJIB</div>
           <SignaturePad ref={sigCust} onInk={setCustSigned} />
           {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib (persetujuan pengerjaan)</div>}
+          <div className="label" style={{ marginTop: 10 }}>Tanda tangan penerima (Service Advisor / mekanik) — WAJIB</div>
+          <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
+          {!advSigned && <div className="req-note">⚠ tanda tangan penerima wajib</div>}
         </div>
 
         {!jadwalOn ? (

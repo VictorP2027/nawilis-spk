@@ -42,6 +42,7 @@ export default function Sheet() {
   const sigMenyerahkan = useRef<SigHandle>(null);
   const sigMenerima = useRef<SigHandle>(null);
   const [custSigned, setCustSigned] = useState(false);
+  const [advSigned, setAdvSigned] = useState(false);
   const [branch, setBranch] = useState('');
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
@@ -278,6 +279,7 @@ export default function Sheet() {
     const missing = requiredSheet.filter(([v]) => !String(v).trim()).map(([, label]) => label);
     if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }
     if (!sigMenyerahkan.current?.get()) { setResult({ ok: false, text: 'Tanda tangan customer (Yang menyerahkan) wajib — persetujuan pengerjaan.' }); setSubmitting(false); return; }
+    if (!sigMenerima.current?.get()) { setResult({ ok: false, text: 'Tanda tangan penerima (Yang menerima) wajib.' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -578,7 +580,8 @@ export default function Sheet() {
             <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas — WAJIB" style={!menyerahkan.trim() ? { borderColor: '#dc2626' } : undefined} />
           </div>
           <div className="b">Yang menerima,
-            <SignaturePad ref={sigMenerima} />
+            <SignaturePad ref={sigMenerima} onInk={setAdvSigned} />
+            {!advSigned && <div className="err-inline">⚠ Tanda tangan penerima wajib.</div>}
             <input
               list="advisor-list"
               value={menerima}
