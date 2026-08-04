@@ -84,9 +84,19 @@ export class TurbolySession {
   private async loggedIn(): Promise<boolean> {
     const page = this.page_();
     // Logged in iff visiting a protected page does NOT bounce us to the login.
-    await page.goto(SELECTOR_MAP.routes.serviceOrdersList, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await page.waitForTimeout(600);
-    return !/sign_in|sign-in|\/login|\/signin/i.test(page.url());
+    const target = SELECTOR_MAP.routes.serviceOrdersList;
+    await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(900);
+    const url = page.url();
+    if (/sign_in|sign-in|\/login|\/signin/i.test(url)) return false;
+    // A KICKED session doesn't bounce to /users/sign_in — Turboly redirects
+    // protected pages to /dashboard and overlays a login modal. Treating that
+    // as "logged in" made ensureLoggedIn() a no-op, so every later navigation
+    // silently landed on the dashboard (found live: create_wo 3× redirect).
+    if (/\/dashboard\b/i.test(url) && !/dashboard/i.test(target)) return false;
+    const body = (await page.evaluate(() => document.body?.innerText?.slice(0, 400) ?? '').catch(() => '')) as string;
+    if (/you have been logged out|please login again|sign in or sign up/i.test(body)) return false;
+    return true;
   }
 
   /**
