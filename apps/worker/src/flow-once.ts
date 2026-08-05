@@ -51,7 +51,7 @@ const GRACE_POLL_MS = 1_500;
  *
  * A transient failure requeues at +60s (failFlowJob's default) while the grace
  * window is 20s, so the runner exited roughly 40 seconds before its own retry
- * came due — and the job then sat until the */5 cron, which GitHub routinely
+ * came due — and the job then sat until the five-minute cron, which GitHub routinely
  * runs late. Live: a Start WO retry fell due at 06:32:14, the runner had
  * already left at 06:31:07, and the card showed a spinner for minutes over a
  * step that takes seconds.
