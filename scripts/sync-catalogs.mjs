@@ -130,6 +130,14 @@ await page.waitForTimeout(2500);
 const liveStores = await readPoll('#store-id');
 const known = await collections.tbStores().find({}).toArray();
 const byTurbolyId = new Map(known.map((s) => [String(s.turbolyStoreId), s]));
+// Turboly's store dropdown carries more than the 23 workshops: the holding
+// companies are in there too, and they have no staff, no orders and no branch
+// code. Listing them as "needs a branchCode mapping" every run trains everyone
+// to ignore that warning — which is the one warning that has to still work the
+// day a genuinely new outlet opens.
+const ignoredStoreIds = new Set(
+  (await getDb().collection('tb_store_ignores').find({}).toArray()).map((r) => String(r._id)),
+);
 let advTotal = 0;
 let mechTotal = 0;
 // Which branches ended up with mechanics, which Turboly says have none, and
@@ -206,7 +214,10 @@ async function syncOneStore(st, ls) {
 
 for (const ls of liveStores) {
   const st = byTurbolyId.get(String(ls.v));
-  if (!st) { newStores.push(`${ls.t} (id ${ls.v})`); continue; } // needs a manual branchCode mapping
+  if (!st) {
+    if (!ignoredStoreIds.has(String(ls.v))) newStores.push(`${ls.t} (id ${ls.v})`); // needs a manual branchCode mapping
+    continue;
+  }
   await collections.tbStores().updateOne({ _id: st._id }, { $set: { turbolyStoreName: ls.t, syncedAt: now } });
   try {
     let status = await syncOneStore(st, ls);

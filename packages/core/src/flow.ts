@@ -69,6 +69,20 @@ export interface FlowState {
   lastError?: string | null;
   lastErrorAt?: string | null; // ISO
 
+  /**
+   * Hidden from the flow board, and ONLY that.
+   *
+   * Some cards reach a dead end that Turboly cannot be talked out of — a Work
+   * Order created against the wrong store, say, whose service lines live on
+   * another store's order and so can never be started. The pipeline `state`
+   * must keep saying `confirmed`, because the Service Order really is in
+   * Turboly and pretending otherwise would desync Mongo from it. This says
+   * "stop showing staff a card they cannot act on", nothing more.
+   */
+  archived?: boolean;
+  archivedAt?: string | null; // ISO
+  archivedReason?: string | null;
+
   updatedAt: string; // ISO
 }
 
@@ -353,6 +367,28 @@ export async function clearFlowError(spkId: string): Promise<void> {
     { _id: spkId, 'flow.lastError': { $exists: true } } as unknown as Filter<SpkFlowHost>,
     { $unset: { 'flow.lastError': '', 'flow.lastErrorAt': '' } } as unknown as UpdateFilter<SpkFlowHost>,
   );
+}
+
+/**
+ * Take a card off the board without touching its pipeline state. The reason is
+ * required and stored: an archived card is invisible, so the only way anyone
+ * later learns why is if the person archiving it had to say.
+ */
+export async function archiveFlowCard(spkId: string, reason: string, by = 'unknown'): Promise<boolean> {
+  const now = new Date().toISOString();
+  const res = await spkFlowCol().updateOne(
+    { _id: spkId },
+    {
+      $set: {
+        'flow.archived': true,
+        'flow.archivedAt': now,
+        'flow.archivedReason': `${reason} (${by})`,
+        'flow.updatedAt': now,
+        updatedAt: now,
+      },
+    } as unknown as UpdateFilter<SpkFlowHost>,
+  );
+  return res.matchedCount > 0;
 }
 
 /** Initialise `flow` on a doc that doesn't have one yet (no-op when present). */

@@ -70,6 +70,9 @@ export async function GET(req: Request): Promise<Response> {
   // finished ones (so cards visibly land in "Selesai" before dropping off).
   const q: Record<string, unknown> = {
     state: { $nin: ['voided', 'superseded'] },
+    // Dead-end cards someone took off the board on purpose. Separate from
+    // `state` because these docs are still legitimately `confirmed` in Turboly.
+    'flow.archived': { $ne: true },
     $or: [
       { 'flow.invoice': { $ne: 'completed' }, createdAt: { $gte: activeSince } },
       { 'flow.invoice': 'completed', updatedAt: { $gte: doneSince } },
