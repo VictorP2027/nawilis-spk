@@ -191,6 +191,31 @@ export interface WaParse {
 
 export function parseWa(raw: string): WaParse {
   const digits = raw.replace(/[^\d]/g, '');
+
+  // A number written with an explicit leading "+" that is NOT Indonesian is
+  // taken at face value. Nawilis is an Indonesian chain and effectively every
+  // customer is local, so the rules below stay exactly as they were for
+  // everything typed the normal way ("0812…", "812…", "62812…"). But a foreign
+  // number is a real thing a branch can be handed — an expat, a corporate
+  // fleet contact abroad — and it used to be refused outright at intake with
+  // "nomor WhatsApp customer tidak valid", which is wrong and unfixable by
+  // whoever typed it.
+  //
+  // The "+" is required, and is doing real work: it is the customer asserting
+  // a country code. Without it, a typo like "12345678" would sail through as
+  // a valid international number instead of being caught, so bare digits keep
+  // going down the Indonesian path and keep failing loudly when malformed.
+  if (raw.trim().startsWith('+') && !digits.startsWith('62')) {
+    const local = digits.startsWith('0') ? '' : digits;
+    // E.164: 15 digits max including the country code. The floor is deliberately
+    // loose (a few countries have very short national numbers) — this validates
+    // shape, not reachability, and the gateway is the real arbiter of that.
+    if (local.length >= 8 && local.length <= 15) {
+      return { e164: `+${local}`, ok: true, operatorKnown: false };
+    }
+    return { e164: null, ok: false, operatorKnown: false };
+  }
+
   let national: string;
   if (digits.startsWith('62')) national = digits.slice(2);
   else if (digits.startsWith('0')) national = digits.slice(1);
