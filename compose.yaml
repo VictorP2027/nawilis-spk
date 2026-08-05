@@ -1,0 +1,28 @@
+# WAHA — the WhatsApp gateway behind scripts/alerts-drain.mjs.
+#
+# Same service the original nawilis-check-and-go-whatsapp project ran (its
+# container may still be up as untitledfolder3-waha-1 — that one works fine and
+# uses the same volume name, so starting this one is only needed on a fresh
+# machine). Pair the SENDER phone once via the dashboard QR at
+# http://127.0.0.1:3000/dashboard — the session survives restarts in the volume.
+#
+#   docker compose up -d waha
+#
+# Bound to 127.0.0.1 on purpose: this gateway can message everyone the paired
+# phone can, so it must never be reachable from off the machine.
+services:
+  waha:
+    image: devlikeapro/waha:noweb-arm
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:-nawilis-local-gateway}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-nawilis}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:-nawilis-local-only}
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+    volumes:
+      - waha_sessions:/app/.sessions
+
+volumes:
+  waha_sessions:
