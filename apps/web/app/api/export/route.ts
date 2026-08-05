@@ -42,7 +42,21 @@ export async function GET(req: Request): Promise<Response> {
     })
     .toArray()) as SpkDoc[];
   // Defensive second filter for `used` (keeps the definition in one place).
-  const rows = (scope === 'used' ? docs.filter(isUsedInServiceOrder) : docs).map(toNawilisRow);
+  //
+  // Per-row guard, learned live: one malformed document made toNawilisRow
+  // throw and the WHOLE company export answered HTTP 500 — every good row
+  // held hostage by one bad one. A doc that cannot render is skipped and
+  // named in the log; the export's job is the other N-1 rows.
+  const rows: ReturnType<typeof toNawilisRow>[] = [];
+  const skipped: string[] = [];
+  for (const d of scope === 'used' ? docs.filter(isUsedInServiceOrder) : docs) {
+    try {
+      rows.push(toNawilisRow(d));
+    } catch (e) {
+      skipped.push(d._id);
+      console.error(`export: doc ${d._id} unrenderable — skipped (${(e as Error).message})`);
+    }
+  }
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('SPK');
@@ -52,6 +66,13 @@ export async function GET(req: Request): Promise<Response> {
   // Render the timestamp column as an Excel date-time (matches the source serials).
   const tsCol = ws.getColumn('timestamp');
   tsCol.numFmt = 'yyyy-mm-dd hh:mm';
+
+  // Skips must be visible in the artifact itself, not only in a server log
+  // nobody reads: an export that silently drops rows reads as complete.
+  if (skipped.length) {
+    ws.addRow([`⚠ ${skipped.length} dokumen tidak bisa diekspor (rusak): ${skipped.join(', ')}`]);
+    ws.lastRow!.font = { bold: true, color: { argb: 'FFB45309' } };
+  }
 
   const buf = await wb.xlsx.writeBuffer();
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
