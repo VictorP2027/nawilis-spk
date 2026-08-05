@@ -251,7 +251,11 @@ export class TurbolyFlowRpa {
    * text; if the WO got created but the assignee control can't be found, we
    * return successfully WITH a note (never a retry that would duplicate the WO).
    */
-  async createWorkOrder(serviceOrderUrl: string, assigneeName: string): Promise<CreateWorkOrderResult> {
+  async createWorkOrder(
+    serviceOrderUrl: string,
+    assigneeName: string,
+    turbolyStoreId?: string | null,
+  ): Promise<CreateWorkOrderResult> {
     const page = await this.open(serviceOrderUrl, 'wo-create-from-so');
     // Idempotency read-back BEFORE the irreversible click: a previous attempt
     // may have clicked create and died (kick/timeout) before reporting back.
@@ -284,11 +288,37 @@ export class TurbolyFlowRpa {
       const edited = await this.clickControlIfPresent(page, /^edit$/i);
       if (edited) await page.waitForTimeout(2200);
     }
-    const assigned = await this.trySetAssignees(page, assigneeName);
-    if (!assigned) {
-      notes.push(
-        `kontrol Assignee/mekanik TIDAK ditemukan — set manual di Turboly. Kontrol terlihat: ${await this.controlHints(page)}`,
-      );
+    // Turboly refuses the whole WO when ANY line has no assignee ("Service Item
+    // Line 1: Assignee can't be blank"), and the assignee is not a <select>: it
+    // is a text input per line (class="assignee-ids") holding store-user IDS,
+    // dressed by JS. So the mechanic name is resolved against Turboly's own
+    // store_users lookup and the id written into EVERY line. This runs before
+    // the save, so an unresolvable mechanic stops the job with nothing created.
+    const lines = await this.setLineAssignees(page, assigneeName, turbolyStoreId);
+    if (lines.total > 0) {
+      if (lines.error) {
+        throw new TransientError(`Buat WO: daftar mekanik tidak bisa dibaca (${lines.error}) — dicoba ulang otomatis`);
+      }
+      if (lines.matches === 0) {
+        throw new DataError(
+          `Buat WO: "${assigneeName}" bukan mekanik di cabang ini menurut Turboly — Work Order harus di-assign ke mekanik cabang yang sama (advisor/salesperson ditolak)`,
+        );
+      }
+      if (lines.set < lines.total) {
+        throw new DataError(
+          `Buat WO: hanya ${lines.set} dari ${lines.total} baris yang dapat assignee — Turboly menolak WO kalau ada baris tanpa mekanik`,
+        );
+      }
+      if ((lines.matches ?? 0) > 1) {
+        notes.push(`ada ${lines.matches} store user bernama "${assigneeName}" — dipakai id terkecil`);
+      }
+    } else {
+      const assigned = await this.trySetAssignees(page, assigneeName);
+      if (!assigned) {
+        notes.push(
+          `kontrol Assignee/mekanik TIDAK ditemukan — set manual di Turboly. Kontrol terlihat: ${await this.controlHints(page)}`,
+        );
+      }
     }
 
     // A form flow needs a save; a direct-created detail page may not.
@@ -331,6 +361,27 @@ export class TurbolyFlowRpa {
     // status word, is the real signal, and it makes this step idempotent.
     const START_LINK = 'a[href*="start_progress_service_item"]';
     const STOP_BTN = 'a.btn-modal-stop-progress';
+    const accept = (d: { accept: () => Promise<void> }): void => void d.accept().catch(() => {});
+
+    // Starting happens at TWO levels and a fresh WO only offers the first:
+    //   WO level   PATCH .../in_progress, labelled "Start", data-confirm
+    //   line level PATCH .../start_progress_service_item, icon-only, one per row
+    // The per-line links do not exist until the WO itself is In Progress, so a
+    // newly created WO would look like "nothing to start" if only the second
+    // were handled.
+    const woStart = page.locator('a[href$="/in_progress"][data-method="patch"]').first();
+    if ((await woStart.count().catch(() => 0)) > 0) {
+      page.on('dialog', accept);
+      try {
+        await woStart.click({ timeout: 8000 }).catch(() => {});
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+        await page.waitForTimeout(1500);
+        await this.confirmModals(page);
+        await page.waitForTimeout(800);
+      } finally {
+        page.off('dialog', accept);
+      }
+    }
 
     const alreadyRunning = await page.locator(STOP_BTN).count().catch(() => 0);
     const toStart = await page.locator(START_LINK).count().catch(() => 0);
@@ -1603,6 +1654,66 @@ export class TurbolyFlowRpa {
    * selects hinted assignee/mechanic/technician, then select2 containers with
    * the same hints. Returns false when NO assignee control was found at all.
    */
+  /**
+   * Write the mechanic's store-user id into every service line's assignee input.
+   *
+   * The control is `input.assignee-ids` — a text field carrying IDS, not a
+   * select — so there is no option text to match and nothing for a label-based
+   * search to find. The id comes from Turboly's own /lookup/store_users.json
+   * (pairs of [name, id]), fetched from inside the page so it rides the session
+   * that is already open. Names are NOT unique there (two ADITYA SAPUTRAs), so
+   * a tie resolves to the lowest id and says so rather than picking silently.
+   *
+   * total 0 means this build renders some other control — the caller falls back.
+   */
+  private async setLineAssignees(
+    page: Page,
+    assigneeName: string,
+    turbolyStoreId?: string | null,
+  ): Promise<{ total: number; set: number; matches?: number; error?: string }> {
+    const name = JSON.stringify(assigneeName);
+    // store_users.json is TWO lists behind one path: context=ServiceOrder gives
+    // the store's service ADVISORS (2 at Bekasi), any other context gives its
+    // MECHANICS (8 at Bekasi, incl. AHMAD JAYNUDIN 21596). A work-order line
+    // needs a mechanic, so this deliberately does not send that context. Without
+    // store_id the list is every user in every store, and picking a mechanic
+    // from the wrong branch is rejected by Turboly ("Mechanic Cross Store
+    // feature is not enabled") — so the scope is required, not decorative.
+    const store = JSON.stringify(turbolyStoreId ?? '');
+    return (await page.evaluate(`(async () => {
+      var norm = function (s) { return String(s || '').trim().toUpperCase().replace(/\\s+/g, ' '); };
+      var want = norm(${name});
+      var inputs = Array.prototype.slice.call(
+        document.querySelectorAll('input.assignee-ids, input[name*="[user_assignee_ids]"]')
+      );
+      if (!inputs.length) return { total: 0, set: 0 };
+      var res;
+      try {
+        res = await fetch('/lookup/store_users.json?store_id=' + encodeURIComponent(${store}), { headers: { accept: 'application/json' } });
+      } catch (e) { return { total: inputs.length, set: 0, error: 'jaringan' }; }
+      if (!res.ok) return { total: inputs.length, set: 0, error: 'HTTP ' + res.status };
+      var rows;
+      try { rows = await res.json(); } catch (e) { return { total: inputs.length, set: 0, error: 'bukan JSON' }; }
+      if (!rows || !rows.length) return { total: inputs.length, set: 0, error: 'daftar kosong' };
+      var hits = [];
+      for (var i = 0; i < rows.length; i++) if (norm(rows[i][0]) === want) hits.push(rows[i][1]);
+      if (!hits.length) return { total: inputs.length, set: 0, matches: 0 };
+      hits.sort(function (a, b) { return a - b; });
+      var id = String(hits[0]);
+      var n = 0;
+      for (var j = 0; j < inputs.length; j++) {
+        var el = inputs[j];
+        el.value = id;
+        el.setAttribute('value', id);
+        el.setAttribute('data-selected-assignees', JSON.stringify([{ id: hits[0], name: ${name} }]));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (el.value === id) n++;
+      }
+      return { total: inputs.length, set: n, matches: hits.length };
+    })()`)) as { total: number; set: number; matches?: number; error?: string };
+  }
+
   private async trySetAssignees(page: Page, assigneeName: string): Promise<boolean> {
     if (!assigneeName.trim()) return true;
     let any = false;

@@ -1,5 +1,5 @@
 import {
-  connect, close, collections, emit,
+  connect, close, collections, emit, getDb,
   flowJobs, claimNextFlowJob, completeFlowJob, failFlowJob, ensureFlowIndexes,
   updateFlow, flowPatchAfter, effectiveFlow, isFlowAction, keluhanFromFindings,
   FLOW_JOB_MAX_ATTEMPTS, FLOW_PAYMENT_METHODS,
@@ -249,7 +249,11 @@ async function executeJob(
       const assignee = str(p.assigneeName) ?? str(p.mechanicName) ?? str(p.mechanic) ?? str(p.assignee) ?? str(p.name);
       if (!assignee) throw new DataError('Nama mekanik (params.assigneeName) wajib untuk Buat Work Order');
       const rpa = await rigs.rpaFor(branchCode);
-      const r = await rpa.createWorkOrder(url, assignee);
+      // The mechanic list is per store, and a mechanic from another branch is
+      // rejected outright, so the sink needs this branch's Turboly store id.
+      const storeDoc = await getDb().collection('tb_stores').findOne({ _id: branchCode } as never);
+      const storeId = (storeDoc as { turbolyStoreId?: string } | null)?.turbolyStoreId ?? null;
+      const r = await rpa.createWorkOrder(url, assignee, storeId);
       return { ...r, assigneeName: assignee };
     }
 
