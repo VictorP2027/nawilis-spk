@@ -109,3 +109,26 @@ export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILI
   { code: 'QS-DAGO', name: 'QS Dago Bandung', type: 'QUICKSERV' },
   { code: 'QS-GR', name: 'QS Graha Raya Tangsel', type: 'QUICKSERV' },
 ];
+
+/**
+ * Standard Check & Go inspection points, in the order a mechanic walks them.
+ * The form used to take these as free text, so the same check arrived spelled
+ * three ways ("Sistem pendingin", "sistem pendinginan", "cooling") and could
+ * not be counted or compared across branches. Picking from a list fixes the
+ * wording; LAINNYA keeps the escape hatch for anything genuinely not listed.
+ */
+export const CHECKGO_INSPECTION_ITEMS: ReadonlyArray<{ code: string; label: string }> = [
+  { code: 'SISTEM_PENDINGIN', label: 'Sistem pendingin' },
+  { code: 'TUTUP_RADIATOR', label: 'Tutup radiator' },
+  { code: 'REM', label: 'Rem' },
+  { code: 'POWER_STEERING', label: 'Power steering' },
+  { code: 'AC', label: 'AC' },
+  { code: 'KELISTRIKAN_AKI', label: 'Kelistrikan / aki' },
+  { code: 'BAN', label: 'Ban' },
+  { code: 'OLI_MESIN', label: 'Oli mesin' },
+  { code: 'LAINNYA', label: 'Lainnya…' },
+];
+
+/** Outcome of one inspection point — mirrors the paper sheet's three boxes. */
+export const CHECKGO_RESULTS = ['Baik', 'Perlu perbaikan', 'N/A'] as const;
+export type CheckgoResult = (typeof CHECKGO_RESULTS)[number];

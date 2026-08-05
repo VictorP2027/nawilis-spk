@@ -34,6 +34,8 @@ const InspectionItemInput = z.object({
   name: z.string().optional(),
   catatan: z.string().nullable().optional(),
   note: z.string().nullable().optional(),
+  /** Intake result picked on the form: Baik / Perlu perbaikan / N/A. */
+  hasil: z.string().nullable().optional(),
 });
 
 /**
@@ -55,6 +57,9 @@ const CheckGoBody = SpkIntakeInput.omit({ docType: true, jobLines: true, capture
 
 interface StoredInspectionItem {
   item: string;
+  /** What the checker found at intake — distinct from `feedback`, which the
+   *  mechanic fills later on the flow board. */
+  hasil: string | null;
   catatan: string | null;
   /** Mechanic result, filled during the job via the flow board. */
   feedback: 'pass' | 'fail' | null;
@@ -85,6 +90,7 @@ export async function POST(req: Request): Promise<Response> {
   const inspectionItems: StoredInspectionItem[] = rawItems
     .map((r) => ({
       item: (r.item ?? r.name ?? '').trim(),
+      hasil: r.hasil ?? null,
       catatan: r.catatan ?? r.note ?? null,
       feedback: null,
       recommendation: null,
@@ -92,7 +98,7 @@ export async function POST(req: Request): Promise<Response> {
     }))
     .filter((r) => r.item.length > 0);
   if (inspectionItems.length === 0) {
-    inspectionItems.push({ item: 'Check and Go', catatan: null, feedback: null, recommendation: null, inspected: false });
+    inspectionItems.push({ item: 'Check and Go', hasil: null, catatan: null, feedback: null, recommendation: null, inspected: false });
   }
 
   // Reuse the proven SPK pipeline: build the intake with the ONE General Check

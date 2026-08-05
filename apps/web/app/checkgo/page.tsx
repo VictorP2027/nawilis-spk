@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
-import { BRANCHES } from '../../lib/refdata.client';
+import { BRANCHES, CHECKGO_INSPECTION_ITEMS, CHECKGO_RESULTS } from '../../lib/refdata.client';
 
 /**
  * Check & Go intake — a vehicle CHECK service (not a repair). One fixed
@@ -25,7 +25,10 @@ interface VehicleHist {
 
 interface CustVehicle { plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }
 
-interface InspRow { id: string; item: string; catatan: string }
+// `item` holds the LABEL that gets stored; `pick` is the dropdown's own
+// value, kept separate so choosing "Lainnya…" can reveal a free-text box
+// without the typed text being mistaken for a standard item.
+interface InspRow { id: string; pick: string; item: string; hasil: string; catatan: string }
 
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -59,6 +62,11 @@ export default function CheckGoIntake() {
   const [insp, setInsp] = useState<InspRow[]>([]);
   const sigCust = useRef<SigHandle>(null);
   const [custSigned, setCustSigned] = useState(false);
+  // The receiving advisor's signature. Optional: the customer's is the consent
+  // that matters, and making this required would block intake whenever the
+  // advisor is away from the tablet.
+  const sigAdv = useRef<SigHandle>(null);
+  const [advSigned, setAdvSigned] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -178,7 +186,7 @@ export default function CheckGoIntake() {
     setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
   };
 
-  const addInsp = () => setInsp((p) => [...p, { id: uuid(), item: '', catatan: '' }]);
+  const addInsp = () => setInsp((p) => [...p, { id: uuid(), pick: '', item: '', hasil: 'Baik', catatan: '' }]);
   const setInspRow = (id: string, patch: Partial<InspRow>) => setInsp((p) => p.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const delInsp = (id: string) => setInsp((p) => p.filter((r) => r.id !== id));
 
@@ -246,14 +254,14 @@ export default function CheckGoIntake() {
       harga: hargaVal,
       inspectionItems: insp
         .filter((r) => r.item.trim() !== '')
-        .map((r) => ({ item: r.item.trim(), catatan: r.catatan.trim() })),
+        .map((r) => ({ item: r.item.trim(), hasil: r.hasil, catatan: r.catatan.trim() })),
       signatures: {
         menyerahkanPresent: !!sigCust.current?.get(),
         menyerahkanNamaJelas: nama || null,
         menerimaPresent: !!advisor,
         menerimaNamaJelas: advisor || null,
         menyerahkanImage: sigCust.current?.get() ?? null,
-        menerimaImage: null,
+        menerimaImage: sigAdv.current?.get() ?? null,
       },
     };
     try {
@@ -288,6 +296,8 @@ export default function CheckGoIntake() {
     setEstimasi(String(DEFAULT_ESTIMASI));
     setInsp([]);
     sigCust.current?.clear();
+    sigAdv.current?.clear();
+    setAdvSigned(false);
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
   }
@@ -426,13 +436,59 @@ export default function CheckGoIntake() {
             Kosong = satu pemeriksaan umum &quot;Check and Go&quot;. Tambah baris untuk item spesifik
             (mis. sistem pendingin, tutup radiator) — hasilnya dicatat agar bisa dijelaskan ke customer.
           </div>
-          {insp.map((r, i) => (
-            <div key={r.id} className="row" style={{ marginBottom: 6 }}>
-              <input value={r.item} onChange={(e) => setInspRow(r.id, { item: e.target.value })} placeholder={`Item ${i + 1} — mis. Sistem pendingin`} />
-              <input value={r.catatan} onChange={(e) => setInspRow(r.id, { catatan: e.target.value })} placeholder="Catatan (opsional)" />
-              <button type="button" className="btn ghost" style={{ flex: '0 0 auto', fontSize: 14, padding: '10px 14px', color: '#b3261e' }} onClick={() => delInsp(r.id)} title="Hapus baris">✕</button>
-            </div>
-          ))}
+          {insp.map((r) => {
+            const taken = new Set(insp.filter((x) => x.id !== r.id && x.pick && x.pick !== 'LAINNYA').map((x) => x.pick));
+            return (
+              <div key={r.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--line, #e6e8ee)' }}>
+                <div className="row">
+                  <select
+                    value={r.pick}
+                    onChange={(e) => {
+                      const code = e.target.value;
+                      const label = CHECKGO_INSPECTION_ITEMS.find((c) => c.code === code)?.label ?? '';
+                      // "Lainnya" clears the label so the free-text box starts
+                      // empty instead of inheriting the previous item's name.
+                      setInspRow(r.id, { pick: code, item: code === 'LAINNYA' ? '' : label });
+                    }}
+                  >
+                    <option value="">— pilih item pemeriksaan —</option>
+                    {CHECKGO_INSPECTION_ITEMS.map((c) => (
+                      <option key={c.code} value={c.code} disabled={taken.has(c.code)}>
+                        {c.label}{taken.has(c.code) ? ' (sudah dipilih)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn ghost" style={{ flex: '0 0 auto', fontSize: 14, padding: '10px 14px', color: '#b3261e' }} onClick={() => delInsp(r.id)} title="Hapus baris">✕</button>
+                </div>
+                {r.pick === 'LAINNYA' && (
+                  <input style={{ marginTop: 6 }} value={r.item} onChange={(e) => setInspRow(r.id, { item: e.target.value })} placeholder="Nama item pemeriksaan" />
+                )}
+                {r.pick && (
+                  <>
+                    <span style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                      {CHECKGO_RESULTS.map((h) => (
+                        <button
+                          key={h}
+                          type="button"
+                          className="btn ghost"
+                          style={{
+                            flex: 1,
+                            fontSize: 13,
+                            padding: '8px 6px',
+                            ...(r.hasil === h ? { background: '#33415c', color: '#fff', borderColor: '#33415c' } : {}),
+                          }}
+                          onClick={() => setInspRow(r.id, { hasil: h })}
+                        >
+                          {h}
+                        </button>
+                      ))}
+                    </span>
+                    <input style={{ marginTop: 6 }} value={r.catatan} onChange={(e) => setInspRow(r.id, { catatan: e.target.value })} placeholder="Catatan (opsional)" />
+                  </>
+                )}
+              </div>
+            );
+          })}
           <button type="button" className="btn ghost" style={{ width: '100%', fontSize: 14 }} onClick={addInsp}>+ Tambah item pemeriksaan</button>
         </div>
 
@@ -458,6 +514,12 @@ export default function CheckGoIntake() {
           <div className="label">Tanda tangan customer — WAJIB (persetujuan pengecekan)</div>
           <SignaturePad ref={sigCust} onInk={setCustSigned} />
           {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib</div>}
+
+          <div className="label" style={{ marginTop: 14 }}>
+            Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — opsional
+          </div>
+          <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
+          {!advSigned && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Boleh dikosongkan — nama penerima tetap tercatat.</div>}
         </div>
 
         {result && (
