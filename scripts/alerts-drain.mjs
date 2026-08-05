@@ -43,7 +43,21 @@ const PAUSE_BETWEEN_SENDS_MS = 3_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
+// In watch mode the connect itself must survive a bad network: this runs on a
+// laptop whose DNS provably goes away for an hour at a time, and a watcher
+// that dies at startup because the first lookup timed out protects nobody.
+// One-shot runs still fail fast — a human is watching those.
+const WATCHING = process.argv.some((a) => a === '--watch' || a.startsWith('--watch='));
+for (;;) {
+  try {
+    await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
+    break;
+  } catch (e) {
+    if (!WATCHING) throw e;
+    console.error(`[${new Date().toISOString()}] Mongo connect failed (${String(e.message).slice(0, 70)}) — retrying in 30s`);
+    await new Promise((r) => setTimeout(r, 30_000));
+  }
+}
 const client = createWhatsAppClient(whatsappConfigFromEnv());
 
 async function stamp(spkId, alert) {
