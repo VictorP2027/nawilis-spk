@@ -1,7 +1,7 @@
 // Map each SPK service code -> a REAL Turboly service SKU (harvested from the live
 // service picker) and seed tb_service_products + service_sku_map, replacing the
 // DEMO placeholders. Search is by SKU code (unique). SANDBOX SKUs — re-map for prod.
-import { connect, close, collections } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
+import { connect, close, collections } from '../packages/core/dist/index.js';
 
 // SPK code -> Turboly SKU code (unique search key). '*' entries are best-guess (flag).
 const MAP = {

@@ -1,7 +1,7 @@
 // Creates a QUEUED SPK for a brand-NEW customer (not in Turboly) so the worker
 // exercises the Add-New-Customer creation path. Usage:
 //   node --env-file=.env scripts/test-spk-new.mjs 9012
-import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
+import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '../packages/core/dist/index.js';
 
 const s = process.argv[2] || '9012';
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');

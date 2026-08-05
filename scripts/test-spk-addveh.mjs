@@ -1,6 +1,6 @@
 // Queued SPK for an EXISTING customer (ADITYA) but a NEW vehicle → exercises the
 // add-vehicle-to-existing-customer path. Usage: node --env-file=.env scripts/test-spk-addveh.mjs 7788
-import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
+import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '../packages/core/dist/index.js';
 const s = process.argv[2] || '7788';
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
 const input = {

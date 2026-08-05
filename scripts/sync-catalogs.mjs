@@ -7,9 +7,9 @@
 //
 // One Turboly session (one login). In CI this runs in the same concurrency
 // group as the pusher so the two can never fight over the single session.
-import { connect, close, collections } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
-import { TurbolySession } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/turboly/index.js';
-import { getDb } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/mongo.js';
+import { connect, close, collections } from '../packages/core/dist/index.js';
+import { TurbolySession } from '../packages/core/dist/turboly/index.js';
+import { getDb } from '../packages/core/dist/mongo.js';
 
 const base = process.env.TURBOLY_BASE_URL || 'https://sandbox.turboly.com';
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');

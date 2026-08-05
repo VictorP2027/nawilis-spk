@@ -4,8 +4,8 @@
 //
 //   node --env-file=.env scripts/seed-advisors.mjs            # NWL-BKS
 //   node --env-file=.env scripts/seed-advisors.mjs NWL-PRG    # another branch
-import { connect, close, collections, loadMirror } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
-import { TurbolySession } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/turboly/index.js';
+import { connect, close, collections, loadMirror } from '../packages/core/dist/index.js';
+import { TurbolySession } from '../packages/core/dist/turboly/index.js';
 
 const branch = process.argv[2] || 'NWL-BKS';
 const base = process.env.TURBOLY_BASE_URL || 'https://sandbox.turboly.com';

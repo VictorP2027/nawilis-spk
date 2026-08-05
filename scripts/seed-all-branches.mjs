@@ -2,8 +2,8 @@
 // Turboly's live SO form. One login, branches done serially (one Turboly session).
 //   node --env-file=.env scripts/seed-all-branches.mjs
 import fs from 'node:fs';
-import { connect, close, collections } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
-import { TurbolySession } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/turboly/index.js';
+import { connect, close, collections } from '../packages/core/dist/index.js';
+import { TurbolySession } from '../packages/core/dist/turboly/index.js';
 
 const base = process.env.TURBOLY_BASE_URL || 'https://sandbox.turboly.com';
 const stores = JSON.parse(fs.readFileSync('data/turboly-sandbox-stores.json', 'utf8'));

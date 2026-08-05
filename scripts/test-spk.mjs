@@ -1,4 +1,4 @@
-import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
+import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic } from '../packages/core/dist/index.js';
 
 const uri = process.env.MONGODB_URI, dbn = process.env.MONGODB_DB || 'spk';
 await connect(uri, dbn);

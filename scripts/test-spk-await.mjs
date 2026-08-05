@@ -1,7 +1,7 @@
 // Creates an ADITYA / Demo-Advisor SPK and leaves it in `awaiting_assignment`
 // (does NOT auto-assign) so you can click "Tugaskan →" in /admin to test the
 // instant GitHub trigger. Run: node --env-file=.env scripts/test-spk-await.mjs
-import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus } from '/Users/victorphisitkul/Desktop/untitled folder 2/packages/core/dist/index.js';
+import { connect, close, collections, buildSpkDoc, loadMirror, resolveSkus } from '../packages/core/dist/index.js';
 
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
 
