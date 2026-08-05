@@ -31,6 +31,50 @@ const readPoll = async (sel, tries = 14, gap = 500) => {
   return [];
 };
 
+// MECHANICS are not on the Service Order form at all, which is why this mirror
+// held 0 of them and the board offered advisors that Turboly then refused as WO
+// assignees ("Assignee can't be blank"). They come from the store_users lookup
+// WITHOUT context=ServiceOrder — that context returns the advisors instead.
+// Same path, two different lists.
+//
+// Being a mechanic is a CAPABILITY, not a replacement role: the same person can
+// be an advisor and a mechanic (ANERIA PUSPITA DEWI, 21809, is both at Ciputat),
+// so this sets a flag and never overwrites `role`.
+//
+// Called BEFORE the advisor read, because a store whose advisor list comes back
+// empty is skipped — and 12 of 23 branches got no mechanics at all when this
+// lived after that gate.
+async function syncMechanics(st, ls) {
+  try {
+    const mechs = await page.evaluate(`(async () => {
+      var r = await fetch('/lookup/store_users.json?store_id=${String(ls.v)}', { headers: { accept: 'application/json' } });
+      if (!r.ok) return null;
+      try { return await r.json(); } catch (e) { return null; }
+    })()`);
+    if (!Array.isArray(mechs) || !mechs.length) {
+      console.log(`  ${st._id}: mechanic list empty — flag left as-is (not cleared)`);
+      return;
+    }
+    await collections.tbMechanics().updateMany({ storeCode: st._id }, { $unset: { isMechanic: '' } });
+    for (const row of mechs) {
+      const mid = String(row[1] ?? '');
+      const mname = String(row[0] ?? '').trim();
+      if (!mid || !mname) continue;
+      await collections.tbMechanics().updateOne(
+        { _id: `${st._id}:${mid}` },
+        {
+          $set: { mechanicCode: mid, name: mname, storeCode: st._id, isMechanic: true, syncedAt: now },
+          $setOnInsert: { role: 'mechanic' },
+        },
+        { upsert: true },
+      );
+    }
+    mechTotal += mechs.length;
+  } catch (e) {
+    console.log(`  ${st._id} mechanics ERROR: ${e.message.slice(0, 60)}`);
+  }
+}
+
 // ── 1+2. stores + advisors (SO form) ─────────────────────────────────────
 await page.goto(`${base}/service_orders/new`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(2500);
@@ -38,6 +82,7 @@ const liveStores = await readPoll('#store-id');
 const known = await collections.tbStores().find({}).toArray();
 const byTurbolyId = new Map(known.map((s) => [String(s.turbolyStoreId), s]));
 let advTotal = 0;
+let mechTotal = 0;
 const newStores = [];
 const okStores = [];
 for (const ls of liveStores) {
@@ -47,6 +92,7 @@ for (const ls of liveStores) {
   try {
     await page.selectOption('#store-id', { value: String(ls.v) });
     await page.waitForTimeout(1200);
+    await syncMechanics(st, ls);
     const advisors = await readPoll('#service-advisor-id');
     const sales = await read('#salesperson-id');
     if (advisors.length === 0) { console.log(`  ${st._id}: advisor list empty — SKIPPED (not pruned)`); continue; }
@@ -58,13 +104,14 @@ for (const ls of liveStores) {
       await collections.tbMechanics().updateOne({ _id: `${st._id}:${p.v}` }, { $set: { _id: `${st._id}:${p.v}`, mechanicCode: p.v, name: p.t, storeCode: st._id, role: 'salesperson', syncedAt: now } }, { upsert: true });
     }
     advTotal += advisors.length;
+
   } catch (e) {
     console.log(`  ${st._id} advisors ERROR: ${e.message.slice(0, 60)}`);
   }
 }
 // prune advisors that vanished — ONLY for stores whose list we read successfully
 const pruned = await collections.tbMechanics().deleteMany({ role: { $in: ['advisor', 'salesperson'] }, storeCode: { $in: okStores }, syncedAt: { $lt: now } });
-console.log(`stores: ${liveStores.length} live (${newStores.length} unmapped) | advisors synced: ${advTotal}, pruned: ${pruned.deletedCount}`);
+console.log(`stores: ${liveStores.length} live (${newStores.length} unmapped) | advisors synced: ${advTotal}, pruned: ${pruned.deletedCount} | mechanics synced: ${mechTotal}`);
 if (newStores.length) console.log(`  ⚠ NEW stores need branchCode mapping: ${newStores.join('; ')}`);
 
 // ── 3+4. vehicle makes + models (/vehicles/new) ──────────────────────────

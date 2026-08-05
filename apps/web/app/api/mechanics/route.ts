@@ -6,33 +6,32 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/mechanics?branch=NWL-BKS[&role=mechanic] — assignable people for the
- * flow board's Work Order picker, from the tb_mechanics mirror (synced from
- * Turboly). Both mechanics AND advisors are returned (Turboly accepts either as
- * a WO line assignee); mechanics are listed first. Optional ?role= narrows to
- * one role. Branch matching mirrors /api/advisors: the branch's own people plus
- * tenant-wide entries (storeCode null).
+ * GET /api/mechanics?branch=NWL-BKS — the people Turboly will accept as a Work
+ * Order line assignee, from the tb_mechanics mirror.
+ *
+ * This used to return advisors too, on the assumption that Turboly takes either.
+ * It does not: assigning an advisor is refused outright and the whole WO is
+ * rejected ("Service Item Line 1: Assignee can't be blank"). Only people the
+ * sync flagged isMechanic — Turboly's own per-store mechanic list — qualify.
+ *
+ * Cross-branch is refused too ("Mechanic Cross Store feature is not enabled"),
+ * so a branch filter here is exact: no tenant-wide fallback, because a mechanic
+ * with no store cannot be assigned anywhere.
  */
 export async function GET(req: Request): Promise<Response> {
   await db();
   const url = new URL(req.url);
   const branch = url.searchParams.get('branch');
-  const roleParam = url.searchParams.get('role');
 
-  const roleOr = roleParam
-    ? [{ role: new RegExp(roleParam.replace(/[^a-z]/gi, ''), 'i') }]
-    : [{ role: /mechanic/i }, { role: /advisor/i }];
-
-  const q: Record<string, unknown> = { $or: roleOr };
-  if (branch) q.$and = [{ $or: [{ storeCode: branch }, { storeCode: null }] }];
+  const q: Record<string, unknown> = { $or: [{ isMechanic: true }, { role: /mechanic/i }] };
+  if (branch) q.storeCode = branch;
 
   const rows = await collections.tbMechanics().find(q).sort({ name: 1 }).toArray();
 
-  // Mechanics before advisors (the picker's primary use is WO assignment).
-  const rank = (role: string | null): number => (/mechanic/i.test(role ?? '') ? 0 : 1);
-  rows.sort((a, b) => rank(a.role) - rank(b.role) || a.name.localeCompare(b.name));
-
   return NextResponse.json({
     mechanics: rows.map((m) => ({ code: m.mechanicCode, name: m.name, role: m.role, storeCode: m.storeCode })),
+    // The board shows this when the list is empty: without it an operator sees
+    // a blank picker and no reason for it.
+    note: rows.length === 0 && branch ? `Belum ada mekanik ter-sync untuk ${branch} — jalankan sync-catalogs` : undefined,
   });
 }

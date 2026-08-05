@@ -260,7 +260,14 @@ function ActionModal({ row, def, onClose, onDone }: ModalProps) {
   function buildParams(): Record<string, unknown> {
     switch (def.fields) {
       case 'mechanic':
-        return { assigneeName: assignee.trim() };
+        // Send the Turboly store-user id when the operator picked from the list.
+        // Names are not unique in Turboly (two ADITYA SAPUTRAs), so the id is
+        // the only exact answer; the name still goes along for the audit trail
+        // and for the typed-name fallback when a branch has no synced list.
+        return {
+          assigneeName: assignee.trim(),
+          assigneeCode: mechanics.find((m) => m.name === assignee.trim())?.code ?? null,
+        };
       case 'complete':
         return { waktuMinutes: Number(waktu), feedback: findings.trim() || null };
       case 'qc':
@@ -320,7 +327,7 @@ function ActionModal({ row, def, onClose, onDone }: ModalProps) {
               <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
                 <option value="">— pilih mekanik —</option>
                 {mechanics.map((m) => (
-                  <option key={m.code} value={m.name}>{m.name}{m.role ? ` (${m.role})` : ''}</option>
+                  <option key={m.code} value={m.name} data-code={m.code}>{m.name}{m.role ? ` (${m.role})` : ''}</option>
                 ))}
               </select>
             ) : (

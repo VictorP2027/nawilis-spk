@@ -255,6 +255,7 @@ export class TurbolyFlowRpa {
     serviceOrderUrl: string,
     assigneeName: string,
     turbolyStoreId?: string | null,
+    assigneeCode?: string | null,
   ): Promise<CreateWorkOrderResult> {
     const page = await this.open(serviceOrderUrl, 'wo-create-from-so');
     // Idempotency read-back BEFORE the irreversible click: a previous attempt
@@ -294,7 +295,7 @@ export class TurbolyFlowRpa {
     // dressed by JS. So the mechanic name is resolved against Turboly's own
     // store_users lookup and the id written into EVERY line. This runs before
     // the save, so an unresolvable mechanic stops the job with nothing created.
-    const lines = await this.setLineAssignees(page, assigneeName, turbolyStoreId);
+    const lines = await this.setLineAssignees(page, assigneeName, turbolyStoreId, assigneeCode);
     if (lines.total > 0) {
       if (lines.error) {
         throw new TransientError(`Buat WO: daftar mekanik tidak bisa dibaca (${lines.error}) — dicoba ulang otomatis`);
@@ -1670,8 +1671,13 @@ export class TurbolyFlowRpa {
     page: Page,
     assigneeName: string,
     turbolyStoreId?: string | null,
+    assigneeCode?: string | null,
   ): Promise<{ total: number; set: number; matches?: number; error?: string }> {
     const name = JSON.stringify(assigneeName);
+    // An id picked from the board's list is exact. Names are NOT unique in
+    // Turboly (two ADITYA SAPUTRAs), so when the id is present it wins and no
+    // lookup is needed at all; the name path stays for a typed-in fallback.
+    const code = JSON.stringify(String(assigneeCode ?? '').trim());
     // store_users.json is TWO lists behind one path: context=ServiceOrder gives
     // the store's service ADVISORS (2 at Bekasi), any other context gives its
     // MECHANICS (8 at Bekasi, incl. AHMAD JAYNUDIN 21596). A work-order line
@@ -1687,6 +1693,20 @@ export class TurbolyFlowRpa {
         document.querySelectorAll('input.assignee-ids, input[name*="[user_assignee_ids]"]')
       );
       if (!inputs.length) return { total: 0, set: 0 };
+      var apply = function (id, label) {
+        var n = 0;
+        for (var k = 0; k < inputs.length; k++) {
+          var e = inputs[k];
+          e.value = String(id);
+          e.setAttribute('value', String(id));
+          e.setAttribute('data-selected-assignees', JSON.stringify([{ id: id, name: label }]));
+          e.dispatchEvent(new Event('input', { bubbles: true }));
+          e.dispatchEvent(new Event('change', { bubbles: true }));
+          if (e.value === String(id)) n++;
+        }
+        return n;
+      };
+      if (${code}) return { total: inputs.length, set: apply(${code}, ${name}), matches: 1 };
       var res;
       try {
         res = await fetch('/lookup/store_users.json?store_id=' + encodeURIComponent(${store}), { headers: { accept: 'application/json' } });

@@ -253,7 +253,7 @@ async function executeJob(
       // rejected outright, so the sink needs this branch's Turboly store id.
       const storeDoc = await getDb().collection('tb_stores').findOne({ _id: branchCode } as never);
       const storeId = (storeDoc as { turbolyStoreId?: string } | null)?.turbolyStoreId ?? null;
-      const r = await rpa.createWorkOrder(url, assignee, storeId);
+      const r = await rpa.createWorkOrder(url, assignee, storeId, str(p.assigneeCode) ?? null);
       return { ...r, assigneeName: assignee };
     }
 
