@@ -2011,6 +2011,15 @@ export class TurbolyFlowRpa {
       // Anything clickable is an ACTION, not a status ("Mark Completed" ≠ COMPLETED).
       const clickable = (el: Element): boolean =>
         el.closest('a, button, [role="button"], [role="tab"], input, select, textarea') !== null;
+      // Turboly's left menu marks its current section with class="active", and
+      // the selector below collects .active — so "Sales" and "Services" were
+      // read as the work order's workflow status. A standalone (non-chain)
+      // candidate counts as ACTIVE further down, so that nav item could BE the
+      // answer: QC failed with `status aktif: [Sales | WAITING FOR Services]`
+      // while the real chain sat right there in the candidates. Page chrome is
+      // never a status.
+      const CHROME =
+        'nav, aside, header, footer, .navbar, .sidebar, #sidebar, [role="navigation"], [class*="menu" i], [class*="breadcrumb" i]';
       const candidates = (
         Array.from(
           document.querySelectorAll(
@@ -2019,7 +2028,7 @@ export class TurbolyFlowRpa {
           ),
         ) as HTMLElement[]
       ).filter((el) => {
-        if (!visible(el) || clickable(el)) return false;
+        if (!visible(el) || clickable(el) || el.closest(CHROME)) return false;
         const t = (el.innerText ?? '').trim().replace(/\s+/g, ' ');
         return t.length > 0 && t.length <= 40 && el.querySelectorAll('*').length <= 2;
       });
