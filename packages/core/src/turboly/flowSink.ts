@@ -339,54 +339,112 @@ export class TurbolyFlowRpa {
     const page = await this.open(workOrderUrl, 'wo-complete');
     if (await this.statusVisible(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i)) return;
 
+    // Completing a Work Order is PER SERVICE LINE, and each line takes TWO
+    // moves that do not look alike:
+    //
+    //   START  a Rails PATCH link
+    //          …/start_progress_service_item?additional_line_id=…&assignee_id=…
+    //   STOP   a POST form (…/stop_progress_service_item, _method=patch) whose
+    //          two hidden inputs the page's own JS fills from the clicked row's
+    //          data-additional-line-id / data-assignee-id
+    //
+    // Matching `progress_service_item` as a LINK therefore only ever found the
+    // start half: the moment a line was running there was no link left, so the
+    // old loop saw nothing to do and left it running — one test line logged 90
+    // minutes of "work" that way.
+    //
+    // This half only STOPS. Starting is start_wo's job, and a stopped line
+    // offers its start link again, so a loop that clicked whichever control was
+    // present would start and stop the same line forever. There is exactly one
+    // stop form on the page, shared by every row: each pass fills it from the
+    // next row still running, which is what makes the loop terminate.
+    const STOP_BTN = 'a.btn-modal-stop-progress';
+    for (let i = 0; i < 24; i++) {
+      if ((await page.locator(STOP_BTN).count().catch(() => 0)) === 0) break;
+      const submitted = await page.evaluate(`(() => {
+        var a = document.querySelector('a.btn-modal-stop-progress');
+        var f = document.querySelector('form[action*="stop_progress_service_item"]');
+        var line = document.getElementById('additional-line-id');
+        var who = document.getElementById('assignee-id');
+        if (!a || !f || !line || !who) return false;
+        line.value = a.getAttribute('data-additional-line-id') || '';
+        who.value = a.getAttribute('data-assignee-id') || '';
+        if (!line.value) return false;
+        f.submit();
+        return true;
+      })()`);
+      if (!submitted) break;
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+      await page.waitForTimeout(600);
+      if (await this.statusVisible(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i)) break;
+    }
+    // Stopping the timer is NOT completion: it only writes service_duration.
+    // The order stays IN PROGRESS until each line's is_complete checkbox is
+    // ticked on the edit form and saved — that is the move that sends it to
+    // WAITING FOR QC, and the one this step used to be missing entirely.
     const edited = await this.clickControlIfPresent(page, /^edit$/i);
     if (edited) await page.waitForTimeout(2200);
 
-    const durOk = await this.fillFields(page, /duration|durasi|waktu|time[_\s-]*spent|minutes/i, String(args.waktuMinutes), { all: false });
-    const fbCount = args.feedback
-      ? await this.fillFields(page, /feedback/i, args.feedback, { all: true })
-      : 0;
-    if (!durOk && args.feedback && fbCount === 0) {
+    const ticked = await page.evaluate(`(() => {
+      var boxes = document.querySelectorAll('input[type="checkbox"][name*="[is_complete]"]');
+      var n = 0;
+      for (var i = 0; i < boxes.length; i++) {
+        if (!boxes[i].checked) { boxes[i].click(); }
+        if (boxes[i].checked) { n++; }
+      }
+      return { found: boxes.length, checked: n };
+    })()`) as { found: number; checked: number };
+    if (ticked.found === 0) {
       throw new DiscoveryError(
-        `Selesai WO: field duration/waktu dan feedback tidak ditemukan. Field terlihat: ${await this.fieldList(page)}`,
+        `Selesai WO: checkbox "Completed?" (is_complete) per baris tidak ada di form. Field terlihat: ${await this.fieldList(page)}`,
+      );
+    }
+    if (ticked.checked < ticked.found) {
+      throw new DataError(
+        `Selesai WO: ${ticked.found} baris tapi hanya ${ticked.checked} yang bisa ditandai selesai — WO tidak bisa diselesaikan sebagian`,
       );
     }
 
-    const saved = await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
-    if (saved) {
-      await page.waitForTimeout(1500);
-      await this.confirmModals(page);
-      await page.waitForTimeout(2500);
-      await page.waitForLoadState('networkidle').catch(() => {});
-    }
+    // The stop already wrote the real measured duration; only fill it when the
+    // field came back empty, so a hand-entered estimate never overwrites it.
+    await this.fillFields(page, /duration|durasi|waktu|time[_\s-]*spent|minutes/i, String(args.waktuMinutes), { all: false, onlyEmpty: true });
+    if (args.feedback) await this.fillFields(page, /feedback/i, args.feedback, { all: true });
 
-    // Completing a Work Order is PER SERVICE LINE, not a toolbar button: each
-    // line carries a Rails PATCH link in its Progress column
-    // (/service_work_orders/<id>/start_progress_service_item?additional_line_id=…)
-    // which, once started, is replaced by the finish link. Only when every line
-    // is done does the order move to WAITING FOR QC. The old code hunted for a
-    // "Mark Completed" control that this build simply does not have.
-    const PROGRESS_LINK = 'a[href*="progress_service_item"]';
-    for (let i = 0; i < 12; i++) {
-      const link = page.locator(PROGRESS_LINK).first();
-      if ((await link.count().catch(() => 0)) === 0) break;
-      const href = (await link.getAttribute('href').catch(() => null)) ?? '(?)';
-      await link.click({ timeout: 6000 }).catch(() => {});
-      await page.waitForLoadState('domcontentloaded').catch(() => {});
-      await page.waitForTimeout(1200);
-      await this.confirmModals(page);
-      await page.waitForTimeout(800);
-      if (await this.statusVisible(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i)) break;
-      // A link that survives its own click would loop forever.
-      const still = await page.locator(`a[href="${href}"]`).count().catch(() => 0);
-      if (still > 0 && i > 6) break;
-    }
-    // Some tenants still expose a toolbar control; harmless when absent.
-    await this.clickControlIfPresent(page, /mark\s*(as\s*)?complete[d]?|^complete[d]?$|^finish$|^selesai$/i);
-    await page.waitForTimeout(1200);
+    await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
+    await page.waitForTimeout(1500);
     await this.confirmModals(page);
     await page.waitForTimeout(2500);
     await page.waitForLoadState('networkidle').catch(() => {});
+
+    // Saving is_complete only UNLOCKS the transition; it does not perform it.
+    // Turboly then reveals a "Waiting for QC" PATCH link (it is absent while any
+    // line is unfinished), and the order sits at IN PROGRESS until it is
+    // clicked. It carries a Rails data-confirm, i.e. a native confirm() —
+    // Playwright DISMISSES those by default, which would quietly cancel the
+    // transition, so accept it explicitly for this one click.
+    await page.goto(workOrderUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForTimeout(1200);
+    const qcLink = page.locator('a[href*="waiting_for_qc"]').first();
+    if ((await qcLink.count().catch(() => 0)) === 0) {
+      throw new DiscoveryError(
+        `Selesai WO: semua baris sudah ditandai selesai tapi kontrol "Waiting for QC" tidak muncul di ${workOrderUrl}`,
+      );
+    }
+    const accept = (d: { accept: () => Promise<void> }): void => void d.accept().catch(() => {});
+    page.on('dialog', accept);
+    try {
+      await qcLink.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1500);
+      await this.confirmModals(page);
+      await page.waitForTimeout(2000);
+      await page.waitForLoadState('networkidle').catch(() => {});
+    } finally {
+      page.off('dialog', accept);
+    }
+
     await this.snapshot(page, 'flow-wo-completed');
     await this.verifyStatus(page, /WAITING\s*FOR\s*QC|\bCOMPLETED\b/i, 'Selesai Work Order');
     await this.session.noteJobDone();
@@ -1344,10 +1402,10 @@ export class TurbolyFlowRpa {
     page: Page,
     pattern: RegExp,
     value: string,
-    opts: { all: boolean; last?: boolean } = { all: false },
+    opts: { all: boolean; last?: boolean; onlyEmpty?: boolean } = { all: false },
   ): Promise<number> {
     return page.evaluate(
-      ({ source, flags, value, all, last }) => {
+      ({ source, flags, value, all, last, onlyEmpty }) => {
         const re = new RegExp(source, flags);
         const els = (Array.from(document.querySelectorAll('input, textarea')) as (HTMLInputElement | HTMLTextAreaElement)[]).filter((el) => {
           const t = (el as HTMLInputElement).type;
@@ -1362,6 +1420,9 @@ export class TurbolyFlowRpa {
         let n = 0;
         for (const el of targets) {
           if (!el) continue;
+          // onlyEmpty: never overwrite a value Turboly itself computed (the
+          // measured service_duration a stopped timer wrote) with our estimate.
+          if (onlyEmpty && el.value.trim() !== '') continue;
           el.value = value;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1376,7 +1437,7 @@ export class TurbolyFlowRpa {
         }
         return n;
       },
-      { source: pattern.source, flags: pattern.flags, value, all: opts.all, last: opts.last ?? false },
+      { source: pattern.source, flags: pattern.flags, value, all: opts.all, last: opts.last ?? false, onlyEmpty: opts.onlyEmpty ?? false },
     );
   }
 
