@@ -21,7 +21,6 @@ interface JobSel {
   code: string;
   label: string;
   qty: number;
-  price: string;
   sku?: string;
   /** merk / tipe, for the rows the paper wants it on (Oli, Balancing on the Car). */
   brandType?: string;
@@ -146,16 +145,11 @@ export default function Intake() {
     return () => clearTimeout(t);
   }, [plate]);
 
-  const orderedTotal = useMemo(
-    () => Object.values(jobs).reduce((s, j) => s + (Number(j.price) || 0) * j.qty, 0),
-    [jobs],
-  );
-
   function toggleJob(code: string, label: string) {
     setJobs((prev) => {
       const next = { ...prev };
       if (next[code]) delete next[code];
-      else next[code] = { code, label, qty: 1, price: '' };
+      else next[code] = { code, label, qty: 1 };
       return next;
     });
   }
@@ -183,14 +177,11 @@ export default function Intake() {
         km,
       },
       complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
-      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: (() => {
-        // Staff type Rupiah the Indonesian way — "350.000" is three hundred
-        // and fifty thousand. Number("350.000") is 350, so the order went to
-        // Turboly at one thousandth of the price. Strip the separators, as the
-        // sheet form already does.
-        const n = j.price ? Number(String(j.price).replace(/[^\d]/g, '')) : NaN;
-        return Number.isFinite(n) && n > 0 ? n : null;
-      })(), chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null,
+      // Price is deliberately NOT captured at intake anymore: Turboly's own
+      // pricebook prices the SO line, and the real figure is confirmed by a
+      // human at Buat Invoice — which is also where the payment amount is set.
+      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: null,
+      chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null,
       // Merk/tipe rides in keterangan, the free-text the paper form itself
       // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
       keterangan: j.brandType?.trim() || undefined })),
@@ -471,21 +462,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                     </select>
                   ) : null}
-                  {on && (
-                    <input
-                      className="price"
-                      value={jobs[s.code]!.price}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, price: e.target.value } }))}
-                      inputMode="numeric"
-                      placeholder="harga (Rp)"
-                    />
-                  )}
                 </button>
               );
             })}
           </div>
-          {orderedTotal > 0 && <div style={{ marginTop: 10, fontWeight: 700 }}>Estimasi: Rp {orderedTotal.toLocaleString('id-ID')}</div>}
         </div>
 
         <div className="card">

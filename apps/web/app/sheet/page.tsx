@@ -14,7 +14,7 @@ function uuid(): string {
 /** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
 const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
 
-interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string; harga?: string }
+interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string }
 interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }
 
 export default function Sheet() {
@@ -208,14 +208,6 @@ export default function Sheet() {
   const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
 
   const orderedCount = useMemo(() => Object.values(pk).filter((r) => r.order).length, [pk]);
-  const estTotal = useMemo(
-    () => Object.values(pk).reduce((sum, r) => {
-      if (!r.order) return sum;
-      const h = Number((r.harga ?? '').replace(/[^\d]/g, ''));
-      return sum + (Number.isFinite(h) ? h : 0) * (r.qty || 1);
-    }, 0),
-    [pk],
-  );
 
   async function submit() {
     setSubmitting(true);
@@ -224,8 +216,9 @@ export default function Sheet() {
     const jobLines = SERVICES.filter((s) => pk[s.code]!.order).map((s) => {
       const r = pk[s.code]!;
       const notes = [r.keterangan, r.mk && `MK:${r.mk}`, r.waktu && `Waktu:${r.waktu}`].filter(Boolean).join(' ');
-      const harga = r.harga ? Number(r.harga.replace(/[^\d]/g, '')) : NaN;
-      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: Number.isFinite(harga) && harga > 0 ? harga : null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
+      // Price is not captured at intake: Turboly's pricebook prices the line,
+      // and the human-confirmed figure enters at Buat Invoice on the board.
+      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
     });
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
     const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
@@ -494,7 +487,6 @@ export default function Sheet() {
                           </select>
                         ) : null}
                         {r.order && <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder={s.brandType ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'keterangan'} />}
-                        {r.order && <input type="text" value={r.harga ?? ''} onChange={(e) => setRow(s.code, { harga: e.target.value })} inputMode="numeric" placeholder="Harga (Rp)" style={{ marginTop: 3 }} />}
                         {!r.order && <input className="ket-idle" type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
                       </td>
                       <td className="col-mk"><input type="text" value={r.mk} onChange={(e) => setRow(s.code, { mk: e.target.value })} /></td>
@@ -629,14 +621,9 @@ export default function Sheet() {
         <div className="foot">Pioneering wheel alignment and balancing for more than 50 years</div>
       </div>
 
-      {estTotal > 0 && (
-        <div className="sheet-actions">
-          <div className="est-total">Estimasi biaya: <b>Rp {estTotal.toLocaleString('id-ID')}</b> ({orderedCount} pekerjaan)</div>
-        </div>
-      )}
       <div className="sheet-actions">
         <button className="btn primary" style={{ flex: 1 }} disabled={submitting} onClick={submit}>
-          {submitting ? 'Menyimpan…' : `Simpan SPK${estTotal > 0 ? ` — Rp ${estTotal.toLocaleString('id-ID')}` : ''} (${orderedCount} pekerjaan)`}
+          {submitting ? 'Menyimpan…' : `Simpan SPK (${orderedCount} pekerjaan)`}
         </button>
         <a className="btn ghost" href="/admin">Dashboard</a>
       </div>
