@@ -455,11 +455,16 @@ export class TurbolyFlowRpa {
    * RECOMMENDATIONS), approve the service part(s), save → verify COMPLETED.
    */
   async qcApprove(workOrderUrl: string, args: QcApproveArgs): Promise<void> {
-    const page = await this.open(workOrderUrl, 'wo-qc');
+    let page = await this.open(workOrderUrl, 'wo-qc');
     if (await this.statusVisible(page, /\bCOMPLETED\b/i)) return;
 
-    const edited = await this.clickControlIfPresent(page, /^edit$/i);
-    if (edited) await page.waitForTimeout(2200);
+    // QC is not an edit of the WO page — it is its own form, reached from the
+    // "QC Process" control and rendered at .../start_qc_process (which posts to
+    // .../qc_process). Hunting for NEXT ODOMETER on the WO page found no fields
+    // at all, because none of them are there.
+    const qcUrl = `${workOrderUrl.replace(/[?#].*$/, '').replace(/\/+$/, '')}/start_qc_process`;
+    page = await this.open(qcUrl, 'wo-qc-form');
+    await page.waitForTimeout(1200);
 
     const misses: string[] = [];
     if (args.nextOdometer != null) {
@@ -471,7 +476,11 @@ export class TurbolyFlowRpa {
       if (!ok) misses.push('NEXT SERVICE DATE');
     }
     if (args.recommendations) {
-      const ok = await this.fillFields(page, /recommendation|rekomendasi/i, args.recommendations, { all: false });
+      // NOT /recommendation/: all three fields live under
+      // service_next_recommendation_attributes, so that pattern matches the
+      // odometer input first and overwrites the value just written. The notes
+      // textarea is the only one whose name ends in [notes].
+      const ok = await this.fillFields(page, /\[notes\]|rekomendasi/i, args.recommendations, { all: false });
       if (!ok) misses.push('RECOMMENDATIONS');
     }
     if (misses.length) {
@@ -480,22 +489,37 @@ export class TurbolyFlowRpa {
       );
     }
 
-    // Approve at the service part(s) — per-line approve controls when present.
-    const perLine = await this.clickAllControls(page, /^approve[d]?$|^pass$|^qc\s*ok$/i);
-    if (perLine === 0) {
-      await this.clickControl(page, /qc|approve/i, 'tombol Approve/QC di Work Order');
+    // Passing QC is a checkbox per line ([is_approve]), not an Approve button —
+    // the same shape as is_complete on the WO edit form. Every line must pass:
+    // a partially-approved QC is not a state this flow may leave behind.
+    const approved = await page.evaluate(`(() => {
+      var boxes = document.querySelectorAll('input[type="checkbox"][name*="[is_approve]"]');
+      var n = 0;
+      for (var i = 0; i < boxes.length; i++) {
+        if (!boxes[i].checked) { boxes[i].click(); }
+        if (boxes[i].checked) { n++; }
+      }
+      return { found: boxes.length, checked: n };
+    })()`) as { found: number; checked: number };
+    if (approved.found === 0) {
+      throw new DiscoveryError(
+        `QC: checkbox approve per baris (is_approve) tidak ada di form QC. Field terlihat: ${await this.fieldList(page)}`,
+      );
     }
-    await page.waitForTimeout(1200);
-    await this.confirmModals(page);
+    if (approved.checked < approved.found) {
+      throw new DataError(
+        `QC: ${approved.found} baris tapi hanya ${approved.checked} yang bisa di-approve — QC tidak boleh setengah jalan`,
+      );
+    }
 
-    const saved = await this.clickControlIfPresent(page, /^(save|simpan|update)$/i);
-    if (saved) {
-      await page.waitForTimeout(1500);
-      await this.confirmModals(page);
-    }
+    await this.clickControlIfPresent(page, /^(save|simpan|update|submit|ok)$/i);
+    await page.waitForTimeout(1800);
+    await this.confirmModals(page);
     await page.waitForTimeout(2500);
     await page.waitForLoadState('networkidle').catch(() => {});
     await this.snapshot(page, 'flow-wo-qc');
+    // Land back on the WO itself: the QC form's own page never shows the status.
+    page = await this.open(workOrderUrl, 'wo-qc-verify');
     await this.verifyStatus(page, /\bCOMPLETED\b/i, 'QC Work Order');
     await this.session.noteJobDone();
   }
