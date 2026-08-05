@@ -37,6 +37,12 @@ const DEFAULT_ESTIMASI = 30; // minutes
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
   const [operator, setOperator] = useState('');
+  // The mechanic who does the check. Kept as {code,name}: Turboly rejects a WO
+  // line assigned to anyone outside that branch's mechanic list, and its names
+  // are not unique, so the store-user code is the only exact answer.
+  const [mekanik, setMekanik] = useState('');
+  const [mekanikList, setMekanikList] = useState<Array<{ code: string; name: string }>>([]);
+  const [mekanikNote, setMekanikNote] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const [wa, setWa] = useState('');
   const [nama, setNama] = useState('');
@@ -73,6 +79,27 @@ export default function CheckGoIntake() {
   }, []);
   useEffect(() => { if (branch) localStorage.setItem('branch', branch); }, [branch]);
   useEffect(() => { if (operator) localStorage.setItem('operator', operator); }, [operator]);
+
+  // Mechanics are per branch, so the list is refetched whenever the branch
+  // changes and any stale pick is dropped — carrying one across branches would
+  // send a mechanic Turboly refuses.
+  useEffect(() => {
+    if (!branch) { setMekanikList([]); setMekanik(''); setMekanikNote(null); return; }
+    let alive = true;
+    setMekanik('');
+    fetch(`/api/mechanics?branch=${encodeURIComponent(branch)}`)
+      .then((r) => r.json())
+      .then((o: { mechanics?: Array<{ code?: string; name?: string }>; note?: string }) => {
+        if (!alive) return;
+        const list = (o.mechanics ?? [])
+          .map((m) => ({ code: String(m.code ?? ''), name: String(m.name ?? '') }))
+          .filter((m) => m.code && m.name);
+        setMekanikList(list);
+        setMekanikNote(list.length === 0 ? (o.note ?? 'Daftar mekanik cabang ini kosong') : null);
+      })
+      .catch(() => { if (alive) { setMekanikList([]); setMekanikNote('Daftar mekanik gagal dimuat'); } });
+    return () => { alive = false; };
+  }, [branch]);
 
   useEffect(() => {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
@@ -211,6 +238,11 @@ export default function CheckGoIntake() {
       estimasiMinutes: estimasiVal,
       serviceAdvisorName: advisor || null,
       salespersonName: advisor || null,
+      // Carried so the Work Order can be assigned without asking again. Both
+      // are sent: the code is what Turboly matches on, the name is what a human
+      // reads on the board.
+      mechanicCode: mekanik || null,
+      mechanicName: mekanikList.find((m) => m.code === mekanik)?.name ?? null,
       harga: hargaVal,
       inspectionItems: insp
         .filter((r) => r.item.trim() !== '')
@@ -280,6 +312,18 @@ export default function CheckGoIntake() {
             </select>
             <div className="label" style={{ marginTop: 12 }}>Nama petugas (opsional)</div>
             <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="mis. Rina — diingat di perangkat ini" />
+
+            <div className="label" style={{ marginTop: 12 }}>Mekanik yang mengerjakan (opsional)</div>
+            {mekanikList.length > 0 ? (
+              <select value={mekanik} onChange={(e) => setMekanik(e.target.value)}>
+                <option value="">— pilih mekanik —</option>
+                {mekanikList.map((m) => (
+                  <option key={m.code} value={m.code}>{m.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="warn-note">⚠ {mekanikNote ?? 'Pilih cabang dulu'} — Work Order nanti diisi mekanik lewat papan alur.</div>
+            )}
           </div>
         )}
 

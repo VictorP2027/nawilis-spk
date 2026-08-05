@@ -46,6 +46,11 @@ const CheckGoBody = SpkIntakeInput.omit({ docType: true, jobLines: true, capture
   capturedAt: z.string().datetime().optional(),
   harga: z.coerce.number().nonnegative().default(DEFAULT_HARGA),
   inspectionItems: z.array(InspectionItemInput).default([]),
+  // The mechanic picked on the form. The CODE is Turboly's store-user id — its
+  // names are not unique, so the id is what a Work Order can safely be assigned
+  // with later. Optional: a branch with no synced mechanics still submits.
+  mechanicCode: z.string().trim().min(1).nullish(),
+  mechanicName: z.string().trim().min(1).nullish(),
 });
 
 interface StoredInspectionItem {
@@ -64,7 +69,15 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'invalid_input', issues: parsed.error.issues }, { status: 400 });
   }
 
-  const { harga, inspectionItems: rawItems, docType: _clientDocType, capturedAt, ...rest } = parsed.data;
+  const {
+    harga,
+    inspectionItems: rawItems,
+    docType: _clientDocType,
+    capturedAt,
+    mechanicCode,
+    mechanicName,
+    ...rest
+  } = parsed.data;
   void _clientDocType;
   const nowIso = new Date().toISOString();
 
@@ -110,7 +123,7 @@ export async function POST(req: Request): Promise<Response> {
       // the worker (and the flow board) always see the complete doc.
       const checkGoSet: Record<string, unknown> = {
         docType: 'CHECK_AND_GO',
-        checkGo: { harga, inspectionItems },
+        checkGo: { harga, inspectionItems, mechanicCode: mechanicCode ?? null, mechanicName: mechanicName ?? null },
         flow: initFlow(),
       };
       await collections.spk().updateOne({ _id: result.spkId }, { $set: checkGoSet });
@@ -118,7 +131,14 @@ export async function POST(req: Request): Promise<Response> {
       // Direct push (default) — same behaviour as /api/spk: release straight to
       // the Turboly queue and kick the push now. {directPush:false} holds it.
       if (json?.directPush !== false && result.state === 'awaiting_assignment') {
-        const released = await assignMechanic(result.spkId, { mechanicCode: 'UNASSIGNED', by: 'checkgo-direct', via: 'console' });
+        // Use the mechanic the form picked; 'UNASSIGNED' only when none was
+        // offered (a branch with no synced mechanics), which the flow board
+        // then resolves at Buat Work Order.
+        const released = await assignMechanic(result.spkId, {
+          mechanicCode: mechanicCode ?? 'UNASSIGNED',
+          by: 'checkgo-direct',
+          via: 'console',
+        });
         if (released?.state === 'queued') {
           result.state = 'queued';
           await triggerTurbolyPush(result.spkId);
