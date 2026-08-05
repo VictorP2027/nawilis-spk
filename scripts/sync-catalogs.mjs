@@ -84,10 +84,12 @@ async function syncMechanics(st, ls) {
     const res = await readMechanicsPoll(ls.v);
     if (!res || !res.ok) {
       // Our side broke. Says nothing about whether the store has mechanics, so
-      // the existing flags stay exactly as they are.
+      // the existing flags stay exactly as they are. 401 is its own answer:
+      // the session is gone, and the caller can get it back.
+      if (res?.status === 401) return 'auth';
       console.log(`  ${st._id}: mechanic lookup FAILED (status ${res?.status ?? '?'}${res?.error ? ` — ${res.error}` : ''}) — flag left as-is`);
       mechFailed.push(st._id);
-      return;
+      return 'failed';
     }
     const mechs = res.rows ?? [];
     if (!mechs.length) {
@@ -96,7 +98,7 @@ async function syncMechanics(st, ls) {
       // create a Work Order at all, so it has to be named in the summary.
       console.log(`  ${st._id}: Turboly returned ZERO mechanics (HTTP ${res.status}) — no mechanic configured for this store`);
       mechEmpty.push(st._id);
-      return;
+      return 'empty';
     }
     await collections.tbMechanics().updateMany({ storeCode: st._id }, { $unset: { isMechanic: '' } });
     for (const row of mechs) {
@@ -114,9 +116,11 @@ async function syncMechanics(st, ls) {
     }
     mechTotal += mechs.length;
     mechOk.push(st._id);
+    return 'ok';
   } catch (e) {
     console.log(`  ${st._id} mechanics ERROR: ${e.message.slice(0, 60)}`);
     mechFailed.push(st._id);
+    return 'failed';
   }
 }
 
@@ -136,18 +140,59 @@ const mechEmpty = [];
 const mechFailed = [];
 const newStores = [];
 const okStores = [];
-for (const ls of liveStores) {
-  const st = byTurbolyId.get(String(ls.v));
-  if (!st) { newStores.push(`${ls.t} (id ${ls.v})`); continue; } // needs a manual branchCode mapping
-  await collections.tbStores().updateOne({ _id: st._id }, { $set: { turbolyStoreName: ls.t, syncedAt: now } });
+/**
+ * Turboly allows ONE SESSION PER USER, so any other login — the pusher, the
+ * flow worker, a person opening Turboly — takes the account from this run
+ * mid-sweep. It shows as a clean TAIL of failures: from the kick onward every
+ * store 401s and every advisor select comes back empty, so whichever branches
+ * happened to be later in the list look like they have no staff at all. That
+ * is exactly how 12 of 23 branches came to have no mechanics mirrored.
+ *
+ * So get the session back instead of writing off the rest of the run. Bounded,
+ * and paced: Turboly answers a burst of logins with HTTP 429.
+ */
+let relogins = 0;
+const MAX_RELOGINS = 5;
+async function recoverSession(why) {
+  if (relogins >= MAX_RELOGINS) {
+    console.log(`  ✗ session kicked again at ${why} — ${MAX_RELOGINS} re-logins already spent, giving up`);
+    return false;
+  }
+  relogins += 1;
+  console.log(`  ↻ session kicked at ${why} — logging back in (${relogins}/${MAX_RELOGINS})`);
+  await page.waitForTimeout(5000);
   try {
-    await page.selectOption('#store-id', { value: String(ls.v) });
-    await page.waitForTimeout(1200);
-    await syncMechanics(st, ls);
-    const advisors = await readPoll('#service-advisor-id');
-    const sales = await read('#salesperson-id');
-    if (advisors.length === 0) { console.log(`  ${st._id}: advisor list empty — SKIPPED (not pruned)`); continue; }
-    okStores.push(st._id);
+    await session.ensureLoggedIn();
+    await page.goto(`${base}/service_orders/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    await readPoll('#store-id');
+    return true;
+  } catch (e) {
+    console.log(`  ✗ re-login failed: ${e.message.slice(0, 80)}`);
+    return false;
+  }
+}
+
+/**
+ * One store's mechanics + advisors. Returns 'auth' when the session is gone,
+ * so the caller can recover and run it again — the read is idempotent, every
+ * write is an upsert keyed on `${branch}:${id}`.
+ */
+async function syncOneStore(st, ls) {
+  await page.selectOption('#store-id', { value: String(ls.v) });
+  await page.waitForTimeout(1200);
+  const mech = await syncMechanics(st, ls);
+  if (mech === 'auth') return 'auth';
+  const advisors = await readPoll('#service-advisor-id');
+  const sales = await read('#salesperson-id');
+  if (advisors.length === 0) {
+    // An empty advisor list right after a mechanic 401 is the same kick seen
+    // twice; on its own it is a store with nobody assigned. Either way: not
+    // pruned, because we cannot tell an empty list from an unread one.
+    return 'empty-advisors';
+  }
+  okStores.push(st._id);
+  {
     const seen = new Set();
     for (const a of advisors) { await collections.tbMechanics().updateOne({ _id: `${st._id}:${a.v}` }, { $set: { _id: `${st._id}:${a.v}`, mechanicCode: a.v, name: a.t, storeCode: st._id, role: 'advisor', syncedAt: now } }, { upsert: true }); seen.add(a.v); }
     for (const p of sales) {
@@ -155,9 +200,25 @@ for (const ls of liveStores) {
       await collections.tbMechanics().updateOne({ _id: `${st._id}:${p.v}` }, { $set: { _id: `${st._id}:${p.v}`, mechanicCode: p.v, name: p.t, storeCode: st._id, role: 'salesperson', syncedAt: now } }, { upsert: true });
     }
     advTotal += advisors.length;
+  }
+  return 'ok';
+}
 
+for (const ls of liveStores) {
+  const st = byTurbolyId.get(String(ls.v));
+  if (!st) { newStores.push(`${ls.t} (id ${ls.v})`); continue; } // needs a manual branchCode mapping
+  await collections.tbStores().updateOne({ _id: st._id }, { $set: { turbolyStoreName: ls.t, syncedAt: now } });
+  try {
+    let status = await syncOneStore(st, ls);
+    if (status === 'auth' && (await recoverSession(st._id))) status = await syncOneStore(st, ls);
+    if (status === 'auth') {
+      console.log(`  ${st._id}: session still dead — flag left as-is`);
+      mechFailed.push(st._id);
+    } else if (status === 'empty-advisors') {
+      console.log(`  ${st._id}: advisor list empty — SKIPPED (not pruned)`);
+    }
   } catch (e) {
-    console.log(`  ${st._id} advisors ERROR: ${e.message.slice(0, 60)}`);
+    console.log(`  ${st._id} ERROR: ${e.message.slice(0, 60)}`);
   }
 }
 // prune advisors that vanished — ONLY for stores whose list we read successfully
