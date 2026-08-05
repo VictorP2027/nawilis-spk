@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   collections, flowJobs, effectiveFlow, boardColumn, stageLabel, nextFlowAction,
+  canRunFlowAction, isFlowAction,
   FLOW_ACTION_LABELS, FLOW_BOARD_COLUMNS, FLOW_BOARD_LABELS,
   type FlowJob, type FlowState, type SpkDoc,
 } from '@spk/core';
@@ -118,7 +119,18 @@ export async function GET(req: Request): Promise<Response> {
     const f = effectiveFlow(d);
     const docJobs = jobsBySpk.get(d._id) ?? []; // newest first (query sort)
     const activeJob = docJobs.find((j) => j.state === 'queued' || j.state === 'running') ?? null;
-    const failedJob = activeJob ? null : docJobs.find((j) => j.state === 'failed') ?? null;
+    // A failed job row is permanent, so without this it haunts the card long
+    // after a later job did the work: SWO/CPT/26080019 sat in_progress while
+    // still showing "Buat Work Order gagal" + a live [Coba lagi] from an
+    // attempt two jobs earlier. And because the card suppresses its
+    // next-action button whenever a failure is displayed, that dead error
+    // STRANDED the doc — staff could not advance it from the board at all.
+    // So only surface a failure the flow could still legally act on; once the
+    // step's outcome exists, retrying it is a lie. A genuine failure keeps its
+    // precondition (create_wo with no WO yet), so it still shows.
+    const failedJob = activeJob
+      ? null
+      : docJobs.find((j) => j.state === 'failed' && (!isFlowAction(j.action) || canRunFlowAction(f, j.action))) ?? null;
     // While a job is in flight the card shows a spinner, not a second button.
     const next = activeJob ? null : nextFlowAction(f);
     const isCheckGo = String(d.docType) === 'CHECK_AND_GO';

@@ -1,14 +1,23 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
-import { BRANCHES, CHECKGO_INSPECTION_ITEMS, CHECKGO_RESULTS } from '../../lib/refdata.client';
+import {
+  BRANCHES,
+  CHECKGO_SECTIONS,
+  CHECKGO_VERDICTS,
+  CHECKGO_ELECTRICAL,
+  CHECKGO_TIRE,
+  CHECKGO_REKOMENDASI,
+  type CheckgoTone,
+} from '../../lib/refdata.client';
 
 /**
  * Check & Go intake — a vehicle CHECK service (not a repair). One fixed
  * service line: JAS-NAWJAS-GC "General Check", qty 1, typable price
- * (default Rp 100.000 inc tax). Optional detailed inspection rows are stored
- * in OUR Mongo so the customer can be told exactly what was checked/found.
+ * (default Rp 100.000 inc tax). The checklist below is the paper "NAWILIS
+ * CHECK and GO REPORT", rendered from lib/refdata.client.ts, and is stored in
+ * OUR Mongo so the customer can be told exactly what was checked/found.
  */
 
 interface VehicleHist {
@@ -25,10 +34,10 @@ interface VehicleHist {
 
 interface CustVehicle { plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }
 
-// `item` holds the LABEL that gets stored; `pick` is the dropdown's own
-// value, kept separate so choosing "Lainnya…" can reveal a free-text box
-// without the typed text being mistaken for a standard item.
-interface InspRow { id: string; pick: string; item: string; hasil: string; catatan: string }
+/** One wheel of section 6. `flags` holds the ticked marks, `choice` the
+ *  Kurang/Lebih answer of the one mark that has a sub-choice. */
+interface TireAnswer { merk: string; tekanan: string; flags: string[]; choice: Record<string, string> }
+const EMPTY_TIRE: TireAnswer = { merk: '', tekanan: '', flags: [], choice: {} };
 
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -36,6 +45,24 @@ function uuid(): string {
 
 const DEFAULT_HARGA = 100_000; // General Check default price (inc tax)
 const DEFAULT_ESTIMASI = 30; // minutes
+
+/** Same divider the detail rows have always used between checklist blocks. */
+const SEC_SEP: CSSProperties = { marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--line, #e6e8ee)' };
+const SEC_TITLE: CSSProperties = { fontSize: 14, fontWeight: 700 };
+/** Readings/tyre fields are compact: three of them share a row on a tablet. */
+const SMALL_INPUT: CSSProperties = { fontSize: 16, padding: '8px 10px' };
+
+/**
+ * Selected state on a `btn ghost` is an inline fill (this page's own idiom).
+ * The fill carries the SEVERITY rather than one neutral highlight: Pass and
+ * Fail must not look alike on a tablet read at arm's length.
+ */
+const TONE_FILL: Record<CheckgoTone, CSSProperties> = {
+  ok: { background: 'var(--ok)', borderColor: 'var(--ok)', color: '#fff' },
+  warn: { background: 'var(--warn)', borderColor: 'var(--warn)', color: '#fff' },
+  block: { background: 'var(--block)', borderColor: 'var(--block)', color: '#fff' },
+};
+const fillIf = (on: boolean, tone: CheckgoTone): CSSProperties => (on ? TONE_FILL[tone] : {});
 
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
@@ -59,7 +86,14 @@ export default function CheckGoIntake() {
   const [advisor, setAdvisor] = useState('');
   const [harga, setHarga] = useState(String(DEFAULT_HARGA));
   const [estimasi, setEstimasi] = useState(String(DEFAULT_ESTIMASI));
-  const [insp, setInsp] = useState<InspRow[]>([]);
+  // The paper report. Everything is keyed by the refdata codes and everything
+  // is optional — an untouched checklist submits exactly like before.
+  const [verdict, setVerdict] = useState<Record<string, string>>({}); // section code → Pass/Fail
+  const [reading, setReading] = useState<Record<string, string>>({}); // sub-item code → typed value
+  const [electrical, setElectrical] = useState(''); // section 5 option code
+  const [tire, setTire] = useState<Record<string, TireAnswer>>({}); // position code → answers
+  const [rekom, setRekom] = useState<Record<string, string[]>>({}); // rekomendasi group → picks
+  const [lainLain, setLainLain] = useState('');
   const sigCust = useRef<SigHandle>(null);
   const [custSigned, setCustSigned] = useState(false);
   // The receiving advisor's signature. Optional: the customer's is the consent
@@ -186,9 +220,23 @@ export default function CheckGoIntake() {
     setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
   };
 
-  const addInsp = () => setInsp((p) => [...p, { id: uuid(), pick: '', item: '', hasil: 'Baik', catatan: '' }]);
-  const setInspRow = (id: string, patch: Partial<InspRow>) => setInsp((p) => p.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  const delInsp = (id: string) => setInsp((p) => p.filter((r) => r.id !== id));
+  // Tapping the chosen answer again clears it: a mis-tap on a moving tablet is
+  // common, and there is no other way back to "not checked".
+  const toggle = (cur: string, next: string) => (cur === next ? '' : next);
+  const tireOf = (pos: string): TireAnswer => tire[pos] ?? EMPTY_TIRE;
+  const setTireOf = (pos: string, patch: Partial<TireAnswer>) =>
+    setTire((p) => ({ ...p, [pos]: { ...(p[pos] ?? EMPTY_TIRE), ...patch } }));
+  const toggleTireFlag = (pos: string, flag: string) =>
+    setTire((p) => {
+      const t = p[pos] ?? EMPTY_TIRE;
+      const flags = t.flags.includes(flag) ? t.flags.filter((f) => f !== flag) : [...t.flags, flag];
+      return { ...p, [pos]: { ...t, flags } };
+    });
+  const toggleRekom = (group: string, code: string) =>
+    setRekom((p) => {
+      const cur = p[group] ?? [];
+      return { ...p, [group]: cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code] };
+    });
 
   // ENFORCED Indonesian WA format: identity key of the customer.
   const waNat = waDigits.replace(/^62/, '').replace(/^0/, '');
@@ -252,9 +300,30 @@ export default function CheckGoIntake() {
       mechanicCode: mekanik || null,
       mechanicName: mekanikList.find((m) => m.code === mekanik)?.name ?? null,
       harga: hargaVal,
-      inspectionItems: insp
-        .filter((r) => r.item.trim() !== '')
-        .map((r) => ({ item: r.item.trim(), hasil: r.hasil, catatan: r.catatan.trim() })),
+      // The whole sheet goes out as CODES, blanks included: the server is the
+      // one place that decides what counts as "filled", so this form and
+      // /checkgo/sheet can never disagree about it.
+      checkReport: {
+        sections: CHECKGO_SECTIONS.map((s) => ({
+          code: s.code,
+          verdict: verdict[s.code] ?? null,
+          readings: s.subItems
+            .filter((si) => si.measure)
+            .map((si) => ({ code: si.code, value: reading[si.code] ?? '' })),
+        })),
+        electrical: electrical || null,
+        tires: CHECKGO_TIRE.positions.map((p) => {
+          const t = tireOf(p.code);
+          return {
+            position: p.code,
+            merk: t.merk,
+            tekanan: t.tekanan,
+            flags: t.flags.map((f) => ({ code: f, choice: t.choice[f] ?? null })),
+          };
+        }),
+        rekomendasi: CHECKGO_REKOMENDASI.map((g) => ({ code: g.code, picks: rekom[g.code] ?? [] })),
+        lainLain: lainLain.trim() || null,
+      },
       signatures: {
         menyerahkanPresent: !!sigCust.current?.get(),
         menyerahkanNamaJelas: nama || null,
@@ -294,7 +363,7 @@ export default function CheckGoIntake() {
     setHist(null); setPlateOwner(null); setCustVehicles([]); setCustHint(null); setRegName(null);
     setHarga(String(DEFAULT_HARGA));
     setEstimasi(String(DEFAULT_ESTIMASI));
-    setInsp([]);
+    setVerdict({}); setReading({}); setElectrical(''); setTire({}); setRekom({}); setLainLain('');
     sigCust.current?.clear();
     sigAdv.current?.clear();
     setAdvSigned(false);
@@ -431,65 +500,130 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div className="label">Pemeriksaan detail (opsional)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 8, lineHeight: 1.4 }}>
-            Kosong = satu pemeriksaan umum &quot;Check and Go&quot;. Tambah baris untuk item spesifik
-            (mis. sistem pendingin, tutup radiator) — hasilnya dicatat agar bisa dijelaskan ke customer.
+          <div className="label">Check and Go Report (opsional)</div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 10, lineHeight: 1.4 }}>
+            Isi seperti lembar kertas — semua boleh dikosongkan. Kosong = satu pemeriksaan umum
+            &quot;Check and Go&quot;. Tanggal &amp; pemeriksa diambil dari data di atas.
           </div>
-          {insp.map((r) => {
-            const taken = new Set(insp.filter((x) => x.id !== r.id && x.pick && x.pick !== 'LAINNYA').map((x) => x.pick));
-            return (
-              <div key={r.id} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid var(--line, #e6e8ee)' }}>
-                <div className="row">
-                  <select
-                    value={r.pick}
-                    onChange={(e) => {
-                      const code = e.target.value;
-                      const label = CHECKGO_INSPECTION_ITEMS.find((c) => c.code === code)?.label ?? '';
-                      // "Lainnya" clears the label so the free-text box starts
-                      // empty instead of inheriting the previous item's name.
-                      setInspRow(r.id, { pick: code, item: code === 'LAINNYA' ? '' : label });
-                    }}
+
+          {/* Sections 1-4: one Pass/Fail for the whole section + its readings. */}
+          {CHECKGO_SECTIONS.map((s) => (
+            <div key={s.code} style={SEC_SEP}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ ...SEC_TITLE, flex: '1 1 160px' }}>{s.no}. {s.title}</span>
+                {CHECKGO_VERDICTS.map((v) => (
+                  <button
+                    key={v.value}
+                    type="button"
+                    className="btn ghost"
+                    style={{ flex: '0 0 auto', fontSize: 13, padding: '8px 16px', ...fillIf(verdict[s.code] === v.value, v.tone) }}
+                    onClick={() => setVerdict((p) => ({ ...p, [s.code]: toggle(p[s.code] ?? '', v.value) }))}
                   >
-                    <option value="">— pilih item pemeriksaan —</option>
-                    {CHECKGO_INSPECTION_ITEMS.map((c) => (
-                      <option key={c.code} value={c.code} disabled={taken.has(c.code)}>
-                        {c.label}{taken.has(c.code) ? ' (sudah dipilih)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn ghost" style={{ flex: '0 0 auto', fontSize: 14, padding: '10px 14px', color: '#b3261e' }} onClick={() => delInsp(r.id)} title="Hapus baris">✕</button>
-                </div>
-                {r.pick === 'LAINNYA' && (
-                  <input style={{ marginTop: 6 }} value={r.item} onChange={(e) => setInspRow(r.id, { item: e.target.value })} placeholder="Nama item pemeriksaan" />
-                )}
-                {r.pick && (
-                  <>
-                    <span style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                      {CHECKGO_RESULTS.map((h) => (
-                        <button
-                          key={h}
-                          type="button"
-                          className="btn ghost"
-                          style={{
-                            flex: 1,
-                            fontSize: 13,
-                            padding: '8px 6px',
-                            ...(r.hasil === h ? { background: '#33415c', color: '#fff', borderColor: '#33415c' } : {}),
-                          }}
-                          onClick={() => setInspRow(r.id, { hasil: h })}
-                        >
-                          {h}
-                        </button>
-                      ))}
-                    </span>
-                    <input style={{ marginTop: 6 }} value={r.catatan} onChange={(e) => setInspRow(r.id, { catatan: e.target.value })} placeholder="Catatan (opsional)" />
-                  </>
-                )}
+                    {v.value}
+                  </button>
+                ))}
               </div>
-            );
-          })}
-          <button type="button" className="btn ghost" style={{ width: '100%', fontSize: 14 }} onClick={addInsp}>+ Tambah item pemeriksaan</button>
+              {s.subItems.map((si) =>
+                si.measure ? (
+                  <div key={si.code} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    <span className="chk-label" style={{ flex: '1 1 150px' }}>
+                      {si.label} ({si.measure.hint})
+                    </span>
+                    <input
+                      value={reading[si.code] ?? ''}
+                      onChange={(e) => setReading((p) => ({ ...p, [si.code]: e.target.value }))}
+                      // Coolant is read as a NEGATIVE number and the iOS numeric
+                      // pad has no minus key, so only "%" gets the number pad.
+                      inputMode={si.measure.unit === '%' ? 'numeric' : undefined}
+                      placeholder={si.measure.unit}
+                      style={{ ...SMALL_INPUT, flex: '0 0 96px' }}
+                    />
+                    <span style={{ flex: '0 0 auto', fontSize: 13, color: 'var(--muted)' }}>{si.measure.unit}</span>
+                  </div>
+                ) : (
+                  <div key={si.code} className="chk-label" style={{ marginTop: 8 }}>{si.label}</div>
+                ),
+              )}
+            </div>
+          ))}
+
+          {/* Section 5 — three-way, not a verdict. */}
+          <div style={SEC_SEP}>
+            <div style={SEC_TITLE}>{CHECKGO_ELECTRICAL.no}. {CHECKGO_ELECTRICAL.title}</div>
+            <span style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              {CHECKGO_ELECTRICAL.options.map((o) => (
+                <button
+                  key={o.code}
+                  type="button"
+                  className="btn ghost"
+                  style={{ flex: 1, fontSize: 12.5, padding: '8px 4px', ...fillIf(electrical === o.code, o.tone) }}
+                  onClick={() => setElectrical((cur) => toggle(cur, o.code))}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </span>
+          </div>
+
+          {/* Section 6 — four wheels, each with its own marks. */}
+          <div style={SEC_SEP}>
+            <div style={{ ...SEC_TITLE, marginBottom: 8 }}>{CHECKGO_TIRE.no}. {CHECKGO_TIRE.title}</div>
+            {CHECKGO_TIRE.positions.map((pos) => {
+              const t = tireOf(pos.code);
+              return (
+                <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{pos.label}</div>
+                  <div className="row">
+                    <input value={t.merk} onChange={(e) => setTireOf(pos.code, { merk: e.target.value })} placeholder="Merk & Jenis Ban" style={SMALL_INPUT} />
+                    <input value={t.tekanan} onChange={(e) => setTireOf(pos.code, { tekanan: e.target.value })} inputMode="numeric" placeholder="Tekanan Angin" style={SMALL_INPUT} />
+                  </div>
+                  <div className="chk-row" style={{ marginTop: 6 }}>
+                    {CHECKGO_TIRE.flags.map((f) => {
+                      const on = t.flags.includes(f.code);
+                      return (
+                        <span key={f.code} style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <button type="button" className={`chk-chip${on ? ' bad' : ''}`} onClick={() => toggleTireFlag(pos.code, f.code)}>
+                            {on ? '✓ ' : ''}{f.label}
+                          </button>
+                          {/* Kurang/Lebih only matters once the mark is ticked. */}
+                          {on && f.choices?.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className={`chk-chip${t.choice[f.code] === c ? ' bad' : ''}`}
+                              onClick={() => setTireOf(pos.code, { choice: { ...t.choice, [f.code]: toggle(t.choice[f.code] ?? '', c) } })}
+                            >
+                              {c}
+                            </button>
+                          ))}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* The two printed recommendation lists — same tiles as the job picker. */}
+          {CHECKGO_REKOMENDASI.map((g) => (
+            <div key={g.code} style={{ marginBottom: 12 }}>
+              <div className="label">{g.title}</div>
+              <div className="tiles">
+                {g.options.map((o) => {
+                  const on = (rekom[g.code] ?? []).includes(o.code);
+                  return (
+                    <button key={o.code} type="button" className={`tile${on ? ' on' : ''}`} onClick={() => toggleRekom(g.code, o.code)}>
+                      {on ? '✓ ' : ''}{o.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {g.freeTextLabel && (
+                <input style={{ ...SMALL_INPUT, marginTop: 6 }} value={lainLain} onChange={(e) => setLainLain(e.target.value)} placeholder={g.freeTextLabel} />
+              )}
+            </div>
+          ))}
         </div>
 
         <div className="card">

@@ -243,6 +243,71 @@ export interface Amendment {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Check & Go (CHECK_AND_GO docs)
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * One line of the inspection checklist. This is the FLAT, human-readable view:
+ * `item` + `catatan` are the only fields that reach Turboly (the worker joins
+ * them into the pushed inspection line), so both must read as finished
+ * sentences on their own.
+ */
+export interface CheckGoInspectionItem {
+  item: string;
+  /**
+   * What the checker found at intake (Pass/Fail, GOOD/RECHARGE/REPLACE, …) —
+   * deliberately NOT `feedback`, which belongs to the mechanic.
+   */
+  hasil?: string | null;
+  catatan: string | null;
+  /** Mechanic result, filled during the job via the flow board. */
+  feedback: 'pass' | 'fail' | null;
+  recommendation: string | null;
+  inspected: boolean;
+}
+
+/**
+ * The printed "NAWILIS CHECK and GO REPORT" exactly as it was filled in, stored
+ * as refdata CODES (see apps/web/lib/refdata.client.ts). This is the lossless
+ * original; `CheckGo.inspectionItems` is a derived projection of it, so the
+ * labels can be re-printed without rewriting stored documents. Only answers
+ * someone actually gave are kept — an untouched report is stored as null.
+ */
+export interface CheckGoReport {
+  /** Sections 1-4: one verdict for the section + whatever numbers were read. */
+  sections: Array<{ code: string; verdict: string | null; readings: Array<{ code: string; value: string }> }>;
+  /** Section 5 — a CHECKGO_ELECTRICAL option code, not a pass/fail. */
+  electrical: string | null;
+  /** Section 6 — one entry per wheel that had anything written on it. */
+  tires: Array<{
+    position: string;
+    merk: string | null;
+    tekanan: string | null;
+    /** Only the marks that were ticked; `choice` is the Kurang/Lebih pair. */
+    flags: Array<{ code: string; choice: string | null }>;
+  }>;
+  /** The two printed lists, keyed by CHECKGO_REKOMENDASI code. */
+  rekomendasi: Array<{ code: string; picks: string[] }>;
+  /** The sheet's single "Lain-lain :" line. */
+  lainLain: string | null;
+}
+
+export interface CheckGo {
+  harga: number;
+  inspectionItems: CheckGoInspectionItem[];
+  /** null when the checklist was left blank — see CheckGoReport. */
+  report?: CheckGoReport | null;
+  /** Mechanic chosen at intake; the CODE is what Turboly matches a WO on. */
+  mechanicCode?: string | null;
+  mechanicName?: string | null;
+  /** Set by the worker's "Tetap Check Saja" action — no repair will follow. */
+  stayCheckOnly?: boolean;
+  stayCheckOnlyAt?: string;
+  /** Set by the worker once the checklist has been pushed onto the Turboly SO. */
+  inspectionsPushedAt?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // The SPK document
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -322,16 +387,7 @@ export interface SpkDoc {
    * stores the summary). Rows are written at intake; feedback/recommendation/
    * inspected are filled by the mechanic during the job.
    */
-  checkGo?: {
-    harga: number;
-    inspectionItems: Array<{
-      item: string;
-      catatan: string | null;
-      feedback: 'pass' | 'fail' | null;
-      recommendation: string | null;
-      inspected: boolean;
-    }>;
-  };
+  checkGo?: CheckGo;
 
   /** Salesperson for Turboly's separate Salesperson field (defaults to advisor). */
   salespersonName?: string | null;

@@ -1,7 +1,7 @@
 import {
   connect, close, collections, emit, getDb,
   flowJobs, claimNextFlowJob, completeFlowJob, failFlowJob, ensureFlowIndexes,
-  updateFlow, flowPatchAfter, effectiveFlow, isFlowAction, keluhanFromFindings,
+  updateFlow, clearFlowError, flowPatchAfter, effectiveFlow, isFlowAction, keluhanFromFindings,
   FLOW_JOB_MAX_ATTEMPTS, FLOW_PAYMENT_METHODS,
   type FlowActionType, type FlowJob, type FlowPaymentMethod, type FlowState, type SpkDoc,
 } from '@spk/core';
@@ -507,6 +507,10 @@ async function main(): Promise<void> {
         }
 
         await completeFlowJob(job._id, result);
+        // The step is settled, so whatever failure the doc still carries is
+        // about a past attempt. Cleared on alreadyDone too: a WO that already
+        // exists makes the stored "couldn't create the WO" text just as dead.
+        if (job.spkId) await clearFlowError(job.spkId);
         if (job.spkId) await emit({ spkId: job.spkId, type: `flow_${job.action}_done`, by: job.by ?? 'flow-worker', data: result });
         done += 1;
         console.log(`flow-once: ok ${label}`);

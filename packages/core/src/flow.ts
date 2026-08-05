@@ -1,4 +1,4 @@
-import type { Collection, UpdateFilter } from 'mongodb';
+import type { Collection, Filter, UpdateFilter } from 'mongodb';
 import { ulid } from 'ulid';
 import { getDb } from './mongo.js';
 
@@ -60,6 +60,14 @@ export interface FlowState {
 
   /** Captured at [Buat Invoice]; used by [Selesaikan Invoice]. */
   payment: { method: FlowPaymentMethod; amount: number } | null;
+
+  /**
+   * Last failed step's message, written by the flow workers. Optional because a
+   * doc that never failed must not carry the key at all — see clearFlowError(),
+   * which removes both the moment a step succeeds.
+   */
+  lastError?: string | null;
+  lastErrorAt?: string | null; // ISO
 
   updatedAt: string; // ISO
 }
@@ -328,6 +336,23 @@ export async function updateFlow(spkId: string, patch: Partial<FlowState>): Prom
   }
   const res = await spkFlowCol().updateOne({ _id: spkId }, { $set: sets } as unknown as UpdateFilter<SpkFlowHost>);
   return res.matchedCount > 0;
+}
+
+/**
+ * Drop the stored failure once a step succeeds.
+ *
+ * Both flow workers write `flow.lastError` on every failed job and nothing ever
+ * removed it, so the message outlived the failure it described: a step that
+ * fails once and succeeds on the retry left the doc permanently carrying the
+ * dead error — live example SWO/CPT/26080019, which finished `start_wo` on
+ * attempt 2 and still held attempt 1's "sesi ter-kick" text afterwards.
+ * ($unset, not set-null, so a doc that never failed stays clean.)
+ */
+export async function clearFlowError(spkId: string): Promise<void> {
+  await spkFlowCol().updateOne(
+    { _id: spkId, 'flow.lastError': { $exists: true } } as unknown as Filter<SpkFlowHost>,
+    { $unset: { 'flow.lastError': '', 'flow.lastErrorAt': '' } } as unknown as UpdateFilter<SpkFlowHost>,
+  );
 }
 
 /** Initialise `flow` on a doc that doesn't have one yet (no-op when present). */

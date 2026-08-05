@@ -1,7 +1,7 @@
 import {
   connect, close, collections, emit, getDb,
   flowJobs, completeFlowJob, failFlowJob, ensureFlowIndexes,
-  updateFlow, flowPatchAfter, canonPhoneKey, localPhone,
+  updateFlow, clearFlowError, flowPatchAfter, canonPhoneKey, localPhone,
   FLOW_JOB_MAX_ATTEMPTS,
   type FlowActionType, type FlowJob, type SpkDoc,
 } from '@spk/core';
@@ -670,6 +670,9 @@ async function main(): Promise<void> {
         }
 
         await completeFlowJob(job._id, result);
+        // Same as the browser worker: a settled step makes any stored failure
+        // stale, so it must not outlive the attempt that produced it.
+        if (job.spkId) await clearFlowError(job.spkId);
         if (job.spkId) await emit({ spkId: job.spkId, type: `flow_${job.action}_done`, by: job.by ?? 'http-worker', data: result });
         done += 1;
         console.log(`http-once: ok ${label} — ${Date.now() - claimedAt}ms`);
