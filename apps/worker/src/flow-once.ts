@@ -315,8 +315,13 @@ async function executeJob(
       }
       const url = needWo();
       const rpa = await rigs.rpaFor(branchCode);
-      const r = await rpa.createInvoice(url);
-      return { ...r };
+      // Turboly will not save the invoice unless Payment Amount equals the
+      // total. The board collects an amount on the Buat Invoice modal and it
+      // used to be dropped here; the quoted total is the fallback, since that
+      // is the figure the Service Order was built from.
+      const amount = num(p.amount) ?? num(doc?.jobLineSummary?.quotedTotal);
+      const r = await rpa.createInvoice(url, amount);
+      return { ...r, ...(amount != null ? { amount } : {}), ...(str(p.method) ? { method: str(p.method) } : {}) };
     }
 
     case 'complete_invoice': {

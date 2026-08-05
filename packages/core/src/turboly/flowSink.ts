@@ -609,7 +609,7 @@ export class TurbolyFlowRpa {
   }
 
   /** Create the Service Invoice (SRI/…) from a COMPLETED Work Order. */
-  async createInvoice(workOrderUrl: string): Promise<CreateInvoiceResult> {
+  async createInvoice(workOrderUrl: string, amount: number | null = null): Promise<CreateInvoiceResult> {
     const page = await this.open(workOrderUrl, 'invoice-create');
     // Idempotency read-back BEFORE the irreversible click (see createWorkOrder).
     const already = await this.findLinkedDocOnPage(page, /(service_invoices|invoices)\/\d+/, /^SRI\//);
@@ -627,14 +627,36 @@ export class TurbolyFlowRpa {
     await page.waitForTimeout(3000);
     await page.waitForLoadState('networkidle').catch(() => {});
 
-    // Landed on an invoice FORM (…/new)? Save it to get the document.
+    // Landed on an invoice FORM (…/new)? Fill Payment Amount, then save.
+    //
+    // Turboly REQUIRES Payment Amount to equal the invoice total and rejects the
+    // save outright otherwise ("Payment Amount must be set equal to 20.000"),
+    // which is what every Buat Invoice was doing: click create, click save, never
+    // touch the field. The caller's figure is only a first guess, so when Turboly
+    // disagrees it also says what it wanted — read that back and save again
+    // rather than handing a human a number they would just retype.
     if (/\/new\b/.test(page.url())) {
-      const saved = await this.clickControlIfPresent(page, /^(save|simpan|create)$/i);
-      if (saved) {
+      const save = async (): Promise<void> => {
+        if (!(await this.clickControlIfPresent(page, /^(save|simpan|create)$/i))) return;
         await page.waitForTimeout(1500);
         await this.confirmModals(page);
         await page.waitForTimeout(3000);
         await page.waitForLoadState('networkidle').catch(() => {});
+      };
+      if (amount != null) await this.fillPaymentAmount(page, amount);
+      await save();
+
+      if (/\/new\b/.test(page.url())) {
+        const err = await this.readInlineError(page);
+        const wants = err ? /payment\s*amount\s*must\s*be\s*set\s*equal\s*to\s*([\d.,]+)/i.exec(err) : null;
+        if (wants) {
+          // Rupiah, printed with dots as thousands separators — digits only.
+          const required = Number(wants[1]!.replace(/\D/g, ''));
+          if (Number.isFinite(required) && required > 0 && required !== amount) {
+            await this.fillPaymentAmount(page, required);
+            await save();
+          }
+        }
       }
     }
     await this.snapshot(page, 'flow-invoice-created');
@@ -650,6 +672,26 @@ export class TurbolyFlowRpa {
     const invoiceNo = await this.captureDocNo(page, /^SRI\//);
     await this.session.noteJobDone();
     return { invoiceNo, invoiceUrl: page.url() };
+  }
+
+  /**
+   * Put the figure in the invoice form's Payment Amount box.
+   *
+   * Written as plain digits: the field is Rupiah and Turboly compares it to the
+   * total numerically, so a thousands-separated "20.000" risks being read as
+   * twenty. Tries the native select for the payment method's sibling label set
+   * first and falls back to any amount-ish field, because the form's wording
+   * differs between the English and Indonesian tenants.
+   */
+  private async fillPaymentAmount(page: Page, amount: number): Promise<boolean> {
+    const digits = String(Math.round(amount));
+    const hit =
+      (await this.fillFields(page, /payment\s*amount|jumlah\s*pembayaran|nominal\s*pembayaran/i, digits, { all: false, last: true })) ||
+      (await this.fillFields(page, /^amount$|^jumlah$/i, digits, { all: false, last: true }));
+    if (!hit) {
+      console.log(`[flow] Invoice: kolom Payment Amount tidak ditemukan — Save akan memakai nilai bawaan form. Field terlihat: ${await this.fieldList(page)}`);
+    }
+    return hit > 0;
   }
 
   /**
