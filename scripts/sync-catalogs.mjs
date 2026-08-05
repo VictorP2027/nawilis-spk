@@ -44,15 +44,58 @@ const readPoll = async (sel, tries = 14, gap = 500) => {
 // Called BEFORE the advisor read, because a store whose advisor list comes back
 // empty is skipped — and 12 of 23 branches got no mechanics at all when this
 // lived after that gate.
+/**
+ * One store_users read, reporting HOW it failed rather than collapsing every
+ * outcome to null. "Turboly says this store has no mechanics" and "the request
+ * did not come back" both used to arrive here as an empty array, and the only
+ * thing anyone downstream saw was a branch that silently could not staff a Work
+ * Order.
+ */
+async function fetchStoreUsers(storeId) {
+  return page.evaluate(`(async () => {
+    try {
+      var r = await fetch('/lookup/store_users.json?store_id=${String(storeId)}', { headers: { accept: 'application/json' } });
+      if (!r.ok) return { ok: false, status: r.status };
+      var j = await r.json();
+      return { ok: true, status: r.status, rows: Array.isArray(j) ? j : null };
+    } catch (e) { return { ok: false, status: 0, error: String((e && e.message) || e) }; }
+  })()`);
+}
+
+/**
+ * Poll it, for the same reason readPoll exists a few lines up: this fires
+ * immediately after selectOption, while Turboly is still running its own AJAX
+ * for the advisor selects, and a single un-retried read that loses that race is
+ * indistinguishable from an empty store. Every other list in this file is
+ * polled; this one was not.
+ */
+async function readMechanicsPoll(storeId, tries = 8, gap = 600) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    last = await fetchStoreUsers(storeId).catch((e) => ({ ok: false, status: -1, error: e.message }));
+    if (last && last.ok && Array.isArray(last.rows) && last.rows.length) return last;
+    await page.waitForTimeout(gap);
+  }
+  return last;
+}
+
 async function syncMechanics(st, ls) {
   try {
-    const mechs = await page.evaluate(`(async () => {
-      var r = await fetch('/lookup/store_users.json?store_id=${String(ls.v)}', { headers: { accept: 'application/json' } });
-      if (!r.ok) return null;
-      try { return await r.json(); } catch (e) { return null; }
-    })()`);
-    if (!Array.isArray(mechs) || !mechs.length) {
-      console.log(`  ${st._id}: mechanic list empty — flag left as-is (not cleared)`);
+    const res = await readMechanicsPoll(ls.v);
+    if (!res || !res.ok) {
+      // Our side broke. Says nothing about whether the store has mechanics, so
+      // the existing flags stay exactly as they are.
+      console.log(`  ${st._id}: mechanic lookup FAILED (status ${res?.status ?? '?'}${res?.error ? ` — ${res.error}` : ''}) — flag left as-is`);
+      mechFailed.push(st._id);
+      return;
+    }
+    const mechs = res.rows ?? [];
+    if (!mechs.length) {
+      // Turboly answered, and the answer is "nobody". That is a Turboly
+      // configuration gap, not a sync bug — and it means this branch cannot
+      // create a Work Order at all, so it has to be named in the summary.
+      console.log(`  ${st._id}: Turboly returned ZERO mechanics (HTTP ${res.status}) — no mechanic configured for this store`);
+      mechEmpty.push(st._id);
       return;
     }
     await collections.tbMechanics().updateMany({ storeCode: st._id }, { $unset: { isMechanic: '' } });
@@ -70,8 +113,10 @@ async function syncMechanics(st, ls) {
       );
     }
     mechTotal += mechs.length;
+    mechOk.push(st._id);
   } catch (e) {
     console.log(`  ${st._id} mechanics ERROR: ${e.message.slice(0, 60)}`);
+    mechFailed.push(st._id);
   }
 }
 
@@ -83,6 +128,12 @@ const known = await collections.tbStores().find({}).toArray();
 const byTurbolyId = new Map(known.map((s) => [String(s.turbolyStoreId), s]));
 let advTotal = 0;
 let mechTotal = 0;
+// Which branches ended up with mechanics, which Turboly says have none, and
+// which we simply failed to ask. A branch with no mechanics cannot be assigned
+// a Work Order, so "0 mechanics" must never be a line nobody reads.
+const mechOk = [];
+const mechEmpty = [];
+const mechFailed = [];
 const newStores = [];
 const okStores = [];
 for (const ls of liveStores) {
@@ -111,8 +162,13 @@ for (const ls of liveStores) {
 }
 // prune advisors that vanished — ONLY for stores whose list we read successfully
 const pruned = await collections.tbMechanics().deleteMany({ role: { $in: ['advisor', 'salesperson'] }, storeCode: { $in: okStores }, syncedAt: { $lt: now } });
-console.log(`stores: ${liveStores.length} live (${newStores.length} unmapped) | advisors synced: ${advTotal}, pruned: ${pruned.deletedCount} | mechanics synced: ${mechTotal}`);
+console.log(`stores: ${liveStores.length} live (${newStores.length} unmapped) | advisors synced: ${advTotal}, pruned: ${pruned.deletedCount} | mechanics synced: ${mechTotal} across ${mechOk.length} branches`);
 if (newStores.length) console.log(`  ⚠ NEW stores need branchCode mapping: ${newStores.join('; ')}`);
+// The two ways a branch ends up unable to staff a Work Order, kept apart on
+// purpose: the first needs someone to fix Turboly, the second needs someone to
+// fix us. Naming them is the point — the count alone hid 12 branches for weeks.
+if (mechEmpty.length) console.log(`  ⚠ NO MECHANICS in Turboly (cannot create a Work Order): ${mechEmpty.join(', ')}`);
+if (mechFailed.length) console.log(`  ⚠ mechanic lookup FAILED (stale flags kept, retry next run): ${mechFailed.join(', ')}`);
 
 // ── 3+4. vehicle makes + models (/vehicles/new) ──────────────────────────
 await page.goto(`${base}/vehicles/new`, { waitUntil: 'domcontentloaded' });
