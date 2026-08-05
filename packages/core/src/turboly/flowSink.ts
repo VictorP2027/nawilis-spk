@@ -764,8 +764,20 @@ export class TurbolyFlowRpa {
 
   private async fillPaymentAmount(page: Page, amount: number): Promise<boolean> {
     const digits = String(Math.round(amount));
+    // The field is a payment LINE with a generated index:
+    //   service_invoice_service_invoice_payment_lines_attributes_1785912187051_payment_amount
+    // fillFields matches against "id name placeholder label", so the separator
+    // class matters: /payment\s*amount/ cannot match "payment_amount", which is
+    // why this reported amountFilled=false while sitting right next to the
+    // field. Every other pattern in this file uses [_\s-]* for exactly this.
+    //
+    // Ordered most specific first. The generic form also matches the hidden
+    // down_payment_amount, and the payment drawer additionally exposes
+    // balance_amount, change_amount and voucher-redeemed-amount — none of which
+    // are the figure Turboly compares against the total.
     const hit =
-      (await this.fillFields(page, /payment\s*amount|jumlah\s*pembayaran|nominal\s*pembayaran/i, digits, { all: false, last: true })) ||
+      (await this.fillFields(page, /payment[_\s-]*lines.*payment[_\s-]*amount/i, digits, { all: false, last: true })) ||
+      (await this.fillFields(page, /payment[_\s-]*amount|jumlah[_\s-]*pembayaran|nominal[_\s-]*pembayaran/i, digits, { all: false, last: true })) ||
       (await this.fillFields(page, /^amount$|^jumlah$/i, digits, { all: false, last: true }));
     if (!hit) {
       console.log(`[flow] Invoice: kolom Payment Amount tidak ditemukan — Save akan memakai nilai bawaan form. Field terlihat: ${await this.fieldList(page)}`);
