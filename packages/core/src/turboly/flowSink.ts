@@ -662,7 +662,13 @@ export class TurbolyFlowRpa {
     await this.snapshot(page, 'flow-invoice-created');
 
     const inline = await this.readInlineError(page);
-    if (inline) throw new DataError(`Create Invoice ditolak Turboly: ${inline}`);
+    if (inline) {
+      // Dump the whole form before giving up. The visible-field list already
+      // proved insufficient here once — it showed no Payment Amount anywhere,
+      // while Turboly kept insisting the value was wrong.
+      console.log(`[flow] Invoice REJECTED (${inline}) — form: ${await this.formDump(page)}`);
+      throw new DataError(`Create Invoice ditolak Turboly: ${inline}`);
+    }
     if (!/(service_invoices|invoices)\/\d+/.test(page.url())) {
       throw new DiscoveryError(
         `Invoice tidak terbentuk — setelah klik create URL masih ${page.url()}. ` +
@@ -683,6 +689,29 @@ export class TurbolyFlowRpa {
    * first and falls back to any amount-ish field, because the form's wording
    * differs between the English and Indonesian tenants.
    */
+  /**
+   * Every form control on the page, INCLUDING the ones nobody can see.
+   *
+   * fieldList() reports only visible fields, so a control inside a collapsed
+   * section is invisible to it — which is exactly how "Payment Amount must be
+   * set equal to 20.000" could be rejected by a field that appeared not to
+   * exist. Names and ids only, never values: this goes to a PUBLIC Actions log
+   * and the invoice form holds a customer's billing address.
+   */
+  private async formDump(page: Page): Promise<string> {
+    return page.evaluate(() => {
+      const ctrl = Array.from(document.querySelectorAll('input, select, textarea')).map((n) => {
+        const el = n as HTMLInputElement;
+        const seen = el.offsetParent !== null ? '' : ' HIDDEN';
+        return `${el.tagName.toLowerCase()}#${el.id || '-'}[${el.name || '-'}]${el.type ? `:${el.type}` : ''}${seen}`;
+      });
+      const acts = Array.from(document.querySelectorAll('a, button'))
+        .map((n) => ((n as HTMLElement).innerText ?? '').trim().replace(/\s+/g, ' '))
+        .filter((t) => t && t.length < 40);
+      return `CONTROLS ${ctrl.join(' | ')} :: ACTIONS ${Array.from(new Set(acts)).join(' | ')}`;
+    });
+  }
+
   private async fillPaymentAmount(page: Page, amount: number): Promise<boolean> {
     const digits = String(Math.round(amount));
     const hit =
