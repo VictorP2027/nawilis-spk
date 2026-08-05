@@ -539,6 +539,8 @@ function Card({ row, onAction, onRetry, onWa }: {
         <DocLink label="SO" no={row.so?.no ?? null} url={row.so?.url ?? null} />
         <DocLink label="WO" no={row.wo?.no ?? null} url={row.wo?.url ?? null} />
         <DocLink label="INV" no={row.invoice?.no ?? null} url={row.invoice?.url ?? null} />
+        {/* The captured intake rendered back onto the paper SPK — print/PDF. */}
+        <a className="fb-doc" href={`/spk/${encodeURIComponent(row._id)}/print`} target="_blank" rel="noreferrer" title="Cetak SPK (format kertas)">🖨</a>
       </div>
 
       {/* Check & Go only: nothing reaches the customer's WhatsApp without this
