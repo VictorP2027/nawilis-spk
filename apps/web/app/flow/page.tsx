@@ -44,6 +44,8 @@ interface FlowRow {
   invoice: InvInfo | null;
   pendingJob: PendingJob | null;
   total: number;
+  /** Check & Go WhatsApp stamp: null | 'requested' | 'live' | 'failed' | 'manual'. */
+  waAlert: string | null;
 }
 
 interface Mechanic { code: string; name: string; role: string | null }
@@ -186,6 +188,7 @@ function normRow(raw: unknown): FlowRow | null {
     invoice,
     pendingJob,
     total: typeof r.quotedTotal === 'number' && Number.isFinite(r.quotedTotal) ? r.quotedTotal : 0,
+    waAlert: (() => { const a = obj(obj(r.checkGo)?.alert); return a ? str(a.mode) : null; })(),
   };
 }
 
@@ -410,6 +413,86 @@ function ActionModal({ row, def, onClose, onDone }: ModalProps) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// WhatsApp confirm — the human gate in front of the customer's phone.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface WaPreview { profile: { nama: string; wa: string | null; plate: string; branch: string }; to: string; text: string }
+
+/**
+ * Nothing is sent from here. [Kirim] stamps the doc 'requested'; the drainer
+ * running beside the WAHA gateway delivers within a tick. The preview is the
+ * EXACT text the customer receives — fetched from the server, not rebuilt in
+ * the browser, so what staff approve is what goes out.
+ */
+function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; onDone: (spkId: string) => void }) {
+  const [data, setData] = useState<WaPreview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [posting, setPosting] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, { cache: 'no-store' })
+      .then(async (r) => {
+        const body = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!live) return;
+        if (!r.ok) { setErr(str(body.message) ?? 'Tidak bisa memuat pesan.'); return; }
+        setData(body as unknown as WaPreview);
+      })
+      .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
+    return () => { live = false; };
+  }, [row._id]);
+
+  async function send() {
+    setPosting(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by: 'flow-board' }),
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        setErr(res.status === 409 ? 'Pesan sudah pernah terkirim ke customer ini.' : str(body.message) ?? 'Gagal antre kirim.');
+        setPosting(false);
+        return;
+      }
+      onDone(row._id);
+    } catch {
+      setErr('Jaringan bermasalah — coba lagi.');
+      setPosting(false);
+    }
+  }
+
+  return (
+    <div className="ovr-overlay" onClick={onClose}>
+      <div className="ovr-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+        <div className="fb-mtitle">Kirim Hasil Check &amp; Go via WhatsApp</div>
+        {err && <div className="fb-errchip" style={{ marginTop: 10 }}><div className="fb-errtxt">✗ {err}</div></div>}
+        {!data && !err && <div className="fb-wait" style={{ marginTop: 10 }}><span className="fb-spin" /> Memuat pesan…</div>}
+        {data && (
+          <>
+            <div className="fb-msub" style={{ marginTop: 8 }}>
+              <b>{data.profile.nama}</b> · {data.profile.wa ?? data.to} · {data.profile.plate} · {data.profile.branch}
+            </div>
+            <pre style={{ marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', borderRadius: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto', fontFamily: 'inherit' }}>
+              {data.text}
+            </pre>
+            <div className="fb-mhint">Pesan di atas dikirim apa adanya ke nomor customer. Periksa nama &amp; nomor dulu.</div>
+          </>
+        )}
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+          <button type="button" className="btn ghost" onClick={onClose}>Batal</button>
+          <button type="button" className="btn primary" disabled={!data || posting} onClick={() => void send()}>
+            {posting ? <><span className="fb-spin fb-spin-w" /> Mengantre…</> : 'Kirim ke Customer'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // Card
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -423,10 +506,11 @@ function DocLink({ label, no, url }: { label: string; no: string | null; url: st
   );
 }
 
-function Card({ row, onAction, onRetry }: {
+function Card({ row, onAction, onRetry, onWa }: {
   row: FlowRow;
   onAction: (row: FlowRow, def: ActionDef) => void;
   onRetry: (row: FlowRow) => void;
+  onWa: (row: FlowRow) => void;
 }) {
   const chip = stageChip(row);
   const def = nextActionFor(row);
@@ -456,6 +540,22 @@ function Card({ row, onAction, onRetry }: {
         <DocLink label="WO" no={row.wo?.no ?? null} url={row.wo?.url ?? null} />
         <DocLink label="INV" no={row.invoice?.no ?? null} url={row.invoice?.url ?? null} />
       </div>
+
+      {/* Check & Go only: nothing reaches the customer's WhatsApp without this
+          button — the drainer sends solely docs the modal stamped 'requested'. */}
+      {isCng && (
+        row.waAlert === 'live' ? (
+          <div className="fb-meta" style={{ marginTop: 6, color: '#15803d' }}>✓ Hasil terkirim via WA</div>
+        ) : row.waAlert === 'requested' ? (
+          <div className="fb-meta" style={{ marginTop: 6 }}><span className="fb-spin" /> WA antre kirim…</div>
+        ) : row.waAlert === 'failed' ? (
+          <div className="fb-meta" style={{ marginTop: 6, color: 'var(--muted)' }}>WA dilewati / gagal</div>
+        ) : (
+          <button type="button" className="btn ghost fb-act-sec" style={{ marginTop: 6 }} onClick={() => onWa(row)}>
+            💬 Kirim Hasil via WA
+          </button>
+        )
+      )}
 
       {inFlight && (
         <div className="fb-wait">
@@ -508,6 +608,7 @@ export default function FlowBoard() {
   const [typeFilter, setTypeFilter] = useState<'all' | 'spk' | 'cng'>('all');
   const [q, setQ] = useState('');
   const [modal, setModal] = useState<{ row: FlowRow; def: ActionDef } | null>(null);
+  const [waModal, setWaModal] = useState<FlowRow | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -686,7 +787,7 @@ export default function FlowBoard() {
                 </div>
                 {byCol[c.key].length === 0 && <div className="fb-empty">—</div>}
                 {byCol[c.key].map((r) => (
-                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} onRetry={onRetry} />
+                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} onRetry={onRetry} onWa={setWaModal} />
                 ))}
               </div>
             ))}
@@ -704,6 +805,19 @@ export default function FlowBoard() {
           def={modal.def}
           onClose={() => setModal(null)}
           onDone={onActionDone}
+        />
+      )}
+
+      {waModal && (
+        <WaModal
+          row={waModal}
+          onClose={() => setWaModal(null)}
+          onDone={(spkId) => {
+            // Optimistic 'requested' now; the poll confirms (and later flips
+            // to 'live' once the drainer delivers).
+            setWaModal(null);
+            setRows((prev) => prev.map((r) => (r._id === spkId ? { ...r, waAlert: 'requested' } : r)));
+          }}
         />
       )}
     </>

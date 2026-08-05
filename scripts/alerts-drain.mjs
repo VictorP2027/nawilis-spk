@@ -15,10 +15,11 @@
 //   node --env-file=.env scripts/alerts-drain.mjs --send --watch   # keep sending
 //   node --env-file=.env scripts/alerts-drain.mjs --send --id 01K… # one doc
 //
-// --watch[=seconds] (default 30) is what makes alerts AUTOMATIC: each new
-// intake is picked up on the next tick, so a customer gets their result while
-// the car is still on the lift. ops/launchd/ has the plist that keeps this
-// running on a Mac across reboots.
+// --watch[=seconds] (default 30) keeps the loop alive so a click on the flow
+// board's Kirim WA button turns into a delivered message within a tick —
+// while the car is still on the lift. Only docs stamped 'requested' by that
+// button are ever sent; a new intake on its own goes nowhere. ops/launchd/
+// has the plist that keeps this running on a Mac across reboots.
 //
 // Dry-run by default because --send messages REAL customers: it lists exactly
 // who would get what, and sends nothing. Delivery is stamped on the doc at
@@ -72,11 +73,13 @@ async function drainOnce() {
         docType: 'CHECK_AND_GO',
         state: { $nin: ['voided', 'superseded'] },
         createdAt: { $gte: since },
-        // 'failed' is deliberately NOT retried: it means buildCheckGoAlert
-        // rejected the doc itself (unusable number), and a watch loop retrying
-        // a permanent fact every 30 seconds is churn, not persistence. Clear
-        // the stamp by hand to force one more attempt after fixing the number.
-        'checkGo.alert.mode': { $nin: ['live', 'failed'] },
+        // ONLY docs a human explicitly approved. The flow board's Kirim WA
+        // button (POST /api/checkgo/:id/alert) writes this stamp after showing
+        // staff the full message and profile — a new intake on its own is NOT
+        // eligible, so the watcher can run forever without messaging anyone
+        // nobody signed off on. (An earlier version sent every unstamped
+        // intake automatically; that design lasted one day.)
+        'checkGo.alert.mode': 'requested',
       };
   const docs = await collections.spk().find(q).sort({ createdAt: 1 }).limit(MAX_PER_RUN + 1).toArray();
   const overflow = docs.length > MAX_PER_RUN;
