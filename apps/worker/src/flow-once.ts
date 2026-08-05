@@ -45,6 +45,27 @@ const TIME_BUDGET_MS = 50 * 60_000; // stay under the workflow's 60-min timeout
 const GRACE_MS = Number.isFinite(Number(process.env.FLOW_DRAIN_GRACE_MS)) ? Number(process.env.FLOW_DRAIN_GRACE_MS) : 20_000;
 const GRACE_POLL_MS = 1_500;
 
+/**
+ * How much longer than GRACE_MS this runner will wait for a retry it scheduled
+ * ITSELF.
+ *
+ * A transient failure requeues at +60s (failFlowJob's default) while the grace
+ * window is 20s, so the runner exited roughly 40 seconds before its own retry
+ * came due — and the job then sat until the */5 cron, which GitHub routinely
+ * runs late. Live: a Start WO retry fell due at 06:32:14, the runner had
+ * already left at 06:31:07, and the card showed a spinner for minutes over a
+ * step that takes seconds.
+ *
+ * Waiting is far cheaper than the alternative. A fresh runner is 60-90s of
+ * checkout, npm ci and Playwright install, and then another Turboly login, to
+ * do work the session we are still holding could do immediately.
+ *
+ * Bounded, because push.yml and sync share the `turboly-push` concurrency
+ * group: every second spent idling here is a second the pusher is blocked. A
+ * retry further out than this is genuinely worth going home for.
+ */
+const RETRY_WAIT_MS = Number.isFinite(Number(process.env.FLOW_RETRY_WAIT_MS)) ? Number(process.env.FLOW_RETRY_WAIT_MS) : 90_000;
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ── small param helpers (board clients vary in key spelling) ───────────────
@@ -434,6 +455,21 @@ async function executeJob(
 
 // ── claim / drain loop ─────────────────────────────────────────────────────
 
+/**
+ * When the soonest not-yet-due queued job becomes claimable, or null if there
+ * is none. Only future ones matter: anything already due would have been
+ * claimed by the call that just came back empty.
+ */
+async function soonestRetryAt(): Promise<number | null> {
+  const rows = await flowJobs()
+    .find({ state: 'queued', nextAttemptAt: { $gt: new Date().toISOString() } })
+    .sort({ nextAttemptAt: 1 })
+    .limit(1)
+    .toArray();
+  const at = rows[0]?.nextAttemptAt;
+  return at ? Date.parse(at) : null;
+}
+
 async function claimJob(onlyId: string | undefined): Promise<FlowJob | null> {
   if (onlyId) {
     const now = new Date().toISOString();
@@ -477,7 +513,17 @@ async function main(): Promise<void> {
         // Empty from the start (the cron safety net) → exit now; the runner has
         // nothing to be warm for. Otherwise linger: see GRACE_MS.
         if (onlyId || done + failed + requeued === 0) break;
-        if (graceUntil === 0) graceUntil = Date.now() + GRACE_MS;
+        if (graceUntil === 0) {
+          graceUntil = Date.now() + GRACE_MS;
+          // Stay for a retry that is about to come due — see RETRY_WAIT_MS.
+          // Read once, on entering the window, rather than on every poll: this
+          // is an Atlas round trip and the answer does not change while we idle.
+          const due = await soonestRetryAt();
+          if (due !== null && due - Date.now() <= RETRY_WAIT_MS) {
+            graceUntil = Math.max(graceUntil, due + 1_000);
+            console.log(`flow-once: menunggu retry yang jatuh tempo ${new Date(due).toISOString()} (sesi masih hangat)`);
+          }
+        }
         if (Date.now() >= graceUntil) break;
         await sleep(GRACE_POLL_MS);
         continue;
