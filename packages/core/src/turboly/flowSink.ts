@@ -319,14 +319,46 @@ export class TurbolyFlowRpa {
   /** WAITING → IN PROGRESS (the Start button stamps START DATE). Idempotent. */
   async startWorkOrder(workOrderUrl: string): Promise<void> {
     const page = await this.open(workOrderUrl, 'wo-start');
-    if (await this.statusVisible(page, /IN\s*PROGRESS/i)) return;
-    await this.clickControl(page, /^start$|^mulai$/i, 'tombol Start di Work Order');
-    await page.waitForTimeout(1200);
-    await this.confirmModals(page);
-    await page.waitForTimeout(2500);
+
+    // There is no "Start" BUTTON. Starting is per service line, and the control
+    // is an icon-only Rails PATCH link — its text is empty, so a label match on
+    // /^start$|^mulai$/ could never find it ("kontrol /^start$|^mulai$/ tidak
+    // ditemukan" on the board). Its href is the only thing that identifies it.
+    //
+    // The WO also reads IN PROGRESS from the moment it is created, so the page
+    // status cannot tell us whether the work has actually been started. A line
+    // that is running is the one that offers a STOP control — that, not the
+    // status word, is the real signal, and it makes this step idempotent.
+    const START_LINK = 'a[href*="start_progress_service_item"]';
+    const STOP_BTN = 'a.btn-modal-stop-progress';
+
+    const alreadyRunning = await page.locator(STOP_BTN).count().catch(() => 0);
+    const toStart = await page.locator(START_LINK).count().catch(() => 0);
+    if (toStart === 0) {
+      if (alreadyRunning > 0) return; // every line already running — nothing to do
+      throw new DiscoveryError(
+        `Start WO: tidak ada baris servis yang bisa di-start di ${workOrderUrl} (link start_progress_service_item tidak ada). Kontrol terlihat: ${await this.controlHints(page)}`,
+      );
+    }
+
+    for (let i = 0; i < 24; i++) {
+      const link = page.locator(START_LINK).first();
+      if ((await link.count().catch(() => 0)) === 0) break;
+      await link.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      await page.waitForTimeout(1200);
+      await this.confirmModals(page);
+      await page.waitForTimeout(600);
+    }
+
     await page.waitForLoadState('networkidle').catch(() => {});
     await this.snapshot(page, 'flow-wo-started');
-    await this.verifyStatus(page, /IN\s*PROGRESS/i, 'Start Work Order');
+    const running = await page.locator(STOP_BTN).count().catch(() => 0);
+    if (running === 0) {
+      throw new DataError(
+        `Start WO: sudah diklik tapi tidak ada baris yang berjalan di ${workOrderUrl} — Turboly tidak mencatat progress`,
+      );
+    }
     await this.session.noteJobDone();
   }
 
