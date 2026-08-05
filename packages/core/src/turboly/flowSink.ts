@@ -643,7 +643,7 @@ export class TurbolyFlowRpa {
         await page.waitForTimeout(3000);
         await page.waitForLoadState('networkidle').catch(() => {});
       };
-      if (amount != null) await this.fillPaymentAmount(page, amount);
+      if (amount != null) await this.preparePayment(page, amount);
       await save();
 
       if (/\/new\b/.test(page.url())) {
@@ -652,8 +652,8 @@ export class TurbolyFlowRpa {
         if (wants) {
           // Rupiah, printed with dots as thousands separators — digits only.
           const required = Number(wants[1]!.replace(/\D/g, ''));
-          if (Number.isFinite(required) && required > 0 && required !== amount) {
-            await this.fillPaymentAmount(page, required);
+          if (Number.isFinite(required) && required > 0) {
+            await this.preparePayment(page, required);
             await save();
           }
         }
@@ -710,6 +710,56 @@ export class TurbolyFlowRpa {
         .filter((t) => t && t.length < 40);
       return `CONTROLS ${ctrl.join(' | ')} :: ACTIONS ${Array.from(new Set(acts)).join(' | ')}`;
     });
+  }
+
+  /** Just the payment controls, with visibility — formDump() is mostly sidebar. */
+  private async paymentDump(page: Page): Promise<string> {
+    return page.evaluate(() =>
+      Array.from(document.querySelectorAll('input, select'))
+        .filter((n) => /payment|amount|paid|balance|change|bayar/i.test(`${(n as HTMLInputElement).id} ${(n as HTMLInputElement).name}`))
+        .map((n) => {
+          const el = n as HTMLInputElement;
+          return `${el.id || el.name}${el.offsetParent !== null ? '' : ' HIDDEN'}`;
+        })
+        .join(' | '),
+    );
+  }
+
+  /**
+   * Open the invoice's payment block and put the money in it.
+   *
+   * The block is COLLAPSED behind an "Add Payment" control, so every field
+   * Turboly validates ("Payment Amount must be set equal to …") is hidden until
+   * it is clicked — which is why a dump of visible fields showed no payment
+   * field at all while the save kept being refused. Same shape as
+   * revealAddressSection(): reveal first, fill second.
+   *
+   * The payment TYPE has to be chosen before Turboly will accept an amount, and
+   * it is a select2 over a native multi-select, so the value is set on the
+   * underlying element and a change event dispatched — clicking the widget open
+   * is far more fragile.
+   */
+  private async preparePayment(page: Page, amount: number): Promise<void> {
+    await this.clickControlIfPresent(page, /^(add\s*payment|tambah\s*pembayaran)$/i);
+    await page.waitForTimeout(1500);
+
+    const picked = await page.evaluate(() => {
+      const sel = document.querySelector('#payment-type-select') as HTMLSelectElement | null;
+      if (!sel) return null;
+      // Prefer Cash — the branches settle Check & Go at the counter.
+      const opts = Array.from(sel.options).filter((o) => o.value);
+      const cash = opts.find((o) => /cash|tunai/i.test(o.textContent ?? '')) ?? opts[0];
+      if (!cash) return null;
+      cash.selected = true;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return cash.textContent?.trim() ?? cash.value;
+    });
+    await page.waitForTimeout(1500);
+
+    const filled = await this.fillPaymentAmount(page, amount);
+    // Logged every time, not only on failure: this is the one step whose live
+    // shape has never been seen, so the next run should not have to guess again.
+    console.log(`[flow] Invoice payment: type=${picked ?? 'NONE'} amountFilled=${filled} — ${await this.paymentDump(page)}`);
   }
 
   private async fillPaymentAmount(page: Page, amount: number): Promise<boolean> {
