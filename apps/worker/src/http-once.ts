@@ -233,12 +233,19 @@ async function lookupRows(path: string, s: SharedSession, what: string): Promise
     });
     const ctype = (res.headers.get('content-type') ?? '').toLowerCase();
     const bounced = res.status >= 300 && res.status < 400 && /\/users\/sign_in/.test(res.headers.get('location') ?? '');
-    if (bounced || (res.status === 200 && !ctype.includes('json'))) {
-      if (attempt === 2) {
-        throw new HttpTransientError(`${what}: sesi Turboly ter-kick saat cek duplikat — dicoba ulang otomatis`);
-      }
+    // Devise bounces a dead session to the sign-in page for an HTML request, but
+    // answers 401 for a JSON one — and these endpoints are asked for JSON. Both
+    // mean the same thing (the cached cookie is spent, usually because a browser
+    // run logged in after it was stored), so both earn the one re-login. A 401
+    // that survives a fresh login is a real authorization problem and still
+    // fails closed below.
+    const deadSession = bounced || res.status === 401 || res.status === 403 || (res.status === 200 && !ctype.includes('json'));
+    if (deadSession && attempt === 1) {
       await s.relogin();
       continue;
+    }
+    if (bounced || (res.status === 200 && !ctype.includes('json'))) {
+      throw new HttpTransientError(`${what}: sesi Turboly ter-kick saat cek duplikat — dicoba ulang otomatis`);
     }
     if (res.status >= 500) {
       throw new HttpTransientError(
