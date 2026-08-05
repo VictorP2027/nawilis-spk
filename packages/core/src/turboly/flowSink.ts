@@ -586,45 +586,53 @@ export class TurbolyFlowRpa {
     return hit ? { invoiceNo: hit.no, invoiceUrl: hit.url } : null;
   }
 
-  /** Payments tab: add payment (method + amount) → complete → verify COMPLETED. */
+  /**
+   * Complete the Service Invoice → verify COMPLETED.
+   *
+   * There is NO payment form on the invoice: its "Payments" tab is a read-only
+   * pane, and recording money is a separate Turboly module (AR Payments). The
+   * old code looked for a payment method control here and failed with "kontrol
+   * payment method tidak ditemukan" listing the whole navbar, because no such
+   * control exists on this page. Completing is one Rails PATCH link carrying a
+   * data-confirm.
+   *
+   * args.method/amount are therefore NOT written by this step. They stay on the
+   * job so the payment can be posted once the AR Payments path is built; a
+   * caller that passes them is told plainly rather than left assuming the
+   * payment was recorded.
+   */
   async completeInvoice(invoiceUrl: string, args: CompleteInvoiceArgs): Promise<void> {
     const page = await this.open(invoiceUrl, 'invoice-complete');
     if (await this.statusVisible(page, /\bCOMPLETED\b/i)) return;
 
-    await this.clickControl(page, /^payments?$|pembayaran/i, 'tab Payments di Invoice');
-    await page.waitForTimeout(1500);
-    await this.clickControlIfPresent(page, /add\s*payment|new\s*payment|\+\s*payment|tambah\s*pembayaran/i);
-    await page.waitForTimeout(1200);
-
-    // Payment method: native select first, then a select2 fallback.
-    const methodOk =
-      (await this.selectNativeOption(page, /payment|method|metode/i, args.method)) ||
-      (await this.tryPickSelect2ByHint(page, /payment|method|metode/i, args.method));
-    if (!methodOk) {
+    const completeLink = page.locator('a[href*="/complete"][data-method="patch"]').first();
+    if ((await completeLink.count().catch(() => 0)) === 0) {
       throw new DiscoveryError(
-        `Invoice: kontrol payment method tidak ditemukan (dicari "${args.method}"). Kontrol terlihat: ${await this.controlHints(page)}`,
+        `Invoice: kontrol Complete tidak ada di ${invoiceUrl}. Kontrol terlihat: ${await this.controlHints(page)}`,
       );
     }
-    const amountOk = await this.fillFields(page, /amount|jumlah|nominal/i, String(args.amount), { all: false, last: true });
-    if (!amountOk) {
-      throw new DiscoveryError(`Invoice: field amount tidak ditemukan. Field terlihat: ${await this.fieldList(page)}`);
-    }
-    const savedPay = await this.clickControlIfPresent(page, /^(save|simpan|add|submit)$/i);
-    if (savedPay) {
+    const accept = (d: { accept: () => Promise<void> }): void => void d.accept().catch(() => {});
+    page.on('dialog', accept);
+    try {
+      await completeLink.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
       await page.waitForTimeout(1500);
       await this.confirmModals(page);
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle').catch(() => {});
+    } finally {
+      page.off('dialog', accept);
     }
 
-    await this.clickControl(page, /^complete[d]?$|^finish$|^selesai(kan)?$/i, 'tombol Complete di Invoice');
-    await page.waitForTimeout(1200);
-    await this.confirmModals(page);
-    await page.waitForTimeout(2500);
-    await page.waitForLoadState('networkidle').catch(() => {});
     await this.snapshot(page, 'flow-invoice-completed');
     const inline = await this.readInlineError(page);
     if (inline) throw new DataError(`Complete Invoice ditolak Turboly: ${inline}`);
     await this.verifyStatus(page, /\bCOMPLETED\b/i, 'Selesaikan Invoice');
+    if (args.method || args.amount != null) {
+      console.log(
+        `[flow] Invoice ${invoiceUrl} COMPLETED — pembayaran (${args.method ?? '-'} ${args.amount ?? '-'}) BELUM dicatat: Turboly mencatat pembayaran di modul AR Payments, bukan di invoice`,
+      );
+    }
     await this.session.noteJobDone();
   }
 
