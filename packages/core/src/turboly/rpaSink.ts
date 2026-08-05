@@ -238,6 +238,16 @@ export class RpaSink implements ServiceOrderSink {
       if (/you have been logged out|please login again|you need to sign in|sign in or sign up/i.test(inlineErr ?? '')) {
         return { ...fail('transient', 'sesi Turboly ter-kick saat simpan — data belum tersimpan, dicoba ulang otomatis'), screenshotRef };
       }
+      // Turboly maintenance windows swap every page for "site maintenance /
+      // undergoing scheduled upgrades". No inline error, no redirect — the save
+      // just "did not confirm", which used to be filed as a DATA failure and
+      // parked the doc permanently for what is a scheduled outage. The flow
+      // worker already knew this page; the pusher learned it the hard way
+      // (01KZ915TQ… failed [data] mid-upgrade on 2026-08-05).
+      const bodyNow = (await page.textContent('body').catch(() => '')) ?? '';
+      if (/site maintenance|undergoing scheduled upgrades/i.test(bodyNow)) {
+        return { ...fail('transient', 'Turboly sedang MAINTENANCE (upgrade terjadwal) — dicoba ulang otomatis setelah online lagi'), screenshotRef };
+      }
       let msg = inlineErr ?? 'save did not confirm';
       if (/account code can't be blank/i.test(msg)) {
         msg += ' — konfigurasi store di Turboly mewajibkan Account Code tapi daftarnya KOSONG; definisikan Account Code (Setup → Accounting) atau matikan kewajibannya untuk store ini, lalu retry';
@@ -340,6 +350,13 @@ export class RpaSink implements ServiceOrderSink {
       .evaluate(() => /you need to sign in|you have been logged out|sign in or sign up/i.test(document.body?.innerText ?? ''))
       .catch(() => false);
     if (kicked) return { ...fail('transient', 'session kicked mid-push (another login elsewhere) — auto-retry'), screenshotRef: shot };
+    // Same story as the kicked probe: a maintenance page mid-push is a
+    // scheduled outage, not a fact about the document.
+    const maint = await this.session
+      .page_()
+      .evaluate(() => /site maintenance|undergoing scheduled upgrades/i.test(document.body?.innerText ?? ''))
+      .catch(() => false);
+    if (maint) return { ...fail('transient', 'Turboly sedang MAINTENANCE (upgrade terjadwal) — dicoba ulang otomatis setelah online lagi'), screenshotRef: shot };
     const dataErr = await this.readInlineError(this.session.page_()).catch(() => null);
     if (dataErr) return { ...fail('data', dataErr), screenshotRef: shot };
     return { ...fail('structural', errMsg(e)), screenshotRef: shot };
