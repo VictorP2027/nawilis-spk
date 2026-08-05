@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the Check & Go WhatsApp watcher alive on this Mac: every new intake is
+  messaged automatically, across logouts and reboots, for as long as the WAHA
+  container is up. Install once:
+
+    cp ops/launchd/com.nawilis.alerts-watch.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.nawilis.alerts-watch.plist
+
+  Stop it:  launchctl unload ~/Library/LaunchAgents/com.nawilis.alerts-watch.plist
+  Logs:     /tmp/nawilis-alerts-watch.log
+
+  KeepAlive restarts the watcher if it ever exits (its own loop already
+  survives a dead gateway — this covers node itself dying).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nawilis.alerts-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file=.env</string>
+    <string>scripts/alerts-drain.mjs</string>
+    <string>--send</string>
+    <string>--watch=30</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/victorphisitkul/Desktop/untitled folder 2</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/nawilis-alerts-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/nawilis-alerts-watch.log</string>
+</dict>
+</plist>

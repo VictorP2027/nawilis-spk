@@ -10,9 +10,15 @@
 // server: gateway and sender live together, the database is the queue.
 //
 //   docker compose up -d waha           # once; pair the sender phone by QR
-//   node --env-file=.env scripts/alerts-drain.mjs            # dry run (default)
-//   node --env-file=.env scripts/alerts-drain.mjs --send     # actually send
-//   node --env-file=.env scripts/alerts-drain.mjs --send --id 01K...   # one doc
+//   node --env-file=.env scripts/alerts-drain.mjs                  # dry run
+//   node --env-file=.env scripts/alerts-drain.mjs --send           # send once
+//   node --env-file=.env scripts/alerts-drain.mjs --send --watch   # keep sending
+//   node --env-file=.env scripts/alerts-drain.mjs --send --id 01K… # one doc
+//
+// --watch[=seconds] (default 30) is what makes alerts AUTOMATIC: each new
+// intake is picked up on the next tick, so a customer gets their result while
+// the car is still on the lift. ops/launchd/ has the plist that keeps this
+// running on a Mac across reboots.
 //
 // Dry-run by default because --send messages REAL customers: it lists exactly
 // who would get what, and sends nothing. Delivery is stamped on the doc at
@@ -23,81 +29,21 @@ import { connect, close, collections, buildCheckGoAlert, createWhatsAppClient, w
 const SEND = process.argv.includes('--send');
 const onlyId = process.argv.find((a) => a.startsWith('--id='))?.slice(5)
   ?? (process.argv.includes('--id') ? process.argv[process.argv.indexOf('--id') + 1] : undefined);
+const watchArg = process.argv.find((a) => a === '--watch' || a.startsWith('--watch='));
+const WATCH_SECS = watchArg ? Math.max(10, Number(watchArg.split('=')[1] ?? 30) || 30) : null;
 
-// Two caps, both against the same failure mode: a forgotten backlog turning
-// into a blast the moment someone runs --send. Old docs are stale news to the
-// customer AND a spam signal to WhatsApp — an unofficial-API number that
-// suddenly fires hundreds of messages is how numbers get banned.
+// Caps, all against the same failure mode: an unofficial-API number that
+// suddenly fires a burst of messages is how numbers get banned, and old docs
+// are stale news to the customer anyway. The pause between sends keeps even a
+// full batch looking like a human typing, not a cannon.
 const MAX_PER_RUN = 25;
 const MAX_AGE_DAYS = 7;
+const PAUSE_BETWEEN_SENDS_MS = 3_000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
-
 const client = createWhatsAppClient(whatsappConfigFromEnv());
-const status = await client.status();
-console.log(`provider=${client.provider} status=${JSON.stringify(status)}`);
-if (SEND && status.mode !== 'live') {
-  // In preview mode "sending" would only mint wa.me links the intake already
-  // stamps — running the drainer like that is a no-op wearing a success face.
-  console.error('gateway is NOT live — connect it first (WAHA: docker compose up -d waha, then scan the QR). Nothing sent.');
-  await close();
-  process.exit(1);
-}
-
-const since = new Date(Date.now() - MAX_AGE_DAYS * 24 * 3600 * 1000).toISOString();
-const q = onlyId
-  ? { _id: onlyId }
-  : {
-      docType: 'CHECK_AND_GO',
-      state: { $nin: ['voided', 'superseded'] },
-      createdAt: { $gte: since },
-      'checkGo.alert.mode': { $ne: 'live' }, // absent, manual, failed → eligible
-    };
-const docs = await collections.spk().find(q).sort({ createdAt: 1 }).limit(MAX_PER_RUN + 1).toArray();
-const overflow = docs.length > MAX_PER_RUN;
-const batch = docs.slice(0, MAX_PER_RUN);
-console.log(`${batch.length} doc(s) eligible${overflow ? ` — MORE THAN ${MAX_PER_RUN}, capped; run again for the rest` : ''}\n`);
-
-let sent = 0;
-let failedCount = 0;
-for (const doc of batch) {
-  const label = `${doc._id} ${doc.vehicle?.noPolisi?.display ?? '?'} ${doc.branchCode}`;
-  let alert;
-  try {
-    alert = buildCheckGoAlert(doc);
-  } catch (e) {
-    // Unusable number or no Check & Go data — a fact about the doc, stamped so
-    // the board can show it, never retried by this loop.
-    console.error(`  SKIP ${label} — ${e.message}`);
-    if (SEND) await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
-    failedCount += 1;
-    continue;
-  }
-  if (!SEND) {
-    console.log(`  would send → ${alert.to}  (${label})`);
-    continue;
-  }
-  try {
-    const res = await client.sendReport(alert);
-    await stamp(doc._id, {
-      mode: res.mode, provider: client.provider, to: alert.to,
-      providerMessageId: res.providerMessageId ?? null,
-      whatsappUrl: res.whatsappUrl ?? null,
-    });
-    sent += 1;
-    console.log(`  sent → ${alert.to}  id=${res.providerMessageId ?? '-'}  (${label})`);
-  } catch (e) {
-    // TransientError here means the gateway died mid-run: stop, do not stamp —
-    // the doc stays eligible and the next run picks it up.
-    if (e?.name === 'TransientError') {
-      console.error(`  gateway failed mid-run (${e.message}) — stopping; remaining docs stay queued`);
-      break;
-    }
-    console.error(`  FAIL ${label} — ${e.message}`);
-    await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
-    failedCount += 1;
-  }
-}
 
 async function stamp(spkId, alert) {
   await collections.spk()
@@ -105,6 +51,100 @@ async function stamp(spkId, alert) {
     .catch(() => undefined);
 }
 
-console.log(`\n${SEND ? `sent ${sent}, failed ${failedCount}` : 'dry run — nothing sent. Re-run with --send.'}`);
+/** One pass over the queue. Returns false when the gateway is unusable. */
+async function drainOnce() {
+  const status = await client.status();
+  if (SEND && status.mode !== 'live') {
+    // In preview mode "sending" would only mint wa.me links the intake already
+    // stamps — a no-op wearing a success face. In watch mode this is routine
+    // (gateway restarting, session dropped) and the next tick retries.
+    console.error(`[${new Date().toISOString()}] gateway NOT live (${JSON.stringify(status)}) — nothing sent`);
+    return false;
+  }
+
+  const since = new Date(Date.now() - MAX_AGE_DAYS * 24 * 3600 * 1000).toISOString();
+  // --id keeps the 'live' dedupe too: without it, running the same command
+  // twice double-messaged the customer — the one thing the stamp exists to
+  // prevent. Re-sending a delivered doc is --force, said out loud.
+  const q = onlyId
+    ? (process.argv.includes('--force') ? { _id: onlyId } : { _id: onlyId, 'checkGo.alert.mode': { $ne: 'live' } })
+    : {
+        docType: 'CHECK_AND_GO',
+        state: { $nin: ['voided', 'superseded'] },
+        createdAt: { $gte: since },
+        // 'failed' is deliberately NOT retried: it means buildCheckGoAlert
+        // rejected the doc itself (unusable number), and a watch loop retrying
+        // a permanent fact every 30 seconds is churn, not persistence. Clear
+        // the stamp by hand to force one more attempt after fixing the number.
+        'checkGo.alert.mode': { $nin: ['live', 'failed'] },
+      };
+  const docs = await collections.spk().find(q).sort({ createdAt: 1 }).limit(MAX_PER_RUN + 1).toArray();
+  const overflow = docs.length > MAX_PER_RUN;
+  const batch = docs.slice(0, MAX_PER_RUN);
+  if (batch.length || !WATCH_SECS) {
+    console.log(`[${new Date().toISOString()}] ${batch.length} doc(s) eligible${overflow ? ` — capped at ${MAX_PER_RUN}, rest next run` : ''}`);
+  }
+
+  let sent = 0;
+  for (const doc of batch) {
+    const label = `${doc._id} ${doc.vehicle?.noPolisi?.display ?? '?'} ${doc.branchCode}`;
+    let alert;
+    try {
+      alert = buildCheckGoAlert(doc);
+    } catch (e) {
+      console.error(`  SKIP ${label} — ${e.message}`);
+      if (SEND) await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
+      continue;
+    }
+    if (!SEND) {
+      console.log(`  would send → ${alert.to}  (${label})`);
+      continue;
+    }
+    try {
+      const res = await client.sendReport(alert);
+      await stamp(doc._id, {
+        mode: res.mode, provider: client.provider, to: alert.to,
+        providerMessageId: res.providerMessageId ?? null,
+        whatsappUrl: res.whatsappUrl ?? null,
+      });
+      sent += 1;
+      console.log(`  sent → ${alert.to}  id=${res.providerMessageId ?? '-'}  (${label})`);
+      await sleep(PAUSE_BETWEEN_SENDS_MS);
+    } catch (e) {
+      // TransientError = the gateway died mid-run: stop this pass without
+      // stamping, so the doc stays eligible and the next tick picks it up.
+      if (e?.name === 'TransientError') {
+        console.error(`  gateway failed mid-run (${e.message}) — stopping pass; remainder stays queued`);
+        return false;
+      }
+      console.error(`  FAIL ${label} — ${e.message}`);
+      await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
+    }
+  }
+  if (SEND && (batch.length || !WATCH_SECS)) console.log(`  pass done: sent ${sent}/${batch.length}`);
+  return true;
+}
+
+console.log(`provider=${client.provider} mode=${SEND ? 'SEND' : 'dry-run'}${WATCH_SECS ? ` watch=${WATCH_SECS}s` : ''}`);
+if (WATCH_SECS) {
+  // The loop must outlive a flaky gateway — that is its entire value. Only an
+  // operator (Ctrl+C / launchd unload) stops it.
+  let running = true;
+  process.on('SIGINT', () => { running = false; console.log('\nstopping after this pass…'); });
+  process.on('SIGTERM', () => { running = false; });
+  while (running) {
+    try {
+      await drainOnce();
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] pass crashed (${e.message}) — retrying next tick`);
+    }
+    if (!running) break;
+    await sleep(WATCH_SECS * 1000);
+  }
+} else {
+  const ok = await drainOnce();
+  if (!SEND) console.log('dry run — nothing sent. Re-run with --send.');
+  if (!ok && SEND) process.exitCode = 1;
+}
 await close();
-process.exit(0);
+process.exit(process.exitCode ?? 0);
