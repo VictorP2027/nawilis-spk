@@ -3,19 +3,33 @@
  * 23 branches, so the intake PWA doesn't have to import @spk/core (which pulls
  * in mongodb/playwright). Keep in sync with packages/core/src/refdata.ts.
  */
-export const SERVICES: ReadonlyArray<{ code: string; label: string }> = [
-  { code: 'SPOORING', label: 'Spooring' },
-  { code: 'BALANCING', label: 'Balancing' },
-  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car' },
-  { code: 'OLI', label: 'Oli' },
-  { code: 'ENGINE_FLUSH', label: 'Engine Flush' },
-  { code: 'TUNE_UP_CARBON_CLEAN', label: 'Tune Up / Carbon Clean' },
-  { code: 'AUTM_TRANS_FLUSH', label: 'Autm Transmission Flush' },
-  { code: 'KURAS_RADIATOR', label: 'Kuras Radiator' },
-  { code: 'SERVICE_REM', label: 'Service Rem / Krs Minyak Rem' },
-  { code: 'BUBUT_REM', label: 'Bubut Rem' },
-  { code: 'BAN', label: 'Ban' },
-  { code: 'NITROGEN', label: 'Nitrogen' },
+/**
+ * How each service is ORDERED on the printed SPK, read off the sheet itself:
+ * a tick alone (`check`), a piece count (`pcs`), or litres (`liter`). `brandType`
+ * marks the rows where the paper wants merk/tipe written next to the count —
+ * Balancing on the Car and Oli ("Castrol Edge 5/30"). `tag` is the margin code
+ * the branches pencil beside the row (OLM / ATF / BAN); the tablet shows it so
+ * the digital row is findable by the same shorthand people already use.
+ */
+export const SERVICES: ReadonlyArray<{
+  code: string;
+  label: string;
+  unit: 'check' | 'pcs' | 'liter';
+  brandType?: boolean;
+  tag?: string;
+}> = [
+  { code: 'SPOORING', label: 'Spooring', unit: 'check' },
+  { code: 'BALANCING', label: 'Balancing', unit: 'pcs' },
+  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car', unit: 'pcs', brandType: true },
+  { code: 'OLI', label: 'Oli', unit: 'liter', brandType: true, tag: 'OLM' },
+  { code: 'ENGINE_FLUSH', label: 'Engine Flush', unit: 'check' },
+  { code: 'TUNE_UP_CARBON_CLEAN', label: 'Tune Up / Carbon Clean', unit: 'check' },
+  { code: 'AUTM_TRANS_FLUSH', label: 'Autm Transmission Flush', unit: 'check', tag: 'ATF' },
+  { code: 'KURAS_RADIATOR', label: 'Kuras Radiator', unit: 'check' },
+  { code: 'SERVICE_REM', label: 'Service Rem / Krs Minyak Rem', unit: 'check' },
+  { code: 'BUBUT_REM', label: 'Bubut Rem', unit: 'check' },
+  { code: 'BAN', label: 'Ban', unit: 'pcs', tag: 'BAN' },
+  { code: 'NITROGEN', label: 'Nitrogen', unit: 'pcs' },
 ];
 
 /** 8 PENGECEKAN AWAL rows: label + the non-OK marks available on that row. */

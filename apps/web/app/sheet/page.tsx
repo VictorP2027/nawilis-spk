@@ -471,10 +471,21 @@ export default function Sheet() {
                   return (
                     <tr key={s.code} className={r.order ? 'row-on' : ''}>
                       <td className="col-num" style={{ textAlign: 'center' }}>{i + 1}</td>
-                      <td className="svc" onClick={() => setRow(s.code, { order: !r.order })}>{s.label.toUpperCase()}</td>
+                      <td className="svc" onClick={() => setRow(s.code, { order: !r.order })}>
+                        {s.label.toUpperCase()}
+                        {s.tag && <span style={{ marginLeft: 4, fontSize: 8, fontWeight: 700, border: '1px solid currentColor', borderRadius: 3, padding: '0 3px' }}>{s.tag}</span>}
+                      </td>
                       <td className="tick-cell" style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                         <span className={`tick ${r.order ? 'on' : ''}`} onClick={() => setRow(s.code, { order: !r.order })}>{r.order ? '✓' : '▢'}</span>
-                        {r.order && <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} className="qty" style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />}
+                        {/* Units come off the printed sheet: a tick row is just a
+                            tick; pcs/liter rows order a COUNT, so only they get
+                            the number box ("# PCS", "# liter" on paper). */}
+                        {r.order && s.unit !== 'check' && (
+                          <>
+                            <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} className="qty" style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />
+                            <span style={{ fontSize: 8 }}>{s.unit === 'pcs' ? 'pcs' : 'ltr'}</span>
+                          </>
+                        )}
                       </td>
                       <td className="ket-cell">
                         {r.order && svcOpts[s.code]?.options?.length ? (
@@ -482,7 +493,7 @@ export default function Sheet() {
                             {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                           </select>
                         ) : null}
-                        {r.order && <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
+                        {r.order && <input type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder={s.brandType ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'keterangan'} />}
                         {r.order && <input type="text" value={r.harga ?? ''} onChange={(e) => setRow(s.code, { harga: e.target.value })} inputMode="numeric" placeholder="Harga (Rp)" style={{ marginTop: 3 }} />}
                         {!r.order && <input className="ket-idle" type="text" value={r.keterangan} onChange={(e) => setRow(s.code, { keterangan: e.target.value })} placeholder="keterangan" />}
                       </td>

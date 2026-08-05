@@ -23,6 +23,8 @@ interface JobSel {
   qty: number;
   price: string;
   sku?: string;
+  /** merk / tipe, for the rows the paper wants it on (Oli, Balancing on the Car). */
+  brandType?: string;
 }
 
 function uuid(): string {
@@ -188,7 +190,10 @@ export default function Intake() {
         // sheet form already does.
         const n = j.price ? Number(String(j.price).replace(/[^\d]/g, '')) : NaN;
         return Number.isFinite(n) && n > 0 ? n : null;
-      })(), chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null })),
+      })(), chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null,
+      // Merk/tipe rides in keterangan, the free-text the paper form itself
+      // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
+      keterangan: j.brandType?.trim() || undefined })),
       conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] === 'OK' ? [] : [condQ[c.code]!] })),
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
@@ -431,6 +436,31 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               return (
                 <button key={s.code} type="button" className={`tile ${on ? 'on' : ''}`} onClick={() => toggleJob(s.code, s.label)}>
                   {s.label}
+                  {s.tag && <span className="badge" style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px' }}>{s.tag}</span>}
+                  {/* The unit comes off the printed sheet: a tick is a tick, but
+                      Balancing/Ban/Nitrogen are ordered in PCS and Oli in LITER —
+                      the count is the order, so it gets a field, not a default 1. */}
+                  {on && s.unit !== 'check' && (
+                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                      <input
+                        type="number"
+                        min={1}
+                        value={jobs[s.code]!.qty}
+                        onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: Math.max(1, Number(e.target.value) || 1) } }))}
+                        style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
+                      />
+                      <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>
+                    </span>
+                  )}
+                  {on && s.brandType && (
+                    <input
+                      value={jobs[s.code]!.brandType ?? ''}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: e.target.value } }))}
+                      placeholder="merk / tipe — contoh: Castrol Edge 5W-30"
+                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', width: '100%' }}
+                    />
+                  )}
                   {on && svcOpts[s.code]?.options?.length ? (
                     <select
                       value={jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku}

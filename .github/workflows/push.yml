@@ -128,7 +128,10 @@ jobs:
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           PUSH_MODE: rpa
-          PUSH_APPROVE: 'true'
+          # Approval is a HUMAN step on the flow board now (Approve SO button).
+          # The pusher only creates the SO; auto-clicking Approve skipped the
+          # one review point staff asked to keep.
+          PUSH_APPROVE: 'false'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
         run: node --import tsx apps/worker/src/push-once.ts
 

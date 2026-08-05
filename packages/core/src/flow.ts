@@ -117,10 +117,12 @@ export function effectiveFlow(doc: {
   turboly?: { serviceOrderNo?: string | null; workOrderNo?: string | null } | null;
 }): FlowState {
   const f: FlowState = { ...initFlow(), ...(doc.flow ?? {}) };
-  // The pusher already clicks Approve right after saving (PUSH_APPROVE=true, and
-  // verified live: pushed SOs sit on the "Approved" workflow step). So a pushed
-  // Service Order is APPROVED — the board must not ask staff to approve again.
-  if (f.so == null && doc.turboly?.serviceOrderNo) f.so = 'approved';
+  // The pusher no longer auto-approves (PUSH_APPROVE=false): approval is the
+  // board's human step. So a pushed SO with no recorded flow starts at
+  // 'created' and the card offers [Approve SO]. Docs approved back when the
+  // pusher clicked it itself simply get one redundant click — the RPA checks
+  // the APPROVED status first and returns without touching anything.
+  if (f.so == null && doc.turboly?.serviceOrderNo) f.so = 'created';
   if (f.wo == null && doc.turboly?.workOrderNo) {
     f.wo = 'created';
     f.workOrderNo = f.workOrderNo ?? doc.turboly.workOrderNo ?? null;
