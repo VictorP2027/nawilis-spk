@@ -137,6 +137,19 @@ jobs:
             npx playwright install --with-deps chromium
           fi
 
+      # Registration needs no browser — it POSTs Turboly's own form directly and
+      # takes ~1s. Running it BEFORE the browser drain means a registration-only
+      # dispatch never pays for launching Chromium and logging in, which was
+      # ~15 of the ~16 seconds such a job spent "working".
+      - name: Register customers (browserless fast path)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
+          TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
+        run: node --import tsx apps/worker/src/http-once.ts
+
       - name: Drain flow jobs (Turboly lifecycle steps)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
