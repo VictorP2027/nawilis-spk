@@ -21,7 +21,7 @@ export const REF_BRANCHES: readonly RefBranch[] = [
   { code: 'NWL-TA12', name: 'Tanah Abang 12', type: 'NAWILIS', docAbbrev: 'TA12', turbolyStoreNameGuess: 'Nawilis Tanah Abang 12' },
   { code: 'NWL-RD', name: 'Radio Dalam', type: 'NAWILIS', docAbbrev: 'RD', turbolyStoreNameGuess: 'Nawilis Radio Dalam' },
   { code: 'NWL-BGR', name: 'Bogor', type: 'NAWILIS', docAbbrev: 'BGR', turbolyStoreNameGuess: 'Nawilis Bogor' },
-  { code: 'NWL-PML', name: 'Pamulang', type: 'NAWILIS', docAbbrev: 'PML', turbolyStoreNameGuess: 'Nawilis Pamulang' },
+  { code: 'NWL-PML', name: 'Pamulang (NKM)', type: 'NAWILIS', docAbbrev: 'PML', turbolyStoreNameGuess: 'Nawilis Pamulang (NKM)' },
   { code: 'NWL-CLG', name: 'Cilegon', type: 'NAWILIS', docAbbrev: 'CLG', turbolyStoreNameGuess: 'Nawilis Cilegon' },
   { code: 'NWL-BKS', name: 'Bekasi', type: 'NAWILIS', docAbbrev: 'BKS', turbolyStoreNameGuess: 'Nawilis Bekasi' },
   { code: 'NWL-PRG', name: 'Parung', type: 'NAWILIS', docAbbrev: 'PRG', turbolyStoreNameGuess: 'Nawilis Parung' },

@@ -109,7 +109,7 @@ export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILI
   { code: 'NWL-TA12', name: 'Tanah Abang 12', type: 'NAWILIS' },
   { code: 'NWL-RD', name: 'Radio Dalam', type: 'NAWILIS' },
   { code: 'NWL-BGR', name: 'Bogor', type: 'NAWILIS' },
-  { code: 'NWL-PML', name: 'Pamulang', type: 'NAWILIS' },
+  { code: 'NWL-PML', name: 'Pamulang (NKM)', type: 'NAWILIS' },
   { code: 'NWL-CLG', name: 'Cilegon', type: 'NAWILIS' },
   { code: 'NWL-BKS', name: 'Bekasi', type: 'NAWILIS' },
   { code: 'NWL-PRG', name: 'Parung', type: 'NAWILIS' },
