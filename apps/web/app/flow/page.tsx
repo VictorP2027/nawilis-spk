@@ -511,6 +511,109 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
   );
 }
 
+/**
+ * Zero-setup bulk: no gateway, no robot, no pairing — the sender IS the
+ * infrastructure. A stepper walks whoever is logged into WhatsApp (Web or
+ * phone) through the selected cards one by one: each step opens the chat with
+ * the full message pre-filled, they press send there, the doc is stamped
+ * 'manual' (so no other sender ever duplicates it), and the next customer
+ * loads. Bulk for humans: two taps per customer, zero installs.
+ */
+function BulkManualModal({ targets, onClose, onSent }: {
+  targets: FlowRow[];
+  onClose: () => void;
+  onSent: (spkId: string) => void;
+}) {
+  const [idx, setIdx] = useState(0);
+  const [data, setData] = useState<WaPreview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [sentCount, setSentCount] = useState(0);
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const row = idx < targets.length ? targets[idx] : null;
+
+  useEffect(() => {
+    if (!row) return;
+    let live = true;
+    setData(null);
+    setErr(null);
+    fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, { cache: 'no-store' })
+      .then(async (r) => {
+        const body = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!live) return;
+        if (!r.ok) { setErr(str(body.message) ?? 'Tidak bisa memuat pesan.'); return; }
+        setData(body as unknown as WaPreview);
+      })
+      .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
+    return () => { live = false; };
+  }, [row]);
+
+  function openAndMark() {
+    if (!row || !data) return;
+    // The user's click is the gesture that lets this tab open — one per step,
+    // so popup blockers stay quiet.
+    window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+    void fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ by: 'flow-board-bulk-manual', manual: true }),
+    }).then((r) => { if (r.ok) onSent(row._id); });
+    setSentCount((n) => n + 1);
+    setIdx((i) => i + 1);
+  }
+
+  function skip() {
+    if (row) setSkipped((s) => [...s, row.plate]);
+    setIdx((i) => i + 1);
+  }
+
+  return (
+    <div className="ovr-overlay" onClick={onClose}>
+      <div className="ovr-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+        {row ? (
+          <>
+            <div className="fb-mtitle">Kirim manual — customer {idx + 1} dari {targets.length}</div>
+            {err && <div className="fb-errchip" style={{ marginTop: 10 }}><div className="fb-errtxt">✗ {err}</div></div>}
+            {!data && !err && <div className="fb-wait" style={{ marginTop: 10 }}><span className="fb-spin" /> Memuat pesan…</div>}
+            {data && (
+              <>
+                <div className="fb-msub" style={{ marginTop: 8 }}>
+                  <b>{data.profile.nama}</b> · {data.profile.wa ?? data.to} · {data.profile.plate} · {data.profile.branch}
+                </div>
+                <pre style={{ marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', borderRadius: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto', fontFamily: 'inherit' }}>
+                  {data.text}
+                </pre>
+                <div className="fb-mhint">
+                  Tombol di bawah membuka WhatsApp dengan pesan sudah terisi —
+                  tekan kirim di sana, lalu kembali ke tab ini untuk customer
+                  berikutnya.
+                </div>
+              </>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
+              <button type="button" className="btn ghost" onClick={onClose}>Berhenti</button>
+              <button type="button" className="btn ghost" onClick={skip}>Lewati</button>
+              <button type="button" className="btn primary" disabled={!data} onClick={openAndMark}>
+                📱 Buka WhatsApp &amp; tandai terkirim
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="fb-mtitle">Selesai</div>
+            <div className="fb-msub" style={{ marginTop: 8 }}>
+              ✓ {sentCount} pesan dibuka &amp; ditandai terkirim manual.
+              {skipped.length > 0 && <><br />Dilewati: {skipped.join(', ')}</>}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+              <button type="button" className="btn primary" onClick={onClose}>Tutup</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Card
 // ─────────────────────────────────────────────────────────────────────────
@@ -662,6 +765,7 @@ export default function FlowBoard() {
   const [q, setQ] = useState('');
   const [modal, setModal] = useState<{ row: FlowRow; def: ActionDef } | null>(null);
   const [waModal, setWaModal] = useState<FlowRow | null>(null);
+  const [bulkManual, setBulkManual] = useState<FlowRow[] | null>(null);
   /** Bulk-WA multi-selection: spkIds of Check & Go cards ticked for send. */
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [bulkSending, setBulkSending] = useState(false);
@@ -967,6 +1071,16 @@ export default function FlowBoard() {
                 ? <><span className="fb-spin fb-spin-w" /> Mengantre…</>
                 : `💬 Kirim WA ke ${selected.size} customer`}
             </button>
+            {/* Zero-setup bulk: no gateway needed — a stepper opens each chat
+                on plain WhatsApp Web and the person presses send. */}
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={bulkSending}
+              onClick={() => setBulkManual(rows.filter((r) => selected.has(r._id)))}
+            >
+              📱 Manual satu-satu
+            </button>
             <button type="button" className="btn ghost" disabled={bulkSending} onClick={() => setSelected(new Set())}>
               Batal
             </button>
@@ -980,6 +1094,14 @@ export default function FlowBoard() {
           def={modal.def}
           onClose={() => setModal(null)}
           onDone={onActionDone}
+        />
+      )}
+
+      {bulkManual && (
+        <BulkManualModal
+          targets={bulkManual}
+          onClose={() => { setBulkManual(null); setSelected(new Set()); }}
+          onSent={(id) => setRows((prev) => prev.map((r) => (r._id === id ? { ...r, waAlert: 'manual' } : r)))}
         />
       )}
 
