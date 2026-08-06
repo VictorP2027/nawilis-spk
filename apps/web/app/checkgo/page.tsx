@@ -684,7 +684,7 @@ export default function CheckGoIntake() {
                     );
                   })}
                   {it.verdicts && (
-                    <span style={{ display: 'flex', gap: 4 }}>
+                    <span style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
                       {verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
                         setItemVerdict((p) => ({ ...p, [it.code]: code })),
                       )}
