@@ -609,20 +609,16 @@ export default function CheckGoIntake() {
                   {sectionAllHealthy(s) ? '✓ ' : ''}Semua baik
                 </button>
               </div>
+              {/* ONE row per item: label · readings · verdict. The reading's
+                  label lives in its placeholder — a separate caption per input
+                  doubled every row's height for words the box already says. */}
               {s.items.map((it) => (
-                <div key={it.code}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
-                    <span className="chk-label" style={{ flex: '1 1 150px', fontSize: 12.5 }}>{it.label}</span>
-                    {it.verdicts &&
-                      verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
-                        setItemVerdict((p) => ({ ...p, [it.code]: code })),
-                      )}
-                  </div>
+                <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5 }}>{it.label}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (
-                      <div key={r.code} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4, paddingLeft: 12 }}>
-                        <span style={{ flex: '0 1 auto', fontSize: 12.5, color: 'var(--muted)' }}>{r.label}</span>
+                      <span key={r.code} style={{ display: 'flex', alignItems: 'center', gap: 3, flex: '0 1 auto' }}>
                         {r.code === 'MERK_SAE' ? (
                           // The oil box gets the tenant's real OLM catalog as
                           // typeahead — 252 oils, picked or free-typed.
@@ -631,7 +627,7 @@ export default function CheckGoIntake() {
                             value={reading[key] ?? ''}
                             onChange={(v) => setReading((p) => ({ ...p, [key]: v }))}
                             placeholder={r.label}
-                            style={{ ...SMALL_INPUT, flex: '1 1 110px', maxWidth: 180 }}
+                            style={{ ...SMALL_INPUT, width: 170 }}
                           />
                         ) : (
                           <input
@@ -640,13 +636,20 @@ export default function CheckGoIntake() {
                             // Coolant is read as a NEGATIVE number and the iOS numeric
                             // pad has no minus key, so suffixed readings stay free-text.
                             placeholder={r.label}
-                            style={{ ...SMALL_INPUT, flex: '1 1 110px', maxWidth: 180 }}
+                            style={{ ...SMALL_INPUT, width: r.code === 'TGL' ? 110 : 90 }}
                           />
                         )}
-                        {r.suffix && <span style={{ flex: '0 0 auto', fontSize: 13, color: 'var(--muted)' }}>{r.suffix}</span>}
-                      </div>
+                        {r.suffix && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{r.suffix}</span>}
+                      </span>
                     );
                   })}
+                  {it.verdicts && (
+                    <span style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                      {verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
+                        setItemVerdict((p) => ({ ...p, [it.code]: code })),
+                      )}
+                    </span>
+                  )}
                 </div>
               ))}
               <div className="chk-row" style={{ marginTop: 6 }}>
