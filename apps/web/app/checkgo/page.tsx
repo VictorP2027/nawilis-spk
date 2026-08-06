@@ -468,6 +468,8 @@ export default function CheckGoIntake() {
         )}
 
         <div className="card">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '0 16px' }}>
+          <div>
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
           {!waOk && <div className="req-note">⚠ wajib — format Indonesia 08… / +62 8…, contoh 08123456789</div>}
@@ -481,9 +483,9 @@ export default function CheckGoIntake() {
               ))}
             </span>
           )}
-        </div>
+          </div>
 
-        <div className="card">
+          <div>
           <div className="label">No. Polisi</div>
           <input value={plate} onChange={(e) => setPlate(e.target.value.toUpperCase())} placeholder="B 1234 SZA — WAJIB" autoCapitalize="characters" style={!plateOk ? { borderColor: '#dc2626' } : plateBad ? { borderColor: '#d97706' } : undefined} />
           {!plateOk && <div className="req-note">⚠ wajib diisi</div>}
@@ -496,6 +498,8 @@ export default function CheckGoIntake() {
               {hist.merk} {hist.tipe} {hist.tahun ?? ''} {hist.warna ?? ''} · terakhir {hist.lastKm?.toLocaleString('id-ID')} km · {hist.visitCount}× kunjungan
             </div>
           )}
+          </div>
+          </div>
         </div>
 
         <div className="card">
@@ -793,15 +797,20 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div className="label">Tanda tangan customer — WAJIB (persetujuan pengecekan)</div>
-          <SignaturePad ref={sigCust} onInk={setCustSigned} />
-          {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib</div>}
-
-          <div className="label" style={{ marginTop: 14 }}>
-            Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — WAJIB
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: '0 16px' }}>
+            <div>
+              <div className="label">Tanda tangan customer — WAJIB (persetujuan pengecekan)</div>
+              <SignaturePad ref={sigCust} onInk={setCustSigned} />
+              {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib</div>}
+            </div>
+            <div>
+              <div className="label">
+                Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — WAJIB
+              </div>
+              <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
+              {!advSigned && <div className="req-note">⚠ wajib — advisor menandatangani hasil pemeriksaan</div>}
+            </div>
           </div>
-          <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
-          {!advSigned && <div className="req-note">⚠ wajib — advisor menandatangani hasil pemeriksaan</div>}
         </div>
 
         {result && (
