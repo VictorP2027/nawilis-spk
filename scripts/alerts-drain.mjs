@@ -95,9 +95,31 @@ async function publishGatewayStatus(status) {
   } catch { /* status mirroring must never break sending */ }
 }
 
+/**
+ * A FAILED session has twice been fixed by exactly one restart call and no
+ * re-scan — so the watcher makes that call itself instead of waiting for a
+ * human to remember the dashboard. Only on FAILED: a session that wants a QR
+ * needs a human with the phone, and restarting it in a loop would get in
+ * their way.
+ */
+async function reviveIfFailed(status) {
+  if (String(status.sessionStatus || '').toUpperCase() !== 'FAILED') return status;
+  try {
+    const base = (process.env.WAHA_BASE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
+    const session = process.env.WAHA_SESSION || 'default';
+    console.log(`[${new Date().toISOString()}] sesi WAHA FAILED — restart otomatis`);
+    await fetch(`${base}/api/sessions/${session}/restart`, { method: 'POST', headers: { 'X-Api-Key': process.env.WAHA_API_KEY || '' } });
+    await sleep(8000);
+    return await client.status();
+  } catch {
+    return status;
+  }
+}
+
 /** One pass over the queue. Returns false when the gateway is unusable. */
 async function drainOnce() {
-  const status = await client.status();
+  let status = await client.status();
+  status = await reviveIfFailed(status);
   await publishGatewayStatus(status);
   if (SEND && status.mode !== 'live') {
     // In preview mode "sending" would only mint wa.me links the intake already
