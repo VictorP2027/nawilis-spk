@@ -624,7 +624,7 @@ export default function CheckGoIntake() {
               its own recommendation checklist right under it (the printed
               layout). Two columns whenever the width allows — the sheet is a
               checklist, not a novel, and half-empty rows read slower. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', columnGap: 28 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(460px, 100%), 1fr))', columnGap: 28 }}>
           {CHECKGO_SECTIONS.map((s) => (
             <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -732,7 +732,7 @@ export default function CheckGoIntake() {
           {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
           <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
             <div style={{ ...SEC_TITLE, marginBottom: 6 }}>{CHECKGO_TIRE.no}. {CHECKGO_TIRE.title}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(250px, 100%), 1fr))', gap: 8 }}>
             {CHECKGO_TIRE.positions.map((pos) => {
               const t = tireOf(pos.code);
               return (
