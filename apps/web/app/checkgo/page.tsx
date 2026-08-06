@@ -621,7 +621,10 @@ export default function CheckGoIntake() {
           </div>
 
           {/* Sections 1-7: per-row verdict pairs + readings, each section with
-              its own recommendation checklist right under it (the printed layout). */}
+              its own recommendation checklist right under it (the printed
+              layout). Two columns whenever the width allows — the sheet is a
+              checklist, not a novel, and half-empty rows read slower. */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', columnGap: 28 }}>
           {CHECKGO_SECTIONS.map((s) => (
             <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -724,6 +727,7 @@ export default function CheckGoIntake() {
               )}
             </div>
           ))}
+          </div>
 
           {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
           <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
