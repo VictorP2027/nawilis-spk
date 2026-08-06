@@ -77,9 +77,7 @@ export default function Intake() {
   const [catalog, setCatalog] = useState<Record<string, string[]>>({});
   useEffect(() => {
     const cats = Object.keys(jobs)
-      .map((code) => SERVICES.find((s) => s.code === code))
-      .filter((s) => s?.brandType)
-      .map((s) => (s!.code === 'OLI' ? 'OLM' : 'BAN'))
+      .flatMap((code) => SERVICES.find((s) => s.code === code)?.catalog ?? [])
       .filter((c) => !(c in catalog));
     for (const cat of cats) {
       setCatalog((p) => ({ ...p, [cat]: [] })); // claim before the fetch lands
@@ -445,7 +443,6 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               return (
                 <button key={s.code} type="button" className={`tile ${on ? 'on' : ''}`} onClick={() => toggleJob(s.code, s.label)}>
                   {s.label}
-                  {s.tag && <span className="badge" style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px' }}>{s.tag}</span>}
                   {/* The unit comes off the printed sheet: a tick is a tick, but
                       Balancing/Ban/Nitrogen are ordered in PCS and Oli in LITER —
                       the count is the order, so it gets a field, not a default 1. */}
@@ -461,20 +458,20 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>
                     </span>
                   )}
-                  {on && s.brandType && (
-                    // Typeahead off the scraped tenant catalog: oils for the
-                    // Oli row, tires for Balancing on the Car. Free text still
-                    // wins — the suggestion is a convenience, not a constraint.
+                  {on && s.catalog?.length ? (
+                    // The catalog box: tap-to-open list of what the tenant
+                    // actually stocks for this card. Free text still wins —
+                    // the catalog offers, never constrains.
                     <span onClick={(e) => e.stopPropagation()} style={{ display: 'block', marginTop: 6 }}>
                       <ProductInput
-                        cat={s.code === 'OLI' ? 'OLM' : 'BAN'}
+                        cat={s.catalog[0]!}
                         value={jobs[s.code]!.brandType ?? ''}
                         onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v } }))}
-                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / ukuran ban'}
+                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
                         style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
                       />
                     </span>
-                  )}
+                  ) : null}
                   {on && svcOpts[s.code]?.options?.length ? (
                     // brandType tiles carry the WHOLE catalog inside this one
                     // dropdown: the jasa lines first, then every OLM oil / BAN
@@ -494,16 +491,18 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       }}
                       style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
                     >
-                      {s.brandType ? (
+                      {s.catalog?.length ? (
                         <>
                           <optgroup label="Jasa (SKU order)">
                             {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                           </optgroup>
-                          <optgroup label={`Katalog ${s.tag ?? (s.code === 'OLI' ? 'OLM' : 'BAN')} — pilih, masuk ke merk/tipe`}>
-                            {(catalog[s.code === 'OLI' ? 'OLM' : 'BAN'] ?? []).map((n) => (
-                              <option key={n} value={`katalog::${n}`}>{n}</option>
-                            ))}
-                          </optgroup>
+                          {s.catalog.map((cat) => (
+                            <optgroup key={cat} label={`Katalog ${cat.replace(/_/g, ' ')} — pilih, masuk ke merk/tipe`}>
+                              {(catalog[cat] ?? []).map((n) => (
+                                <option key={`${cat}:${n}`} value={`katalog::${n}`}>{n}</option>
+                              ))}
+                            </optgroup>
+                          ))}
                         </>
                       ) : (
                         svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)

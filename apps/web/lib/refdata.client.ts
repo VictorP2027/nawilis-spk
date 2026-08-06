@@ -17,18 +17,24 @@ export const SERVICES: ReadonlyArray<{
   unit: 'check' | 'pcs' | 'liter';
   brandType?: boolean;
   tag?: string;
+  /**
+   * tb_products categories behind this card, per pekerjaan_options.md: these
+   * feed the tile dropdown's catalog optgroups and the merk/tipe box. A pick
+   * lands in keterangan — the product rides the note, the jasa stays the SKU.
+   */
+  catalog?: readonly string[];
 }> = [
   { code: 'SPOORING', label: 'Spooring', unit: 'check' },
   { code: 'BALANCING', label: 'Balancing', unit: 'pcs' },
-  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car', unit: 'pcs', brandType: true },
-  { code: 'OLI', label: 'Oli', unit: 'liter', brandType: true, tag: 'OLM' },
+  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car', unit: 'pcs', brandType: true, catalog: ['BAN'] },
+  { code: 'OLI', label: 'Oli', unit: 'liter', brandType: true, tag: 'OLM', catalog: ['OLM'] },
   { code: 'ENGINE_FLUSH', label: 'Engine Flush', unit: 'check' },
-  { code: 'TUNE_UP_CARBON_CLEAN', label: 'Tune Up / Carbon Clean', unit: 'check' },
-  { code: 'AUTM_TRANS_FLUSH', label: 'Autm Transmission Flush', unit: 'check', tag: 'ATF' },
-  { code: 'KURAS_RADIATOR', label: 'Kuras Radiator', unit: 'check' },
-  { code: 'SERVICE_REM', label: 'Service Rem / Krs Minyak Rem', unit: 'check' },
+  { code: 'TUNE_UP_CARBON_CLEAN', label: 'Tune Up / Carbon Clean', unit: 'check', catalog: ['BUSI'] },
+  { code: 'AUTM_TRANS_FLUSH', label: 'Autm Transmission Flush', unit: 'check', tag: 'ATF', catalog: ['ATF'] },
+  { code: 'KURAS_RADIATOR', label: 'Kuras Radiator', unit: 'check', catalog: ['COOLANT'] },
+  { code: 'SERVICE_REM', label: 'Service Rem / Krs Minyak Rem', unit: 'check', catalog: ['MINYAK_REM', 'KANVAS_REM'] },
   { code: 'BUBUT_REM', label: 'Bubut Rem', unit: 'check' },
-  { code: 'BAN', label: 'Ban', unit: 'pcs', tag: 'BAN' },
+  { code: 'BAN', label: 'Ban', unit: 'pcs', tag: 'BAN', catalog: ['BAN'] },
   { code: 'NITROGEN', label: 'Nitrogen', unit: 'pcs' },
 ];
 
