@@ -45,7 +45,7 @@ const DEFAULT_HARGA = 100_000; // General Check default price (inc tax)
 const DEFAULT_ESTIMASI = 30; // minutes
 
 /** Same divider the detail rows have always used between checklist blocks. */
-const SEC_SEP: CSSProperties = { marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--line, #e6e8ee)' };
+const SEC_SEP: CSSProperties = { marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--line, #e6e8ee)', scrollMarginTop: 48 };
 const SEC_TITLE: CSSProperties = { fontSize: 14, fontWeight: 700 };
 /** Readings/tyre fields are compact: three of them share a row on a tablet. */
 const SMALL_INPUT: CSSProperties = { fontSize: 16, padding: '8px 10px' };
@@ -63,7 +63,7 @@ const TONE_FILL: Record<'ok' | 'warn', CSSProperties> = {
 };
 const fillIf = (on: boolean, healthy: boolean): CSSProperties => (on ? TONE_FILL[healthy ? 'ok' : 'warn'] : {});
 /** The segmented-button look shared by every verdict pair on the sheet. */
-const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '8px 16px' };
+const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '6px 12px' };
 
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
@@ -247,6 +247,28 @@ export default function CheckGoIntake() {
     set((p) => { const n = [...p]; n[i] = v; return n; });
 
   /** One verdict pair rendered as segmented buttons — first option is healthy. */
+  // ── one-tap section flow ─────────────────────────────────────────────────
+  // On a real check almost every row is healthy and the checker's time goes to
+  // the exceptions. "Semua baik" fills a section's every verdict with its
+  // healthy first option in one tap; individual rows can still be flipped
+  // afterwards, and tapping it again clears the whole section (honest toggle).
+  type Sec = (typeof CHECKGO_SECTIONS)[number];
+  const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length;
+  const sectionDone = (s: Sec) =>
+    (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && itemVerdict[it.code]).length;
+  const sectionAllHealthy = (s: Sec) =>
+    (!s.verdicts || secVerdict[s.code] === s.verdicts[0]!.code) &&
+    s.items.every((it) => !it.verdicts || itemVerdict[it.code] === it.verdicts[0]!.code);
+  const markAllHealthy = (s: Sec) => {
+    const clear = sectionAllHealthy(s);
+    if (s.verdicts) setSecVerdict((p) => ({ ...p, [s.code]: clear ? '' : s.verdicts![0]!.code }));
+    setItemVerdict((p) => {
+      const n = { ...p };
+      for (const it of s.items) if (it.verdicts) n[it.code] = clear ? '' : it.verdicts[0]!.code;
+      return n;
+    });
+  };
+
   const verdictButtons = (
     opts: ReadonlyArray<CheckgoVerdictOpt>,
     cur: string,
@@ -542,20 +564,54 @@ export default function CheckGoIntake() {
             &quot;Check and Go&quot;. Tanggal &amp; pemeriksa diambil dari data di atas.
           </div>
 
+          {/* Sticky one-tap navigation across the 8 printed sections. A chip
+              turns green when its section is fully answered. */}
+          <div style={{ position: 'sticky', top: 0, zIndex: 5, background: '#fff', display: 'flex', gap: 4, padding: '6px 0', marginBottom: 4, flexWrap: 'wrap' }}>
+            {[
+              ...CHECKGO_SECTIONS.map((s) => ({ no: s.no, full: sectionSlots(s) > 0 && sectionDone(s) === sectionSlots(s) })),
+              { no: CHECKGO_TIRE.no, full: CHECKGO_TIRE.positions.every((p) => (tire[p.code]?.tekanan ?? '') !== '') },
+            ].map((c) => (
+              <button
+                key={c.no}
+                type="button"
+                className="chk-chip"
+                style={{ minWidth: 34, justifyContent: 'center', ...(c.full ? { background: '#dcfce7', borderColor: '#15803d', color: '#15803d', fontWeight: 700 } : {}) }}
+                onClick={() => document.getElementById(`cg-sec-${c.no}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              >
+                {c.full ? '✓' : ''}{c.no}
+              </button>
+            ))}
+          </div>
+
           {/* Sections 1-7: per-row verdict pairs + readings, each section with
               its own recommendation checklist right under it (the printed layout). */}
           {CHECKGO_SECTIONS.map((s) => (
-            <div key={s.code} style={SEC_SEP}>
+            <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ ...SEC_TITLE, flex: '1 1 160px' }}>{s.no}. {s.title}</span>
+                <span style={{ ...SEC_TITLE, flex: '1 1 auto' }}>
+                  {s.no}. {s.title}{' '}
+                  {sectionDone(s) > 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: sectionDone(s) === sectionSlots(s) ? '#15803d' : 'var(--muted)' }}>
+                      {sectionDone(s)}/{sectionSlots(s)}
+                    </span>
+                  )}
+                </span>
                 {s.verdicts &&
                   verdictButtons(s.verdicts, secVerdict[s.code] ?? '', (code) =>
                     setSecVerdict((p) => ({ ...p, [s.code]: code })),
                   )}
+                <button
+                  type="button"
+                  className={`chk-chip${sectionAllHealthy(s) ? ' ok' : ''}`}
+                  onClick={() => markAllHealthy(s)}
+                  title="Satu ketuk: semua jawaban bagian ini sehat. Ketuk lagi untuk kosongkan."
+                >
+                  {sectionAllHealthy(s) ? '✓ ' : ''}Semua baik
+                </button>
               </div>
               {s.items.map((it) => (
                 <div key={it.code}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
                     <span className="chk-label" style={{ flex: '1 1 150px', fontSize: 12.5 }}>{it.label}</span>
                     {it.verdicts &&
                       verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
@@ -565,7 +621,7 @@ export default function CheckGoIntake() {
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (
-                      <div key={r.code} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6, paddingLeft: 12 }}>
+                      <div key={r.code} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4, paddingLeft: 12 }}>
                         <span style={{ flex: '0 1 auto', fontSize: 12.5, color: 'var(--muted)' }}>{r.label}</span>
                         {r.code === 'MERK_SAE' ? (
                           // The oil box gets the tenant's real OLM catalog as
@@ -593,7 +649,7 @@ export default function CheckGoIntake() {
                   })}
                 </div>
               ))}
-              <div className="chk-row" style={{ marginTop: 10 }}>
+              <div className="chk-row" style={{ marginTop: 6 }}>
                 <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--muted)' }}>Rekomendasi:</span>
                 {s.rekomendasi.map((o) => {
                   const on = (secRekom[s.code] ?? []).includes(o.code);
@@ -629,13 +685,14 @@ export default function CheckGoIntake() {
             </div>
           ))}
 
-          {/* Section 8 — four wheels, each with its own card. */}
-          <div style={SEC_SEP}>
-            <div style={{ ...SEC_TITLE, marginBottom: 8 }}>{CHECKGO_TIRE.no}. {CHECKGO_TIRE.title}</div>
+          {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
+          <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
+            <div style={{ ...SEC_TITLE, marginBottom: 6 }}>{CHECKGO_TIRE.no}. {CHECKGO_TIRE.title}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 8 }}>
             {CHECKGO_TIRE.positions.map((pos) => {
               const t = tireOf(pos.code);
               return (
-                <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{pos.label}</div>
                   {/* 3.3k tires scraped from the tenant behind this box. */}
                   <ProductInput
@@ -672,7 +729,8 @@ export default function CheckGoIntake() {
                 </div>
               );
             })}
-            <div className="chk-row" style={{ marginTop: 4 }}>
+            </div>
+            <div className="chk-row" style={{ marginTop: 6 }}>
               <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--muted)' }}>Rekomendasi:</span>
               {CHECKGO_TIRE.rekomendasi.map((o) => {
                 const on = tireRekom.includes(o.code);
