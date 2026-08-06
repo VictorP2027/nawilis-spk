@@ -72,6 +72,23 @@ export default function Intake() {
   const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
   const [salesperson, setSalesperson] = useState('');
   const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
+  // Full product catalogs (OLM oils, BAN tires) for the brandType tiles' merged
+  // dropdown — fetched once per category the first time such a tile turns on.
+  const [catalog, setCatalog] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    const cats = Object.keys(jobs)
+      .map((code) => SERVICES.find((s) => s.code === code))
+      .filter((s) => s?.brandType)
+      .map((s) => (s!.code === 'OLI' ? 'OLM' : 'BAN'))
+      .filter((c) => !(c in catalog));
+    for (const cat of cats) {
+      setCatalog((p) => ({ ...p, [cat]: [] })); // claim before the fetch lands
+      fetch(`/api/products?cat=${cat}&limit=300`)
+        .then((r) => r.json())
+        .then((d: { products?: Array<{ name: string }> }) => setCatalog((p) => ({ ...p, [cat]: (d.products ?? []).map((x) => x.name) })))
+        .catch(() => undefined);
+    }
+  }, [jobs, catalog]);
 
   useEffect(() => {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
@@ -459,13 +476,38 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                     </span>
                   )}
                   {on && svcOpts[s.code]?.options?.length ? (
+                    // brandType tiles carry the WHOLE catalog inside this one
+                    // dropdown: the jasa lines first, then every OLM oil / BAN
+                    // tire. Picking a catalog entry does not change the sku —
+                    // it fills the merk/tipe box above (the oil is keterangan
+                    // on the Turboly line, the jasa is the line itself).
                     <select
                       value={jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku}
                       onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: e.target.value } }))}
-                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px' }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v.startsWith('katalog::')) {
+                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v.slice(9) } }));
+                        } else {
+                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v } }));
+                        }
+                      }}
+                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
                     >
-                      {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
+                      {s.brandType ? (
+                        <>
+                          <optgroup label="Jasa (SKU order)">
+                            {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
+                          </optgroup>
+                          <optgroup label={`Katalog ${s.tag ?? (s.code === 'OLI' ? 'OLM' : 'BAN')} — pilih, masuk ke merk/tipe`}>
+                            {(catalog[s.code === 'OLI' ? 'OLM' : 'BAN'] ?? []).map((n) => (
+                              <option key={n} value={`katalog::${n}`}>{n}</option>
+                            ))}
+                          </optgroup>
+                        </>
+                      ) : (
+                        svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)
+                      )}
                     </select>
                   ) : null}
                 </button>
