@@ -38,8 +38,9 @@ export function ProductInput({
     timer.current = setTimeout(() => {
       fetch(`/api/products?cat=${encodeURIComponent(cat)}${q ? `&q=${encodeURIComponent(q)}` : '&limit=300'}`)
         .then((r) => r.json())
-        .then((d: { products?: Array<{ name: string; brand: string | null }> }) => {
-          if (live) setOpts((d.products ?? []).map((p) => p.name));
+        .then((d: { products?: Array<{ sku: string; name: string; brand: string | null }> }) => {
+          // SKU first, like every other option list on the form.
+          if (live) setOpts((d.products ?? []).map((p) => `${p.sku} ${p.name}`));
         })
         .catch(() => undefined);
     }, q ? 250 : 0);

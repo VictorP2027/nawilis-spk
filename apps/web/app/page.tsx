@@ -25,6 +25,10 @@ interface JobSel {
   sku?: string;
   /** merk / tipe, for the rows the paper wants it on (Oli, Balancing on the Car). */
   brandType?: string;
+  /** "SKU Name" chosen from the dropdown's catalog groups — kept so the select
+   * SHOWS the pick instead of snapping back to the jasa (which read as "it
+   * didn't take"). The jasa remains the ordered SKU underneath. */
+  catalogPick?: string;
 }
 
 function uuid(): string {
@@ -83,7 +87,7 @@ export default function Intake() {
       setCatalog((p) => ({ ...p, [cat]: [] })); // claim before the fetch lands
       fetch(`/api/products?cat=${cat}&limit=300`)
         .then((r) => r.json())
-        .then((d: { products?: Array<{ name: string }> }) => setCatalog((p) => ({ ...p, [cat]: (d.products ?? []).map((x) => x.name) })))
+        .then((d: { products?: Array<{ sku: string; name: string }> }) => setCatalog((p) => ({ ...p, [cat]: (d.products ?? []).map((x) => `${x.sku} ${x.name}`) })))
         .catch(() => undefined);
     }
   }, [jobs, catalog]);
@@ -466,7 +470,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       <ProductInput
                         cat={s.catalog[0]!}
                         value={jobs[s.code]!.brandType ?? ''}
-                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v } }))}
+                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } }))}
                         placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
                         style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
                       />
@@ -479,14 +483,15 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                     // it fills the merk/tipe box above (the oil is keterangan
                     // on the Turboly line, the jasa is the line itself).
                     <select
-                      value={jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku}
+                      value={jobs[s.code]!.catalogPick ? `katalog::${jobs[s.code]!.catalogPick}` : (jobs[s.code]!.sku || svcOpts[s.code]!.defaultSku)}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) => {
                         const v = e.target.value;
                         if (v.startsWith('katalog::')) {
-                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v.slice(9) } }));
+                          const pick = v.slice(9);
+                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pick, catalogPick: pick } }));
                         } else {
-                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v } }));
+                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v, catalogPick: undefined } }));
                         }
                       }}
                       style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
