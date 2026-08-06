@@ -66,9 +66,39 @@ async function stamp(spkId, alert) {
     .catch(() => undefined);
 }
 
+/**
+ * Mirror the gateway's state into Mongo so the WEB can show it. Vercel cannot
+ * reach this machine; Mongo is the bridge. When the session needs pairing the
+ * actual QR image rides along — anyone can then pair the sender phone from
+ * /admin in a browser, without touching Docker or this computer.
+ */
+async function publishGatewayStatus(status) {
+  try {
+    const doc = {
+      session: process.env.WAHA_SESSION || 'default',
+      status,
+      updatedAt: new Date().toISOString(),
+      qrDataUrl: null,
+    };
+    if (String(status.sessionStatus || '').toUpperCase() === 'SCAN_QR_CODE') {
+      const base = (process.env.WAHA_BASE_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
+      const r = await fetch(`${base}/api/${doc.session}/auth/qr`, {
+        headers: { 'X-Api-Key': process.env.WAHA_API_KEY || '', accept: 'image/png' },
+      });
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        doc.qrDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+      }
+    }
+    const { getDb } = await import('../packages/core/dist/index.js');
+    await getDb().collection('wa_gateway').updateOne({ _id: 'status' }, { $set: doc }, { upsert: true });
+  } catch { /* status mirroring must never break sending */ }
+}
+
 /** One pass over the queue. Returns false when the gateway is unusable. */
 async function drainOnce() {
   const status = await client.status();
+  await publishGatewayStatus(status);
   if (SEND && status.mode !== 'live') {
     // In preview mode "sending" would only mint wa.me links the intake already
     // stamps — a no-op wearing a success face. In watch mode this is routine

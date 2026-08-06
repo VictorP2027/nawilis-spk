@@ -51,16 +51,27 @@ interface DbUsage {
 
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(2)} MB`;
 
+interface WaStatus {
+  known: boolean;
+  session?: string;
+  status?: { mode?: string; sessionStatus?: string; error?: string | null };
+  qrDataUrl?: string | null;
+  updatedAt?: string;
+  stale?: boolean;
+}
+
 export default function Admin() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [awaiting, setAwaiting] = useState<Row[]>([]);
   const [all, setAll] = useState<Row[]>([]);
   const [mech, setMech] = useState('');
   const [usage, setUsage] = useState<DbUsage | null>(null);
+  const [wa, setWa] = useState<WaStatus | null>(null);
   const [purging, setPurging] = useState(false);
 
   const loadUsage = useCallback(async () => {
     try { setUsage(await fetch('/api/admin/db-usage').then((r) => r.json())); } catch { /* panel stays empty */ }
+    try { setWa(await fetch('/api/admin/wa-status').then((r) => r.json())); } catch { /* ditto */ }
   }, []);
 
   /**
@@ -245,6 +256,41 @@ export default function Admin() {
               {all.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--muted)' }}>Belum ada SPK.</td></tr>}
             </tbody>
           </table>
+        </div>
+
+        <div className="card">
+          <div className="label">WhatsApp Gateway (pengirim hasil Check &amp; Go)</div>
+          {!wa || !wa.known ? (
+            <div style={{ color: 'var(--muted)' }}>Belum ada status — watcher belum pernah lapor.</div>
+          ) : (
+            <>
+              <div>
+                {wa.stale ? (
+                  <span className="badge red">WATCHER MATI — status terakhir {wa.updatedAt ? new Date(wa.updatedAt).toLocaleTimeString('id-ID') : '?'}</span>
+                ) : wa.status?.mode === 'live' ? (
+                  <span className="badge green">TERSAMBUNG · siap kirim</span>
+                ) : wa.qrDataUrl ? (
+                  <span className="badge yellow">PERLU PAIRING — scan QR di bawah</span>
+                ) : (
+                  <span className="badge yellow">{wa.status?.sessionStatus ?? 'TIDAK SIAP'}{wa.status?.error ? ` — ${wa.status.error}` : ''}</span>
+                )}
+              </div>
+              {wa.qrDataUrl && !wa.stale && (
+                <div style={{ marginTop: 10 }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={wa.qrDataUrl} alt="QR pairing WhatsApp" style={{ width: 240, height: 240, border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }} />
+                  <div style={{ fontSize: 12.5, color: 'var(--muted)', marginTop: 6, maxWidth: 420 }}>
+                    Di HP <b>pengirim</b>: WhatsApp → <b>Perangkat tertaut</b> → <b>Tautkan perangkat</b> → scan QR ini.
+                    Cukup sekali; sesi bertahan. QR diperbarui otomatis oleh watcher setiap ±30 detik.
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                Pesan dikirim oleh satu komputer gateway. Halaman ini hanya menampilkan status &amp; QR-nya —
+                siapa pun bisa pairing dari sini tanpa menyentuh komputer itu.
+              </div>
+            </>
+          )}
         </div>
 
         <div className="card">
