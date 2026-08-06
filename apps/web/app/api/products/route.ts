@@ -24,9 +24,13 @@ export async function GET(req: Request): Promise<Response> {
     // Space-separated terms must all appear — "brid 185" finds Bridgestone 185/…
     filter.$and = q.split(/\s+/).map((t) => ({ search: { $regex: t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') } }));
   }
+  // Empty q = the form preloading a category so the box can offer everything
+  // on first tap. 300 covers every category whole except BAN (3.3k) — that one
+  // gets its first 300 and narrows server-side as the user types.
+  const limit = Math.min(300, Math.max(1, Number(url.searchParams.get('limit')) || 20));
   const rows = await getDb()
     .collection<{ _id: string; name: string; brand: string | null }>('tb_products')
-    .find(filter, { projection: { name: 1, brand: 1 }, limit: 20, sort: { _id: 1 } })
+    .find(filter, { projection: { name: 1, brand: 1 }, limit, sort: { _id: 1 } })
     .toArray();
 
   return NextResponse.json({ products: rows.map((r) => ({ sku: r._id, name: r.name, brand: r.brand })) });
