@@ -45,10 +45,10 @@ const DEFAULT_HARGA = 100_000; // General Check default price (inc tax)
 const DEFAULT_ESTIMASI = 30; // minutes
 
 /** Same divider the detail rows have always used between checklist blocks. */
-const SEC_SEP: CSSProperties = { marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid var(--line, #e6e8ee)', scrollMarginTop: 48 };
+const SEC_SEP: CSSProperties = { marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid var(--line, #e6e8ee)', scrollMarginTop: 48 };
 const SEC_TITLE: CSSProperties = { fontSize: 14, fontWeight: 700 };
 /** Readings/tyre fields are compact: three of them share a row on a tablet. */
-const SMALL_INPUT: CSSProperties = { fontSize: 16, padding: '8px 10px' };
+const SMALL_INPUT: CSSProperties = { fontSize: 16, padding: '4px 8px' };
 
 /**
  * Selected state on a `btn ghost` is an inline fill (this page's own idiom).
@@ -63,7 +63,7 @@ const TONE_FILL: Record<'ok' | 'warn', CSSProperties> = {
 };
 const fillIf = (on: boolean, healthy: boolean): CSSProperties => (on ? TONE_FILL[healthy ? 'ok' : 'warn'] : {});
 /** The segmented-button look shared by every verdict pair on the sheet. */
-const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '6px 12px' };
+const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '4px 10px' };
 
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
@@ -650,7 +650,7 @@ export default function CheckGoIntake() {
                   label lives in its placeholder — a separate caption per input
                   doubled every row's height for words the box already says. */}
               {s.items.map((it) => (
-                <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+                <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
                   <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5 }}>{it.label}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
@@ -689,7 +689,7 @@ export default function CheckGoIntake() {
                   )}
                 </div>
               ))}
-              <div className="chk-row" style={{ marginTop: 6 }}>
+              <div className="chk-row" style={{ marginTop: 4 }}>
                 <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--muted)' }}>Rekomendasi:</span>
                 {s.rekomendasi.map((o) => {
                   const on = (secRekom[s.code] ?? []).includes(o.code);
@@ -756,7 +756,7 @@ export default function CheckGoIntake() {
                       </button>
                     ))}
                   </div>
-                  <div className="chk-row" style={{ marginTop: 6 }}>
+                  <div className="chk-row" style={{ marginTop: 4 }}>
                     {CHECKGO_TIRE.flags.map((f) => {
                       const on = t.flags.includes(f.code);
                       return (
@@ -770,7 +770,7 @@ export default function CheckGoIntake() {
               );
             })}
             </div>
-            <div className="chk-row" style={{ marginTop: 6 }}>
+            <div className="chk-row" style={{ marginTop: 4 }}>
               <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--muted)' }}>Rekomendasi:</span>
               {CHECKGO_TIRE.rekomendasi.map((o) => {
                 const on = tireRekom.includes(o.code);
