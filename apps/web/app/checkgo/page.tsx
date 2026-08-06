@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
+import { ProductInput } from '../../lib/productSuggest';
 import {
   BRANCHES,
   CHECKGO_SECTIONS,
@@ -566,14 +567,26 @@ export default function CheckGoIntake() {
                     return (
                       <div key={r.code} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6, paddingLeft: 12 }}>
                         <span style={{ flex: '0 1 auto', fontSize: 12.5, color: 'var(--muted)' }}>{r.label}</span>
-                        <input
-                          value={reading[key] ?? ''}
-                          onChange={(e) => setReading((p) => ({ ...p, [key]: e.target.value }))}
-                          // Coolant is read as a NEGATIVE number and the iOS numeric
-                          // pad has no minus key, so suffixed readings stay free-text.
-                          placeholder={r.label}
-                          style={{ ...SMALL_INPUT, flex: '1 1 110px', maxWidth: 180 }}
-                        />
+                        {r.code === 'MERK_SAE' ? (
+                          // The oil box gets the tenant's real OLM catalog as
+                          // typeahead — 252 oils, picked or free-typed.
+                          <ProductInput
+                            cat="OLM"
+                            value={reading[key] ?? ''}
+                            onChange={(v) => setReading((p) => ({ ...p, [key]: v }))}
+                            placeholder={r.label}
+                            style={{ ...SMALL_INPUT, flex: '1 1 110px', maxWidth: 180 }}
+                          />
+                        ) : (
+                          <input
+                            value={reading[key] ?? ''}
+                            onChange={(e) => setReading((p) => ({ ...p, [key]: e.target.value }))}
+                            // Coolant is read as a NEGATIVE number and the iOS numeric
+                            // pad has no minus key, so suffixed readings stay free-text.
+                            placeholder={r.label}
+                            style={{ ...SMALL_INPUT, flex: '1 1 110px', maxWidth: 180 }}
+                          />
+                        )}
                         {r.suffix && <span style={{ flex: '0 0 auto', fontSize: 13, color: 'var(--muted)' }}>{r.suffix}</span>}
                       </div>
                     );
@@ -624,9 +637,11 @@ export default function CheckGoIntake() {
               return (
                 <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10, marginBottom: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{pos.label}</div>
-                  <input
+                  {/* 3.3k tires scraped from the tenant behind this box. */}
+                  <ProductInput
+                    cat="BAN"
                     value={t.merkUkuran}
-                    onChange={(e) => setTireOf(pos.code, { merkUkuran: e.target.value })}
+                    onChange={(v) => setTireOf(pos.code, { merkUkuran: v })}
                     placeholder="Merk & ukuran ban"
                     style={SMALL_INPUT}
                   />

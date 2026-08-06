@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SignaturePad, type SigHandle } from './components/SignaturePad';
 import { SERVICES, BRANCHES, DAMAGE_ZONES, CONDITION_ITEMS } from '../lib/refdata.client';
+import { ProductInput } from '../lib/productSuggest';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
 interface VehicleHist {
@@ -444,13 +445,18 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                     </span>
                   )}
                   {on && s.brandType && (
-                    <input
-                      value={jobs[s.code]!.brandType ?? ''}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: e.target.value } }))}
-                      placeholder="merk / tipe — contoh: Castrol Edge 5W-30"
-                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', width: '100%' }}
-                    />
+                    // Typeahead off the scraped tenant catalog: oils for the
+                    // Oli row, tires for Balancing on the Car. Free text still
+                    // wins — the suggestion is a convenience, not a constraint.
+                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'block', marginTop: 6 }}>
+                      <ProductInput
+                        cat={s.code === 'OLI' ? 'OLM' : 'BAN'}
+                        value={jobs[s.code]!.brandType ?? ''}
+                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v } }))}
+                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / ukuran ban'}
+                        style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+                      />
+                    </span>
                   )}
                   {on && svcOpts[s.code]?.options?.length ? (
                     <select
