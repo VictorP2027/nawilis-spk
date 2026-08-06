@@ -468,7 +468,7 @@ export default function CheckGoIntake() {
         )}
 
         <div className="card">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '0 16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0 16px' }}>
           <div>
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
@@ -797,7 +797,7 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: '0 16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0 16px' }}>
             <div>
               <div className="label">Tanda tangan customer — WAJIB (persetujuan pengecekan)</div>
               <SignaturePad ref={sigCust} onInk={setCustSigned} />
