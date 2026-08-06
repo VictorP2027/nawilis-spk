@@ -449,7 +449,7 @@ export default function CheckGoIntake() {
           {BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'} ▾
         </button>
       </div>
-      <div className="wrap" style={{ maxWidth: 1240 }}>
+      <div className="wrap">
         {(!branch || showSetup) && (
           <div className="card">
             <div className="label">Cabang</div>
@@ -622,9 +622,7 @@ export default function CheckGoIntake() {
 
           {/* Sections 1-7: per-row verdict pairs + readings, each section with
               its own recommendation checklist right under it (the printed
-              layout). Two columns whenever the width allows — the sheet is a
-              checklist, not a novel, and half-empty rows read slower. */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(460px, 100%), 1fr))', columnGap: 28 }}>
+              layout). */}
           {CHECKGO_SECTIONS.map((s) => (
             <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -654,7 +652,7 @@ export default function CheckGoIntake() {
                   doubled every row's height for words the box already says. */}
               {s.items.map((it) => (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-                  <span className="chk-label" style={{ flex: '0 1 auto', fontSize: 12.5, minWidth: 130 }}>{it.label}</span>
+                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5 }}>{it.label}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (
@@ -727,7 +725,6 @@ export default function CheckGoIntake() {
               )}
             </div>
           ))}
-          </div>
 
           {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
           <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
