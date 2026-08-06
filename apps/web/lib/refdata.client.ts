@@ -26,7 +26,7 @@ export const SERVICES: ReadonlyArray<{
 }> = [
   { code: 'SPOORING', label: 'Spooring', unit: 'check' },
   { code: 'BALANCING', label: 'Balancing', unit: 'pcs' },
-  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car', unit: 'pcs', brandType: true, catalog: ['BAN'] },
+  { code: 'BALANCING_ON_CAR', label: 'Balancing on the Car', unit: 'pcs' },
   { code: 'OLI', label: 'Oli', unit: 'liter', brandType: true, tag: 'OLM', catalog: ['OLM'] },
   { code: 'ENGINE_FLUSH', label: 'Engine Flush', unit: 'check' },
   { code: 'TUNE_UP_CARBON_CLEAN', label: 'Tune Up / Carbon Clean', unit: 'check', catalog: ['BUSI'] },
