@@ -421,7 +421,6 @@ export default function CheckGoIntake() {
     setWa(''); setNama(''); setAlamat('');
     setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm('');
     setHist(null); setPlateOwner(null); setCustVehicles([]); setCustHint(null); setRegName(null);
-    setHarga(String(DEFAULT_HARGA));
     setEstimasi(String(DEFAULT_ESTIMASI));
     setSecVerdict({}); setItemVerdict({}); setReading({});
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
