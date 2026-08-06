@@ -154,6 +154,10 @@ function attentionList(checkGo: CheckGo): Finding[] {
 
   for (const tire of checkGo.report?.tires ?? []) {
     const marks = tire.flags.map(tireFlagLabel).filter((m): m is string => m !== null);
+    // Pressure is a three-way choice on the final-3 sheet; CUKUP is healthy,
+    // the other two are findings the customer should hear about.
+    if (tire.tekanan === 'LEBIH') marks.unshift('tekanan angin lebih');
+    if (tire.tekanan === 'KURANG') marks.unshift('tekanan angin kurang');
     if (!marks.length) continue;
     findings.push({ label: TIRE_POSITION[tire.position] ?? humanise(tire.position), detail: marks.join(', ') });
   }
@@ -169,8 +173,22 @@ function attentionList(checkGo: CheckGo): Finding[] {
  */
 function attentionVerdict(row: CheckGoInspectionItem): string | null {
   if (row.feedback === 'fail') return 'perlu perbaikan';
-  const hasil = (row.hasil ?? '').toLowerCase();
+  const hasil = (row.hasil ?? '').trim().toLowerCase();
   if (!hasil) return null;
+  // The final-3 sheet's per-row verdict pairs, bad tone only — the healthy
+  // words (bagus, jernih, tebal, rata, mati, cukup, bersih, ok) fall through
+  // to null. Exact match: "tidak" as a substring would false-positive.
+  const BAD: Record<string, string> = {
+    kotor: 'kotor',
+    tidak: 'perlu perbaikan',
+    bocor: 'bocor',
+    keruh: 'keruh',
+    tipis: 'sudah tipis',
+    nyala: 'indikator menyala',
+    kurang: 'kurang',
+  };
+  if (BAD[hasil]) return BAD[hasil];
+  // Previous sheet revisions' vocabulary — old stored docs still render.
   if (hasil.includes('replace') || hasil.includes('ganti')) return 'perlu diganti';
   if (hasil.includes('recharge')) return 'perlu di-charge';
   if (hasil.includes('fail')) return 'perlu perbaikan';
@@ -187,10 +205,9 @@ function noteParts(row: CheckGoInspectionItem): string[] {
   return parts.length ? [`(${parts.join(', ')})`] : [];
 }
 
-function tireFlagLabel(flag: { code: string; choice: string | null }): string | null {
-  if (!flag.code) return null;
-  if (flag.code === 'ANGIN_TIDAK_NORMAL' && flag.choice) return `tekanan angin ${flag.choice.toLowerCase()}`;
-  return TIRE_FLAG[flag.code] ?? humanise(flag.code);
+function tireFlagLabel(code: string): string | null {
+  if (!code) return null;
+  return TIRE_FLAG[code] ?? humanise(code);
 }
 
 /**

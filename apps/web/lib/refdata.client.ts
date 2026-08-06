@@ -130,164 +130,215 @@ export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILI
   { code: 'PT-NWL', name: 'PT. Nawilis Waskita Lestari', type: 'COMPANY' },
 ];
 
-/* ── "NAWILIS CHECK and GO REPORT" — the printed sheet, as data ──────────────
+/* ── "CHECK and GO REPORT" (final 3) — the printed sheet, as data ───────────
  *
- * The tablet form renders from these tables and POST /api/checkgo turns the
- * stored codes back into these labels, so there is exactly ONE spelling of
- * every check. Titles and item names are VERBATIM from the paper (mixed
- * English/Indonesian on purpose): the checker holds the sheet next to the
- * tablet, and different wording reads as a different check.
- *
- * `code` is the stored identity — a label may be re-printed, a code may not
- * change or old documents stop resolving.
+ * Eight numbered sections, each with lettered items. Unlike the previous
+ * revision there is no global Pass/Fail: every row carries its OWN verdict
+ * pair, in the words printed on it (Bagus/Kotor, Jernih/Keruh, Tebal/Tipis,
+ * Mati/Nyala …), and every section carries its own recommendation checklist.
+ * Everything is stored as CODES — wording changes must never rewrite stored
+ * documents. In every verdict pair the FIRST option is the healthy one; all
+ * the rest mean the row needs attention.
  */
 
-/** Severity a choice carries; the form fills the chip with --ok/--warn/--block. */
-export type CheckgoTone = 'ok' | 'warn' | 'block';
+export interface CheckgoVerdictOpt { code: string; label: string }
+export interface CheckgoReading { code: string; label: string; suffix?: string }
 
-/** A reading the paper asks for as a number, with the OK-range printed inline. */
-export interface CheckgoMeasure {
-  /** Printed unit, straight off the sheet ("c" is not "°C" on this form). */
-  unit: 'c' | '%';
-  hint: string;
-}
-
-export interface CheckgoSubItem {
+export interface CheckgoItem {
   code: string;
   label: string;
-  /** Absent = the item is only looked at, no number is written down. */
-  measure?: CheckgoMeasure;
+  /** First entry is the healthy verdict. Absent = the row only takes readings. */
+  verdicts?: ReadonlyArray<CheckgoVerdictOpt>;
+  /** Numbers/text the sheet wants written on this row (Tanggal, Km, °C, Kpa …). */
+  readings?: ReadonlyArray<CheckgoReading>;
 }
+
+export interface CheckgoRekOpt { code: string; label: string; freeText?: boolean }
 
 export interface CheckgoSection {
   /** The number printed on the sheet — part of the name a checker reads out. */
   no: number;
   code: string;
   title: string;
-  subItems: ReadonlyArray<CheckgoSubItem>;
+  /** Section-spanning verdict (Oli Mesin: Bagus/Kotor; ATF: Jernih/Kotor). */
+  verdicts?: ReadonlyArray<CheckgoVerdictOpt>;
+  items: ReadonlyArray<CheckgoItem>;
+  rekomendasi: ReadonlyArray<CheckgoRekOpt>;
+  /** "Part suspensi yang harus diganti: 1..5" — free lines under Lain-Lain. */
+  extraList?: { label: string; count: number };
 }
 
-/** Sections 1-4: ONE Pass/Fail verdict for the whole section, plus its items. */
+const OK_TIDAK: ReadonlyArray<CheckgoVerdictOpt> = [
+  { code: 'OK', label: 'OK' },
+  { code: 'TIDAK', label: 'Tidak' },
+];
+
+/** Sections 1-7. Section 8 (Tire/Ban) has its own shape below. */
 export const CHECKGO_SECTIONS: ReadonlyArray<CheckgoSection> = [
   {
     no: 1,
-    code: 'COOLING',
-    title: 'Cooling System',
-    subItems: [
-      { code: 'COOLANT', label: 'Coolant', measure: { unit: 'c', hint: 'Antara -15 c dan -40 c = OK' } },
-      { code: 'TUTUP_RADIATOR', label: 'Tutup Radiator' },
+    code: 'OLI_MESIN',
+    title: 'Oli Mesin',
+    verdicts: [
+      { code: 'BAGUS', label: 'Bagus' },
+      { code: 'KOTOR', label: 'Kotor' },
+    ],
+    items: [
+      { code: 'OM_GANTI', label: 'Terakhir ganti', readings: [{ code: 'TGL', label: 'Tanggal' }, { code: 'KM', label: 'Km' }] },
+      { code: 'OM_OLI', label: 'Oli yang dipakai', readings: [{ code: 'MERK_SAE', label: 'Merk/SAE' }] },
+    ],
+    rekomendasi: [
+      { code: 'GANTI_OLI', label: 'Ganti oli' },
+      { code: 'ENGINE_FLUSH', label: 'Engine Flush' },
     ],
   },
   {
     no: 2,
-    code: 'BRAKE',
-    title: 'Brake System',
-    subItems: [{ code: 'BRAKE_FLUID', label: 'Brake Fluid', measure: { unit: '%', hint: '0,1,2 = OK' } }],
+    code: 'PENDINGIN',
+    title: 'Sistem Pendingin Air',
+    items: [
+      {
+        code: 'PD_COOLANT', label: 'Coolant (antara -15C s/d -40C = OK)', verdicts: OK_TIDAK,
+        readings: [{ code: 'TEMP', label: 'Suhu', suffix: '°C' }],
+      },
+      {
+        code: 'PD_TUTUP', label: 'Tutup radiator',
+        verdicts: [{ code: 'OK', label: 'OK' }, { code: 'BOCOR', label: 'Bocor' }],
+        readings: [{ code: 'TEKANAN', label: 'Tekanan', suffix: 'Kpa' }],
+      },
+    ],
+    rekomendasi: [
+      { code: 'GANTI_COOLANT', label: 'Ganti cairan coolant' },
+      { code: 'GANTI_TUTUP_RADIATOR', label: 'Ganti tutup radiator' },
+    ],
   },
   {
     no: 3,
-    code: 'POWER_STEERING',
-    title: 'Power Steering System',
-    subItems: [{ code: 'POWER_STEERING_FLUID', label: 'Power Steering Fluid' }],
+    code: 'REM',
+    title: 'Sistem Rem',
+    items: [
+      {
+        code: 'REM_MINYAK', label: 'Minyak rem (kadar air 0,1,2 = OK)', verdicts: OK_TIDAK,
+        readings: [{ code: 'KADAR_AIR', label: 'Kadar Air', suffix: '%' }],
+      },
+      { code: 'REM_JERNIH', label: 'Kejernihan minyak rem', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }] },
+      { code: 'REM_KANVAS_DPN', label: 'Kanvas rem depan', verdicts: [{ code: 'TEBAL', label: 'Tebal' }, { code: 'TIPIS', label: 'Tipis' }] },
+      { code: 'REM_KANVAS_BLK', label: 'Kanvas rem belakang', verdicts: [{ code: 'TEBAL', label: 'Tebal' }, { code: 'TIPIS', label: 'Tipis' }] },
+      { code: 'REM_DISC', label: 'Kondisi permukaan Disc Brake / Cakram', verdicts: [{ code: 'RATA', label: 'Rata' }, { code: 'TIDAK', label: 'Tidak' }] },
+    ],
+    rekomendasi: [
+      { code: 'KMR', label: 'Kuras Minyak Rem (KMR)' },
+      { code: 'GANTI_KANVAS_DPN', label: 'Ganti kanvas rem depan' },
+      { code: 'GANTI_KANVAS_BLK', label: 'Ganti kanvas rem belakang' },
+      { code: 'BUBUT_DISC', label: 'Bubut Disc Brake/Cakram' },
+    ],
   },
   {
     no: 4,
-    code: 'AC',
-    title: 'Air Conditioning System',
-    subItems: [
-      { code: 'AC_VENT_TEMP', label: 'AC Vent Temp', measure: { unit: 'c', hint: 'Dibawah 10 c = OK' } },
-      { code: 'REFRIGERANT_R134A', label: 'Refrigerant Contamination R134a', measure: { unit: '%', hint: '100% = OK' } },
+    code: 'ATF',
+    title: 'Oli Transmisi Otomatis',
+    verdicts: [
+      { code: 'JERNIH', label: 'Jernih' },
+      { code: 'KOTOR', label: 'Kotor' },
     ],
+    items: [
+      { code: 'ATF_GANTI', label: 'Terakhir ganti', readings: [{ code: 'TGL', label: 'Tanggal' }, { code: 'KM', label: 'Km' }] },
+      { code: 'ATF_JERNIH', label: 'Kejernihan oli transmisi otomatis' },
+    ],
+    rekomendasi: [{ code: 'KURAS_ATF', label: 'Kuras oli transmisi otomatis (ATF)' }],
+  },
+  {
+    no: 5,
+    code: 'PS',
+    title: 'Power Steering',
+    items: [
+      { code: 'PS_OLI', label: 'Oli Power Steering', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }] },
+      // Mati (off) is the healthy state for a warning lamp.
+      { code: 'PS_EPS', label: 'Indikator lampu EPS', verdicts: [{ code: 'MATI', label: 'Mati' }, { code: 'NYALA', label: 'Nyala' }] },
+    ],
+    rekomendasi: [
+      { code: 'KURAS_PSF', label: 'Kuras oli power steering (PSF)' },
+      { code: 'PERBAIKAN', label: 'Perbaikan' },
+      { code: 'SCANNER', label: 'Scanner' },
+    ],
+  },
+  {
+    no: 6,
+    code: 'KELISTRIKAN',
+    title: 'Sistem Kelistrikan',
+    items: [
+      { code: 'KL_AIR_AKI', label: 'Volume air aki', verdicts: [{ code: 'CUKUP', label: 'Cukup' }, { code: 'KURANG', label: 'Kurang' }] },
+      { code: 'KL_AKI', label: 'Kelistrikan aki', verdicts: OK_TIDAK },
+      { code: 'KL_LAMPU', label: 'Lampu-lampu mobil', verdicts: OK_TIDAK },
+    ],
+    rekomendasi: [
+      { code: 'TAMBAH_AIR_AKI', label: 'Tambah air aki' },
+      { code: 'GANTI_AKI', label: 'Ganti aki' },
+      { code: 'GANTI_LAMPU', label: 'Ganti lampu', freeText: true },
+    ],
+  },
+  {
+    no: 7,
+    code: 'LAIN',
+    title: 'Lain-Lain',
+    items: [
+      { code: 'LL_FILTER_UDARA', label: 'Filter udara', verdicts: [{ code: 'BERSIH', label: 'Bersih' }, { code: 'KOTOR', label: 'Kotor' }] },
+      { code: 'LL_FILTER_CABIN', label: 'Filter cabin/AC', verdicts: [{ code: 'BERSIH', label: 'Bersih' }, { code: 'KOTOR', label: 'Kotor' }] },
+      { code: 'LL_WYPER', label: 'Wyper', verdicts: OK_TIDAK },
+      { code: 'LL_SUSPENSI', label: 'Suspensi /Kaki-kaki', verdicts: OK_TIDAK },
+    ],
+    rekomendasi: [
+      { code: 'FILTER_UDARA_BERSIHKAN', label: 'Filter udara: dibersihkan' },
+      { code: 'FILTER_UDARA_GANTI', label: 'Filter udara: ganti' },
+      { code: 'FILTER_CABIN_BERSIHKAN', label: 'Filter cabin/AC: dibersihkan' },
+      { code: 'FILTER_CABIN_GANTI', label: 'Filter cabin/AC: ganti' },
+      { code: 'GANTI_WYPER', label: 'Ganti wyper' },
+    ],
+    extraList: { label: 'Part suspensi yang harus diganti', count: 5 },
   },
 ];
 
-/** The two boxes sections 1-4 carry. `value` is stored as printed. */
-export const CHECKGO_VERDICTS: ReadonlyArray<{ value: string; tone: CheckgoTone }> = [
-  { value: 'Pass', tone: 'ok' },
-  { value: 'Fail', tone: 'block' },
-];
-
 /**
- * Section 5 is NOT pass/fail — a battery is either fine, chargeable, or dead,
- * and "RECHARGE" is a job we sell, so it may not be flattened into "Fail".
- */
-export const CHECKGO_ELECTRICAL: {
-  no: number;
-  code: string;
-  title: string;
-  options: ReadonlyArray<{ code: string; label: string; tone: CheckgoTone }>;
-} = {
-  no: 5,
-  code: 'ELECTRICAL',
-  title: 'Electrical System',
-  options: [
-    { code: 'GOOD', label: 'GOOD (ok)', tone: 'ok' },
-    { code: 'RECHARGE', label: 'RECHARGE (charge)', tone: 'warn' },
-    { code: 'REPLACE', label: 'REPLACE (ganti)', tone: 'block' },
-  ],
-};
-
-/**
- * Section 6 — the four wheels. The paper misprints the rear pair as "(c)"
- * twice; the codes below are a/b/c/d in reading order, the Indonesian position
- * names are exactly as printed.
+ * Section 8 — the four wheels. Position codes are unchanged from the previous
+ * revision on purpose: stored documents and the WhatsApp alert already speak
+ * them. Tire pressure is now a printed three-way choice (Lebih/Cukup/Kurang,
+ * Cukup healthy), not a number; the two damage marks keep their old codes.
  */
 export const CHECKGO_TIRE: {
   no: number;
   code: string;
   title: string;
   positions: ReadonlyArray<{ code: string; label: string }>;
-  flags: ReadonlyArray<{ code: string; label: string; choices?: ReadonlyArray<string> }>;
+  tekanan: ReadonlyArray<CheckgoVerdictOpt & { healthy?: boolean }>;
+  flags: ReadonlyArray<{ code: string; label: string }>;
+  rekomendasi: ReadonlyArray<CheckgoRekOpt>;
+  /** The three blank "□ ____" lines under the tire recommendations. */
+  freeLines: number;
 } = {
-  no: 6,
+  no: 8,
   code: 'TIRE',
-  title: 'Tire',
+  title: 'Tire/Ban',
   positions: [
     { code: 'DEPAN_KIRI', label: 'Depan Kiri' },
     { code: 'DEPAN_KANAN', label: 'Depan Kanan' },
     { code: 'BELAKANG_KIRI', label: 'Belakang Kiri' },
     { code: 'BELAKANG_KANAN', label: 'Belakang Kanan' },
   ],
-  // Marks printed under every wheel. Only the air mark has a sub-choice, and it
-  // stays optional: the sheet is often ticked before the gauge is read.
+  tekanan: [
+    { code: 'LEBIH', label: 'Lebih' },
+    { code: 'CUKUP', label: 'Cukup', healthy: true },
+    { code: 'KURANG', label: 'Kurang' },
+  ],
   flags: [
-    { code: 'ANGIN_TIDAK_NORMAL', label: 'Angin tidak normal', choices: ['Kurang', 'Lebih'] },
     { code: 'AUS_TIDAK_RATA', label: 'Aus tidak rata' },
     { code: 'RETAK', label: 'Retak pada ban' },
   ],
+  rekomendasi: [
+    { code: 'GANTI_BAN', label: 'Ganti Ban' },
+    { code: 'ROTASI_BAN', label: 'Rotasi Ban' },
+    { code: 'SPOORING', label: 'Spooring' },
+    { code: 'BALANCING', label: 'Balancing' },
+    { code: 'BALANCING_ON_CAR', label: 'Balancing On The Car' },
+  ],
+  freeLines: 3,
 };
-
-/**
- * The two recommendation lists at the foot of the sheet. Kept as one table so
- * the form renders both from a single loop; `freeTextLabel` marks the list the
- * paper prints its "Lain-lain :" line under.
- */
-export const CHECKGO_REKOMENDASI: ReadonlyArray<{
-  code: string;
-  title: string;
-  options: ReadonlyArray<{ code: string; label: string }>;
-  freeTextLabel?: string;
-}> = [
-  {
-    code: 'BAN',
-    title: 'Rekomendasi untuk Ban',
-    options: [
-      { code: 'SPOORING', label: 'Spooring' },
-      { code: 'BALANCING', label: 'Balancing' },
-      { code: 'ROTASI_BAN', label: 'Rotasi Ban' },
-      { code: 'GANTI_BAN', label: 'Ganti Ban' },
-    ],
-  },
-  {
-    code: 'UMUM',
-    title: 'Rekomendasi untuk 1 - 5',
-    options: [
-      { code: 'KURAS_RADIATOR', label: 'Kuras Radiator' },
-      { code: 'KURAS_CAIRAN_REM', label: 'Kuras Cairan Rem' },
-      { code: 'KURAS_POWER_STEERING', label: 'Kuras Power Steering' },
-      { code: 'FLUSHING_AC', label: 'Flushing AC' },
-      { code: 'GANTI_AKI', label: 'Ganti Aki/Battery' },
-    ],
-    freeTextLabel: 'Lain-lain :',
-  },
-];

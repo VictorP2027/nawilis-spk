@@ -85,8 +85,11 @@ function checkGoDoc(over: Record<string, unknown> = {}): SpkDoc {
         row('Rekomendasi untuk 1 - 5', null, 'Kuras Cairan Rem'),
       ],
       report: {
-        sections: [], electrical: 'REPLACE', rekomendasi: [], lainLain: null,
-        tires: [{ position: 'DEPAN_KIRI', merk: 'Bridgestone', tekanan: '30', flags: [{ code: 'AUS_TIDAK_RATA', choice: null }] }],
+        sections: [],
+        // CUKUP is the healthy pressure on the final-3 sheet — the wheel's only
+        // finding must come from its damage mark.
+        tires: [{ position: 'DEPAN_KIRI', merkUkuran: 'Bridgestone', tekanan: 'CUKUP', flags: ['AUS_TIDAK_RATA'] }],
+        tireRekomendasi: { picks: [], lain: [] },
       },
     },
     ...over,

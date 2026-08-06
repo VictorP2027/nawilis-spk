@@ -21,16 +21,9 @@ import {
 } from '../../../lib/checkgoReport';
 import { ingestSpk } from '../../../lib/ingest';
 import { triggerTurbolyPush } from '../../../lib/triggerPush';
-// The paper form's vocabulary. It lives in lib/refdata.client.ts because the
-// tablet needs it too; it is plain data with no browser API, so the route can
-// resolve the codes it receives against the very same table the form rendered.
-import {
-  CHECKGO_SECTIONS,
-  CHECKGO_VERDICTS,
-  CHECKGO_ELECTRICAL,
-  CHECKGO_TIRE,
-  CHECKGO_REKOMENDASI,
-} from '../../../lib/refdata.client';
+// The paper form's vocabulary lives in lib/refdata.client.ts; everything that
+// resolves codes against it goes through lib/checkgoReport.ts now, so the
+// route itself no longer touches the tables.
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

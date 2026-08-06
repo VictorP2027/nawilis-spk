@@ -539,8 +539,16 @@ function Card({ row, onAction, onRetry, onWa }: {
         <DocLink label="SO" no={row.so?.no ?? null} url={row.so?.url ?? null} />
         <DocLink label="WO" no={row.wo?.no ?? null} url={row.wo?.url ?? null} />
         <DocLink label="INV" no={row.invoice?.no ?? null} url={row.invoice?.url ?? null} />
-        {/* The captured intake rendered back onto the paper SPK — print/PDF. */}
-        <a className="fb-doc" href={`/spk/${encodeURIComponent(row._id)}/print`} target="_blank" rel="noreferrer" title="Cetak SPK (format kertas)">🖨</a>
+        {/* The captured intake rendered back onto its own paper — print/PDF.
+            SPK docs get the SURAT PERINTAH KERJA layout, Check & Go docs the
+            CHECK and GO REPORT (final 3) layout. */}
+        <a
+          className="fb-doc"
+          href={`/${isCng ? 'checkgo' : 'spk'}/${encodeURIComponent(row._id)}/print`}
+          target="_blank"
+          rel="noreferrer"
+          title={isCng ? 'Cetak Check & Go (format kertas)' : 'Cetak SPK (format kertas)'}
+        >🖨</a>
       </div>
 
       {/* Check & Go only: nothing reaches the customer's WhatsApp without this

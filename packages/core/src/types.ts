@@ -274,22 +274,34 @@ export interface CheckGoInspectionItem {
  * someone actually gave are kept — an untouched report is stored as null.
  */
 export interface CheckGoReport {
-  /** Sections 1-4: one verdict for the section + whatever numbers were read. */
-  sections: Array<{ code: string; verdict: string | null; readings: Array<{ code: string; value: string }> }>;
-  /** Section 5 — a CHECKGO_ELECTRICAL option code, not a pass/fail. */
-  electrical: string | null;
-  /** Section 6 — one entry per wheel that had anything written on it. */
+  /**
+   * Sections 1-7 of the final-3 sheet. `verdict` on the section is the
+   * section-spanning pair (Oli Mesin: BAGUS/KOTOR; ATF: JERNIH/KOTOR); most
+   * sections carry verdicts per ITEM instead. All verdicts are CODES from the
+   * refdata tables — first option of a pair is the healthy one.
+   */
+  sections: Array<{
+    code: string;
+    verdict: string | null;
+    items: Array<{ code: string; verdict: string | null; readings: Array<{ code: string; value: string }> }>;
+    /** Picked recommendation codes for this section. */
+    rekomendasi: string[];
+    /** The free-text a freeText option carries ("Ganti lampu …"). */
+    rekomendasiLain: string | null;
+    /** "Part suspensi yang harus diganti" lines (Lain-Lain only). */
+    extraParts: string[];
+  }>;
+  /** Section 8 — one entry per wheel that had anything written on it. */
   tires: Array<{
     position: string;
-    merk: string | null;
+    merkUkuran: string | null;
+    /** LEBIH | CUKUP | KURANG — CUKUP is the healthy one. */
     tekanan: string | null;
-    /** Only the marks that were ticked; `choice` is the Kurang/Lebih pair. */
-    flags: Array<{ code: string; choice: string | null }>;
+    /** Ticked damage marks (AUS_TIDAK_RATA, RETAK). */
+    flags: string[];
   }>;
-  /** The two printed lists, keyed by CHECKGO_REKOMENDASI code. */
-  rekomendasi: Array<{ code: string; picks: string[] }>;
-  /** The sheet's single "Lain-lain :" line. */
-  lainLain: string | null;
+  /** The tire recommendation checklist + its blank "□ ___" lines. */
+  tireRekomendasi: { picks: string[]; lain: string[] };
 }
 
 export interface CheckGo {
