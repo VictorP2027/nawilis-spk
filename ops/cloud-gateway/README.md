@@ -10,6 +10,12 @@ dari papan alur, dan sesi FAILED me-restart dirinya sendiri.
 
 ## Opsi GRATIS
 
+> **Tanpa kartu kredit sama sekali?** Tidak ada cloud tepercaya yang gratis
+> DAN bebas kartu untuk proses yang menyala terus. Pilihan bebas-kartu yang
+> nyata adalah perangkat yang sudah dimiliki: PC kantor (di bawah), laptop
+> bekas, atau Raspberry Pi di salah satu cabang (`noweb-arm`). Layanan gratis
+> tanpa kartu (Replit/Glitch) tidur saat idle — sesi WhatsApp mati.
+
 - **Oracle Cloud "Always Free"** — VPS gratis permanen (bukan trial), cukup
   untuk gateway ini berkali-kali lipat. Daftar butuh kartu kredit (verifikasi,
   bukan tagihan), kapasitas ARM gratis kadang harus dicoba beberapa kali, dan
