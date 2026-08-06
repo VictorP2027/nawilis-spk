@@ -449,7 +449,7 @@ export default function CheckGoIntake() {
           {BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'} ▾
         </button>
       </div>
-      <div className="wrap">
+      <div className="wrap" style={{ maxWidth: 1240 }}>
         {(!branch || showSetup) && (
           <div className="card">
             <div className="label">Cabang</div>
