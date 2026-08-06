@@ -1,0 +1,11 @@
+# Keep docker build contexts lean (used by ops/cloud-gateway).
+node_modules
+**/node_modules
+.next
+**/.next
+.git
+.turboly-state
+.vercel
+backups
+data
+*.log

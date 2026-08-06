@@ -1,0 +1,42 @@
+# The whole WhatsApp gateway on one small cloud box (any VPS with Docker):
+#
+#   1. Copy the repo to the server (git clone), put a .env NEXT TO THIS FILE:
+#        MONGODB_URI=...            # same Atlas as production
+#        MONGODB_DB=spk
+#        WAHA_API_KEY=<pick a long random string>
+#   2. docker compose -f ops/cloud-gateway/docker-compose.yml up -d --build
+#   3. Open the web app's /admin — the gateway card shows the pairing QR;
+#      scan it with the sender phone. That is the LAST time anyone thinks
+#      about this server.
+#
+# Nothing is exposed publicly: WAHA has no published ports at all — only the
+# watcher, on the internal network, can reach it. Status and the QR travel to
+# /admin through Mongo; send-requests travel back the same way.
+services:
+  waha:
+    # ARM hosts (e.g. Hetzner CAX, AWS Graviton): use devlikeapro/waha:noweb-arm
+    image: devlikeapro/waha:noweb
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?set WAHA_API_KEY in .env}
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+    volumes:
+      - waha_sessions:/app/.sessions
+
+  watcher:
+    build:
+      context: ../..
+      dockerfile: ops/cloud-gateway/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - waha
+    environment:
+      MONGODB_URI: ${MONGODB_URI:?set MONGODB_URI in .env}
+      MONGODB_DB: ${MONGODB_DB:-spk}
+      WHATSAPP_PROVIDER: waha
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_API_KEY: ${WAHA_API_KEY}
+      WAHA_SESSION: ${WAHA_SESSION:-default}
+
+volumes:
+  waha_sessions:
