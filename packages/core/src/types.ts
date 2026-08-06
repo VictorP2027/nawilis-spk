@@ -19,7 +19,7 @@ import type { FlowState } from './flow.js';
  */
 export type DocType = 'SPK_NAWILIS' | 'QS_INSPECTION' | 'CHECK_AND_GO';
 
-export type BranchType = 'NAWILIS' | 'QUICKSERV';
+export type BranchType = 'NAWILIS' | 'QUICKSERV' | 'COMPANY';
 
 /** How the record was captured. Typed mode is 100% accurate by construction. */
 export type CaptureMode = 'typed' | 'photo' | 'hybrid';

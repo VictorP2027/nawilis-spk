@@ -40,6 +40,16 @@ export const REF_BRANCHES: readonly RefBranch[] = [
   { code: 'QS-PIK2', name: 'QS PIK 2', type: 'QUICKSERV', docAbbrev: 'PIK2', turbolyStoreNameGuess: 'Nawilis QS PIK 2' },
   { code: 'QS-DAGO', name: 'QS Dago Bandung', type: 'QUICKSERV', docAbbrev: 'DAGO', turbolyStoreNameGuess: 'Nawilis QS Dago Bandung' },
   { code: 'QS-GR', name: 'QS Graha Raya Tangsel', type: 'QUICKSERV', docAbbrev: 'GR', turbolyStoreNameGuess: 'Nawilis QS Graha Raya' },
+  // Requested 2026-08-06: the full Turboly store dropdown, selectable for
+  // Service Orders and customer registration — the second Pamulang entity and
+  // the three PT holding companies included. They were previously recorded as
+  // not-a-workshop (tb_store_ignores); being orderable is a separate question
+  // from being a physical outlet, and that call is the owner's. docAbbrev null
+  // until a real Turboly document number reveals what it abbreviates them to.
+  { code: 'NWL-PML2', name: 'Pamulang (NMS)', type: 'NAWILIS', docAbbrev: null, turbolyStoreNameGuess: 'Nawilis Pamulang (NMS)' },
+  { code: 'PT-NMB', name: 'PT. Nawilis Maju Bersama', type: 'COMPANY', docAbbrev: null, turbolyStoreNameGuess: 'PT. Nawilis Maju Bersama' },
+  { code: 'PT-NMS', name: 'PT. Nawilis Maju Sejahtera', type: 'COMPANY', docAbbrev: null, turbolyStoreNameGuess: 'PT. Nawilis Maju Sejahtera' },
+  { code: 'PT-NWL', name: 'PT. Nawilis Waskita Lestari', type: 'COMPANY', docAbbrev: null, turbolyStoreNameGuess: 'PT. Nawilis Waskita Lestari' },
 ];
 
 export interface RefService {

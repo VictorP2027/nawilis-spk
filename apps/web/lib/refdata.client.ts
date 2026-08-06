@@ -98,7 +98,7 @@ export const DAMAGE_ZONES: ReadonlyArray<DamageZone> = [
   { code: 'BUMPER_BELAKANG', label: 'Bumper Belakang', abbr: 'BUMPER', x: 80, y: 486, w: 200, h: 16 },
 ];
 
-export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILIS' | 'QUICKSERV' }> = [
+export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILIS' | 'QUICKSERV' | 'COMPANY' }> = [
   { code: 'NWL-TA17', name: 'Tanah Abang 17', type: 'NAWILIS' },
   { code: 'NWL-TA12', name: 'Tanah Abang 12', type: 'NAWILIS' },
   { code: 'NWL-RD', name: 'Radio Dalam', type: 'NAWILIS' },
@@ -122,6 +122,12 @@ export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILI
   { code: 'QS-PIK2', name: 'QS PIK 2', type: 'QUICKSERV' },
   { code: 'QS-DAGO', name: 'QS Dago Bandung', type: 'QUICKSERV' },
   { code: 'QS-GR', name: 'QS Graha Raya Tangsel', type: 'QUICKSERV' },
+  // The rest of Turboly's store dropdown, orderable on request (2026-08-06):
+  // the second Pamulang entity and the three PT holding companies.
+  { code: 'NWL-PML2', name: 'Pamulang (NMS)', type: 'NAWILIS' },
+  { code: 'PT-NMB', name: 'PT. Nawilis Maju Bersama', type: 'COMPANY' },
+  { code: 'PT-NMS', name: 'PT. Nawilis Maju Sejahtera', type: 'COMPANY' },
+  { code: 'PT-NWL', name: 'PT. Nawilis Waskita Lestari', type: 'COMPANY' },
 ];
 
 /* ── "NAWILIS CHECK and GO REPORT" — the printed sheet, as data ──────────────
