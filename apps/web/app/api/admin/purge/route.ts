@@ -18,7 +18,11 @@ export const dynamic = 'force-dynamic';
  *        console fetches this FIRST and saves it to the admin's machine.
  * POST — the deletion, only with the typed confirmation {confirm:"HAPUS"}.
  */
-const PURGEABLE = ['spk', 'spk_events', 'flow_jobs', 'vehicles', 'turboly_docs', 'push_dlq'] as const;
+// `vehicles` is deliberately NOT here: it is the branch's memory of people —
+// plates, owners, visit counts — the thing that makes a returning customer
+// fast. Wiping documents and queues is a clean slate; wiping who your
+// customers are is amnesia.
+const PURGEABLE = ['spk', 'spk_events', 'flow_jobs', 'turboly_docs', 'push_dlq'] as const;
 
 export async function GET(): Promise<Response> {
   await db();

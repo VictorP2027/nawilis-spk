@@ -79,7 +79,7 @@ export default function Admin() {
       a.click();
       URL.revokeObjectURL(url);
       // 2. The deletion needs the word typed, not a reflex OK.
-      const typed = prompt('Backup sudah terunduh.\n\nKetik HAPUS untuk menghapus SEMUA data operasional (SPK, events, antrean, riwayat kendaraan).\nData referensi (stores, mekanik, katalog) TIDAK ikut terhapus.');
+      const typed = prompt('Backup sudah terunduh.\n\nKetik HAPUS untuk menghapus data operasional (SPK, events, antrean).\nRiwayat customer/kendaraan dan data referensi TIDAK ikut terhapus.');
       if (typed !== 'HAPUS') return;
       const res = await fetch('/api/admin/purge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: 'HAPUS' }) });
       const out = await res.json();
@@ -278,7 +278,7 @@ export default function Admin() {
                   {purging ? 'Memproses…' : '🗑 Hapus SEMUA data operasional (backup dulu)'}
                 </button>
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                  Backup JSON terunduh otomatis sebelum hapus. Data referensi (stores, mekanik, katalog, SKU map) tidak tersentuh.
+                  Backup JSON terunduh otomatis sebelum hapus. Riwayat customer/kendaraan dan data referensi (stores, mekanik, katalog, SKU map) tidak tersentuh.
                 </span>
               </div>
             </>
