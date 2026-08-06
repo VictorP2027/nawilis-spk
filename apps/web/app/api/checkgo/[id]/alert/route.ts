@@ -75,11 +75,18 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: 'not_sendable', message: (e as Error).message }, { status: 422 });
   }
 
-  const by = ((await req.json().catch(() => ({}))) as { by?: string }).by ?? 'flow-board';
+  const body = (await req.json().catch(() => ({}))) as { by?: string; manual?: boolean };
+  const by = body.by ?? 'flow-board';
   const at = new Date().toISOString();
+  // Two ways to send: the gateway queue ('requested', delivered by the
+  // watcher) or a human on plain WhatsApp Web ('manual' — the modal opened a
+  // wa.me link with the full message pre-filled and someone pressed send
+  // themselves). Manual is recorded as handled so the gateway never sends the
+  // same customer a duplicate.
+  const mode = body.manual ? 'manual' : 'requested';
   await collections.spk().updateOne(
     { _id: id },
-    { $set: { 'checkGo.alert': { mode: 'requested', to, by, at }, updatedAt: at } },
+    { $set: { 'checkGo.alert': { mode, to, by, at }, updatedAt: at } },
   );
-  return NextResponse.json({ ok: true, mode: 'requested', to });
+  return NextResponse.json({ ok: true, mode, to });
 }

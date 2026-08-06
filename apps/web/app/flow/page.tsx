@@ -481,8 +481,27 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
             <div className="fb-mhint">Pesan di atas dikirim apa adanya ke nomor customer. Periksa nama &amp; nomor dulu.</div>
           </>
         )}
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
           <button type="button" className="btn ghost" onClick={onClose}>Batal</button>
+          {/* The zero-infrastructure path: opens plain WhatsApp Web with the
+              message pre-filled — whoever is logged in there (personal or
+              branch number) presses send themselves. */}
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={!data || posting}
+            onClick={() => {
+              if (!data) return;
+              window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+              void fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ by: 'flow-board', manual: true }),
+              }).then((r) => { if (r.ok) onDone(row._id); });
+            }}
+          >
+            📱 Kirim manual (WhatsApp Web)
+          </button>
           <button type="button" className="btn primary" disabled={!data || posting} onClick={() => void send()}>
             {posting ? <><span className="fb-spin fb-spin-w" /> Mengantre…</> : 'Kirim ke Customer'}
           </button>
@@ -580,6 +599,8 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
           <div className="fb-meta" style={{ marginTop: 6, color: '#15803d' }}>✓ Hasil terkirim via WA</div>
         ) : row.waAlert === 'requested' ? (
           <div className="fb-meta" style={{ marginTop: 6 }}><span className="fb-spin" /> WA antre kirim…</div>
+        ) : row.waAlert === 'manual' ? (
+          <div className="fb-meta" style={{ marginTop: 6, color: '#15803d' }}>📱 WA dikirim manual</div>
         ) : row.waAlert === 'failed' ? (
           <div className="fb-meta" style={{ marginTop: 6, color: 'var(--muted)' }}>WA dilewati / gagal</div>
         ) : (
@@ -743,7 +764,7 @@ export default function FlowBoard() {
 
   /** Eligible for bulk WA: same gate as the single "Kirim Hasil via WA" button. */
   const waEligible = useCallback(
-    (r: FlowRow) => r.docType === 'CHECK_AND_GO' && (r.waAlert === null || r.waAlert === 'manual'),
+    (r: FlowRow) => r.docType === 'CHECK_AND_GO' && r.waAlert === null,
     [],
   );
 
