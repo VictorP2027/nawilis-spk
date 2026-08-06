@@ -153,7 +153,14 @@ function attentionList(checkGo: CheckGo): Finding[] {
   }
 
   for (const tire of checkGo.report?.tires ?? []) {
-    const marks = tire.flags.map(tireFlagLabel).filter((m): m is string => m !== null);
+    // Stored documents span TWO sheet revisions: final-3 flags are code
+    // strings, the previous revision's are {code, choice} objects. The
+    // customer's phone does not care which form the branch had that week —
+    // both must render (an object reaching toLowerCase took the WhatsApp
+    // preview down for every pre-final-3 doc).
+    const marks = (tire.flags as ReadonlyArray<string | { code?: string; choice?: string | null }>)
+      .map(tireFlagLabel)
+      .filter((m): m is string => m !== null);
     // Pressure is a three-way choice on the final-3 sheet; CUKUP is healthy,
     // the other two are findings the customer should hear about.
     if (tire.tekanan === 'LEBIH') marks.unshift('tekanan angin lebih');
@@ -205,8 +212,13 @@ function noteParts(row: CheckGoInspectionItem): string[] {
   return parts.length ? [`(${parts.join(', ')})`] : [];
 }
 
-function tireFlagLabel(code: string): string | null {
+function tireFlagLabel(flag: string | { code?: string; choice?: string | null }): string | null {
+  const code = typeof flag === 'string' ? flag : flag?.code ?? '';
   if (!code) return null;
+  // Legacy air mark carried its Kurang/Lebih as a sub-choice on the object.
+  if (code === 'ANGIN_TIDAK_NORMAL' && typeof flag === 'object' && flag?.choice) {
+    return `tekanan angin ${String(flag.choice).toLowerCase()}`;
+  }
   return TIRE_FLAG[code] ?? humanise(code);
 }
 
