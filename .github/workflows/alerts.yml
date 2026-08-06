@@ -1,0 +1,78 @@
+# Customer WhatsApp sender — the WAHA-free path.
+#
+# With an OFFICIAL provider (Meta Cloud API / Twilio) there is no session, no
+# QR, no state to keep warm — sending is a stateless HTTPS call. So the
+# drainer does not need a computer at all: this cron runs it every 5 minutes,
+# exactly like the Turboly workers run. The board's Kirim WA stamps wait in
+# Mongo either way, so worst-case latency is one cron tick.
+#
+# INERT until configured: the job skips itself unless WHATSAPP_PROVIDER is set
+# in repo secrets. Configure (Settings → Secrets → Actions):
+#   WHATSAPP_PROVIDER=meta
+#   WHATSAPP_ACCESS_TOKEN=<permanent token from the Meta app>
+#   WHATSAPP_PHONE_NUMBER_ID=<from the same app>
+#   WHATSAPP_REPORT_TEMPLATE=<approved template name — required for
+#     business-initiated messages; the 5 params are documented in .env.example>
+# MONGODB_URI already exists as a secret.
+#
+# NOT in the turboly-push concurrency group on purpose: this never logs into
+# Turboly, so it must not queue behind the pusher.
+name: send-whatsapp-alerts
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: whatsapp-alerts
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check configuration
+        id: cfg
+        env:
+          PROVIDER: ${{ secrets.WHATSAPP_PROVIDER }}
+        run: |
+          if [ -z "$PROVIDER" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "WHATSAPP_PROVIDER secret not set — sender inert, skipping."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.configured == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.cfg.outputs.configured == 'true'
+        with:
+          node-version: 20
+
+      - name: Install and build core
+        if: steps.cfg.outputs.configured == 'true'
+        # --ignore-scripts: no Playwright browsers — this job sends HTTPS, it
+        # never drives a browser.
+        run: |
+          npm ci --ignore-scripts
+          npx tsc -b packages/core
+
+      - name: Send queued alerts
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          WHATSAPP_PROVIDER: ${{ secrets.WHATSAPP_PROVIDER }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_REPORT_TEMPLATE: ${{ secrets.WHATSAPP_REPORT_TEMPLATE }}
+          WHATSAPP_REMINDER_TEMPLATE: ${{ secrets.WHATSAPP_REMINDER_TEMPLATE }}
+          WHATSAPP_TEMPLATE_LANGUAGE: id
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
+          TWILIO_REPORT_CONTENT_SID: ${{ secrets.TWILIO_REPORT_CONTENT_SID }}
+        run: node scripts/alerts-drain.mjs --send
