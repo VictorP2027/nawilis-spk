@@ -85,12 +85,8 @@ export default function CheckGoIntake() {
   const [warna, setWarna] = useState('');
   const [km, setKm] = useState('');
   const [advisor, setAdvisor] = useState('');
-  const [harga, setHarga] = useState(String(DEFAULT_HARGA));
+
   const [estimasi, setEstimasi] = useState(String(DEFAULT_ESTIMASI));
-  // The customer's email — the final-3 sheet header asks for it. Optional;
-  // travels as customer.kontakLain ("Email: …") because that is the one free
-  // contact slot SpkIntakeInput has.
-  const [email, setEmail] = useState('');
   // The paper report (final 3). Everything is keyed by the refdata codes and
   // everything is optional — an untouched sheet submits exactly like before.
   const [secVerdict, setSecVerdict] = useState<Record<string, string>>({}); // section code → its verdict code
@@ -307,8 +303,7 @@ export default function CheckGoIntake() {
   const warnaOk = warna.trim() !== '';
   const kmOk = km.trim() !== '';
   const advisorOk = advisor.trim() !== '';
-  const hargaVal = Number(harga.replace(/[^\d]/g, ''));
-  const hargaOk = Number.isFinite(hargaVal) && hargaVal > 0;
+
   // Estimasi optional — blank falls back to the 30-minute default.
   const estimasiVal = estimasi.trim() === '' ? DEFAULT_ESTIMASI : Number(estimasi.trim());
   const estimasiOk = Number.isInteger(estimasiVal) && estimasiVal > 0;
@@ -318,7 +313,6 @@ export default function CheckGoIntake() {
   const modelUnknown = tipe.trim() !== '' && makeKnown && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = advisor.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === advisor.trim().toUpperCase());
 
-  const emailOk = /\S+@\S+\.\S+/.test(email.trim());
   // A branch whose mechanic list failed to load must not be locked out — but
   // when the list is there, the check has to name who performed it.
   const mekanikOk = mekanikList.length === 0 || mekanik !== '';
@@ -327,7 +321,7 @@ export default function CheckGoIntake() {
   const reportOk =
     CHECKGO_SECTIONS.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
     CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '');
-  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && hargaOk && estimasiOk && emailOk && mekanikOk && reportOk && custSigned && advSigned && !submitting;
+  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && estimasiOk && mekanikOk && reportOk && custSigned && advSigned && !submitting;
 
   async function submit() {
     setSubmitting(true);
@@ -345,7 +339,6 @@ export default function CheckGoIntake() {
         nama,
         wa: wa || null,
         alamat: alamat || null,
-        kontakLain: email.trim() ? `Email: ${email.trim()}` : null,
       },
       vehicle: {
         noPolisi: plate,
@@ -364,7 +357,6 @@ export default function CheckGoIntake() {
       // reads on the board.
       mechanicCode: mekanik || null,
       mechanicName: mekanikList.find((m) => m.code === mekanik)?.name ?? null,
-      harga: hargaVal,
       // The whole sheet goes out as CODES, blanks included: the server is the
       // one place that decides what counts as "filled", so this form and
       // /checkgo/sheet can never disagree about it.
@@ -426,7 +418,7 @@ export default function CheckGoIntake() {
   }
 
   function resetForm() {
-    setWa(''); setNama(''); setAlamat(''); setEmail('');
+    setWa(''); setNama(''); setAlamat('');
     setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm('');
     setHist(null); setPlateOwner(null); setCustVehicles([]); setCustHint(null); setRegName(null);
     setHarga(String(DEFAULT_HARGA));
@@ -550,20 +542,8 @@ export default function CheckGoIntake() {
         <div className="card">
           <div className="label">Pekerjaan — General Check</div>
           <div className="tiles" style={{ gridTemplateColumns: '1fr' }}>
-            <div className="tile on" style={{ cursor: 'default' }}>
-              General Check (JAS-NAWJAS-GC) · 1×
-              <input
-                className="price"
-                value={harga}
-                onChange={(e) => setHarga(e.target.value)}
-                inputMode="numeric"
-                placeholder="harga (Rp)"
-                style={!hargaOk ? { borderColor: '#dc2626' } : undefined}
-              />
-            </div>
+            <div className="tile on" style={{ cursor: 'default' }}>General Check (JAS-NAWJAS-GC) · 1×</div>
           </div>
-          {!hargaOk && <div className="req-note">⚠ harga wajib — angka Rupiah, contoh 100000</div>}
-          {hargaOk && <div className="ok-sm">✓ Rp {hargaVal.toLocaleString('id-ID')} (termasuk pajak)</div>}
           <div className="label" style={{ marginTop: 12 }}>Estimasi waktu (menit) — opsional, default 30</div>
           <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="30" style={!estimasiOk ? { borderColor: '#dc2626', maxWidth: 140 } : { maxWidth: 140 }} />
           {!estimasiOk && <div className="req-note">⚠ angka menit, contoh 30 — kosongkan untuk default</div>}
@@ -806,10 +786,6 @@ export default function CheckGoIntake() {
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#dc2626' } : undefined} />
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoCapitalize="none" placeholder="Email — WAJIB" style={!emailOk ? { borderColor: '#dc2626' } : undefined} />
-            {!emailOk && <div className="req-note">⚠ wajib — email valid, contoh nama@domain.com</div>}
-          </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-cg" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-cg">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
@@ -839,7 +815,7 @@ export default function CheckGoIntake() {
         )}
 
         <button className="btn primary" disabled={!canSubmit} onClick={submit}>
-          {submitting ? 'Menyimpan…' : `Simpan Check & Go — Rp ${(hargaOk ? hargaVal : 0).toLocaleString('id-ID')}`}
+          {submitting ? 'Menyimpan…' : 'Simpan Check & Go'}
         </button>
 
         <div className="sync" style={{ marginTop: 12, textAlign: 'center', color: 'var(--muted)' }}>
