@@ -90,8 +90,14 @@ export default function PrintCheckGo() {
   if (err) return <div style={{ padding: 40, textAlign: 'center' }}>{err}</div>;
   if (!doc) return <div style={{ padding: 40, textAlign: 'center' }}>Memuat Check &amp; Go…</div>;
 
-  const rep = doc.checkGo?.report ?? null;
-  const secOf = (code: string): ReportSection | undefined => rep?.sections.find((s) => s.code === code);
+  const repRaw = doc.checkGo?.report ?? null;
+  // Documents captured before the final-3 sheet carry the OLD report shape —
+  // no tireRekomendasi, different section/item structure. Rendering them as if
+  // they were new crashed the whole page (undefined.picks). They print as a
+  // blank final-3 sheet with the header data, plus a banner saying why.
+  const isFinal3 = !!repRaw && typeof repRaw === 'object' && 'tireRekomendasi' in repRaw;
+  const rep = isFinal3 ? repRaw : null;
+  const secOf = (code: string): ReportSection | undefined => (rep?.sections ?? []).find((s) => s.code === code);
   const branch = BRANCHES.find((b) => b.code === doc.branchCode);
   const email = /^email:/i.test(doc.customer?.kontakLain ?? '') ? (doc.customer?.kontakLain ?? '').replace(/^email:\s*/i, '') : '';
   const checker = doc.checkGo?.mechanicName ?? doc.signatures?.menerima?.namaJelas ?? '';
@@ -125,16 +131,22 @@ export default function PrintCheckGo() {
           </tbody>
         </table>
 
+        {repRaw && !isFinal3 && (
+          <div className="no-print" style={{ marginTop: 6, padding: '6px 8px', background: '#fef3c7', border: '1px solid #d97706', borderRadius: 6, fontSize: 11 }}>
+            ⚠ Laporan ini direkam dengan format lembar LAMA — kolom di bawah kosong; data aslinya tetap tersimpan di dokumen.
+          </div>
+        )}
+
         {/* Sections 1-7, each with its Rekomendasi column like the paper. */}
         {CHECKGO_SECTIONS.map((sec) => {
           const s = secOf(sec.code);
-          const itemOf = (code: string): ReportItem | undefined => s?.items.find((i) => i.code === code);
+          const itemOf = (code: string): ReportItem | undefined => (s?.items ?? []).find((i) => i.code === code);
           const readingText = (itCode: string): string => {
             const def = sec.items.find((x) => x.code === itCode);
             const gi = itemOf(itCode);
             return (def?.readings ?? [])
               .map((rd) => {
-                const v = gi?.readings.find((x) => x.code === rd.code)?.value ?? '';
+                const v = (gi?.readings ?? []).find((x) => x.code === rd.code)?.value ?? '';
                 return `${rd.label}: ${v || '…'}${v && rd.suffix ? ` ${rd.suffix}` : ''}`;
               })
               .join('   ');
@@ -166,7 +178,7 @@ export default function PrintCheckGo() {
                         {sec.rekomendasi.map((o) => (
                           <Tick
                             key={o.code}
-                            on={!!s?.rekomendasi.includes(o.code)}
+                            on={!!(s?.rekomendasi ?? []).includes(o.code)}
                             label={o.freeText && s?.rekomendasiLain ? `${o.label} ${s.rekomendasiLain}` : o.label}
                           />
                         ))}
@@ -202,7 +214,7 @@ export default function PrintCheckGo() {
               <tr key={row}>
                 {[0, 1].map((col) => {
                   const pos = CHECKGO_TIRE.positions[row * 2 + col]!;
-                  const t = rep?.tires.find((x) => x.position === pos.code);
+                  const t = (rep?.tires ?? []).find((x) => x.position === pos.code);
                   return (
                     <td key={pos.code} style={{ width: '35%', verticalAlign: 'top' }}>
                       <div style={{ fontWeight: 700, fontSize: 10 }}>({String.fromCharCode(97 + row * 2 + col)}) <i>{pos.label}</i></div>
@@ -212,7 +224,7 @@ export default function PrintCheckGo() {
                       </div>
                       <div style={{ display: 'flex', gap: 10 }}>
                         {CHECKGO_TIRE.flags.map((f) => (
-                          <Tick key={f.code} on={!!t?.flags.includes(f.code)} label={f.label} />
+                          <Tick key={f.code} on={!!(t?.flags ?? []).includes(f.code)} label={f.label} />
                         ))}
                       </div>
                     </td>
@@ -221,11 +233,11 @@ export default function PrintCheckGo() {
                 {row === 0 && (
                   <td rowSpan={2} style={{ verticalAlign: 'top' }}>
                     {CHECKGO_TIRE.rekomendasi.map((o) => (
-                      <Tick key={o.code} on={!!rep?.tireRekomendasi.picks.includes(o.code)} label={o.label} />
+                      <Tick key={o.code} on={!!(rep?.tireRekomendasi?.picks ?? []).includes(o.code)} label={o.label} />
                     ))}
                     {Array.from({ length: CHECKGO_TIRE.freeLines }, (_, i) => (
                       <div key={i} style={{ fontSize: 10, borderBottom: '1px solid #b9c6de', minHeight: 13 }}>
-                        □ {rep?.tireRekomendasi.lain[i] ?? ''}
+                        □ {rep?.tireRekomendasi?.lain?.[i] ?? ''}
                       </div>
                     ))}
                   </td>
