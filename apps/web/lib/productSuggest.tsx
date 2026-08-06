@@ -39,8 +39,9 @@ export function ProductInput({
       fetch(`/api/products?cat=${encodeURIComponent(cat)}${q ? `&q=${encodeURIComponent(q)}` : '&limit=300'}`)
         .then((r) => r.json())
         .then((d: { products?: Array<{ sku: string; name: string; brand: string | null }> }) => {
-          // SKU first, like every other option list on the form.
-          if (live) setOpts((d.products ?? []).map((p) => `${p.sku} ${p.name}`));
+          // Names only: this list fills a free-text description box, and
+          // "1.0L Castrol Edge 5/30" is what a person would have written there.
+          if (live) setOpts((d.products ?? []).map((p) => p.name));
         })
         .catch(() => undefined);
     }, q ? 250 : 0);

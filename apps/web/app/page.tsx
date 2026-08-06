@@ -489,7 +489,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                         const v = e.target.value;
                         if (v.startsWith('katalog::')) {
                           const pick = v.slice(9);
-                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pick, catalogPick: pick } }));
+                          // The box (and the keterangan it feeds) reads like a
+                          // person wrote it: the product NAME. The SKU stays
+                          // visible where it belongs — on the dropdown option.
+                          setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pick.replace(/^\S+\s+/, ''), catalogPick: pick } }));
                         } else {
                           setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v, catalogPick: undefined } }));
                         }
