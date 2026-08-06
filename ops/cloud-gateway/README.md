@@ -8,6 +8,20 @@ Setelah hari pertama, server ini tidak pernah disentuh lagi: status dan QR
 pairing muncul di **/admin** aplikasi web (lewat Mongo), pengiriman dipicu
 dari papan alur, dan sesi FAILED me-restart dirinya sendiri.
 
+## Opsi GRATIS
+
+- **Oracle Cloud "Always Free"** — VPS gratis permanen (bukan trial), cukup
+  untuk gateway ini berkali-kali lipat. Daftar butuh kartu kredit (verifikasi,
+  bukan tagihan), kapasitas ARM gratis kadang harus dicoba beberapa kali, dan
+  karena ARM: ganti image di docker-compose.yml → `devlikeapro/waha:noweb-arm`.
+- **PC kantor yang sudah ada** — gratis karena sudah menyala saat jam kerja.
+  Antrean "Kirim WA" menunggu di Mongo, jadi PC mati semalaman tidak
+  menghilangkan apa pun: watcher mengejar begitu PC menyala. Untuk pesan yang
+  memang dikirim di jam kerja, ini praktis setara 24/7. Setup: ops/WAHA-SETUP.md.
+- Google Cloud `e2-micro` (always free, RAM 1 GB — pas-pasan) juga bisa;
+  AWS free tier hanya 12 bulan, tier gratis Render/Railway tidur saat idle —
+  jangan dipakai untuk sesi WhatsApp.
+
 ## Sekali saja, di server baru
 
 ```bash
