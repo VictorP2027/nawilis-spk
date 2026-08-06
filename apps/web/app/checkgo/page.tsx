@@ -453,17 +453,6 @@ export default function CheckGoIntake() {
             <div className="label" style={{ marginTop: 12 }}>Nama petugas (opsional)</div>
             <input value={operator} onChange={(e) => setOperator(e.target.value)} placeholder="mis. Rina — diingat di perangkat ini" />
 
-            <div className="label" style={{ marginTop: 12 }}>Mekanik yang mengerjakan (opsional)</div>
-            {mekanikList.length > 0 ? (
-              <select value={mekanik} onChange={(e) => setMekanik(e.target.value)} style={!mekanikOk ? { borderColor: '#dc2626' } : undefined}>
-                <option value="">— pilih mekanik —</option>
-                {mekanikList.map((m) => (
-                  <option key={m.code} value={m.code}>{m.name}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="warn-note">⚠ {mekanikNote ?? 'Pilih cabang dulu'} — Work Order nanti diisi mekanik lewat papan alur.</div>
-            )}
           </div>
         )}
 
@@ -543,12 +532,17 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div className="label">Pekerjaan — General Check</div>
-          <div className="tiles" style={{ gridTemplateColumns: '1fr' }}>
-            <div className="tile on" style={{ cursor: 'default' }}>General Check (JAS-NAWJAS-GC) · 1×</div>
+          {/* One fixed service line and one optional number — a whole card of
+              chrome for that was scroll distance, not information. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="label" style={{ marginBottom: 0 }}>Pekerjaan</span>
+            <span style={{ fontWeight: 700, fontSize: 13.5 }}>General Check (JAS-NAWJAS-GC) · 1×</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Estimasi</span>
+              <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="30" style={{ ...(!estimasiOk ? { borderColor: '#dc2626' } : {}), width: 64, fontSize: 16, padding: '4px 8px' }} />
+              <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>menit</span>
+            </span>
           </div>
-          <div className="label" style={{ marginTop: 12 }}>Estimasi waktu (menit) — opsional, default 30</div>
-          <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="30" style={!estimasiOk ? { borderColor: '#dc2626', maxWidth: 140 } : { maxWidth: 140 }} />
           {!estimasiOk && <div className="req-note">⚠ angka menit, contoh 30 — kosongkan untuk default</div>}
         </div>
 
@@ -789,6 +783,19 @@ export default function CheckGoIntake() {
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#dc2626' } : undefined} />
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
+          <div className="label" style={{ marginTop: 12 }}>Mekanik yang mengerjakan — WAJIB</div>
+          {mekanikList.length > 0 ? (
+            <select value={mekanik} onChange={(e) => setMekanik(e.target.value)} style={!mekanikOk ? { borderColor: '#dc2626' } : undefined}>
+              <option value="">— pilih mekanik —</option>
+              {mekanikList.map((m) => (
+                <option key={m.code} value={m.code}>{m.name}</option>
+              ))}
+            </select>
+          ) : (
+            <div className="warn-note">⚠ {mekanikNote ?? 'Pilih cabang dulu'} — Work Order nanti diisi mekanik lewat papan alur.</div>
+          )}
+          {!mekanikOk && <div className="req-note">⚠ wajib — pemeriksa harus tercatat</div>}
+
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-cg" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-cg">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
