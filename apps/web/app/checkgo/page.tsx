@@ -255,7 +255,7 @@ export default function CheckGoIntake() {
   type Sec = (typeof CHECKGO_SECTIONS)[number];
   // The report is OPTIONAL and long; it starts folded so the required intake
   // fields read as one screen. The header always says how much is inside.
-  const [reportOpen, setReportOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(true);
   const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length;
   const sectionDone = (s: Sec) =>
     (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && itemVerdict[it.code]).length;
@@ -651,7 +651,7 @@ export default function CheckGoIntake() {
                   doubled every row's height for words the box already says. */}
               {s.items.map((it) => (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5 }}>{it.label}</span>
+                  <span className="chk-label" style={{ flex: '0 1 auto', fontSize: 12.5, minWidth: 130 }}>{it.label}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (
@@ -681,7 +681,7 @@ export default function CheckGoIntake() {
                     );
                   })}
                   {it.verdicts && (
-                    <span style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                    <span style={{ display: 'flex', gap: 4 }}>
                       {verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
                         setItemVerdict((p) => ({ ...p, [it.code]: code })),
                       )}
