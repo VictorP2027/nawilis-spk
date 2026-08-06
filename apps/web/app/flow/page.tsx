@@ -1010,6 +1010,7 @@ export default function FlowBoard() {
             ))}
           </div>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari plat / nama…" style={{ minWidth: 160 }} />
+          <a href="/alerts" style={{ fontSize: 13, textDecoration: 'none', color: 'var(--nawilis)', whiteSpace: 'nowrap', alignSelf: 'center' }}>📋 Riwayat WA</a>
           <div className="fb-upd">
             {netErr ? <span style={{ color: 'var(--block)' }}>⚠ koneksi bermasalah</span> : updatedAt ? <span>Diperbarui {updatedAt}</span> : null}
             <button type="button" onClick={() => void load()} title="Muat ulang sekarang">↻</button>
