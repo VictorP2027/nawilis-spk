@@ -506,11 +506,16 @@ function DocLink({ label, no, url }: { label: string; no: string | null; url: st
   );
 }
 
-function Card({ row, onAction, onRetry, onWa }: {
+function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, onToggleSelect }: {
   row: FlowRow;
   onAction: (row: FlowRow, def: ActionDef) => void;
   onRetry: (row: FlowRow) => void;
   onWa: (row: FlowRow) => void;
+  onArchive: (row: FlowRow) => void;
+  /** Bulk-WA selection (Check & Go, belum terkirim) — checkbox kanan-atas. */
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   const chip = stageChip(row);
   const def = nextActionFor(row);
@@ -528,6 +533,16 @@ function Card({ row, onAction, onRetry, onWa }: {
       <div className="fb-card-top">
         <span className="fb-plate">{row.plate}</span>
         <span className={`badge ${isCng ? 'green' : 'blue'}`}>{isCng ? 'C&G' : 'SPK'}</span>
+        {selectable && (
+          <input
+            type="checkbox"
+            className="chk fb-selchk"
+            checked={selected}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggleSelect(row._id)}
+            title="Pilih untuk kirim WA massal"
+          />
+        )}
       </div>
       <div className="fb-cust">{row.customer}</div>
       <div className="fb-meta">
@@ -549,6 +564,13 @@ function Card({ row, onAction, onRetry, onWa }: {
           rel="noreferrer"
           title={isCng ? 'Cetak Check & Go (format kertas)' : 'Cetak SPK (format kertas)'}
         >🖨</a>
+        {/* Keluarkan dari papan — dokumen TIDAK dihapus, hanya diarsipkan. */}
+        <button
+          type="button"
+          className="fb-doc fb-archbtn"
+          title="Arsipkan — keluarkan dari papan (dokumen tetap tersimpan)"
+          onClick={() => onArchive(row)}
+        >🗄</button>
       </div>
 
       {/* Check & Go only: nothing reaches the customer's WhatsApp without this
@@ -619,6 +641,9 @@ export default function FlowBoard() {
   const [q, setQ] = useState('');
   const [modal, setModal] = useState<{ row: FlowRow; def: ActionDef } | null>(null);
   const [waModal, setWaModal] = useState<FlowRow | null>(null);
+  /** Bulk-WA multi-selection: spkIds of Check & Go cards ticked for send. */
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkSending, setBulkSending] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
@@ -686,6 +711,96 @@ export default function FlowBoard() {
     timerRef.current = setTimeout(() => { void load(); }, 1500);
   }, [load]);
 
+  // Archive: keluarkan dari papan (dokumen tetap tersimpan) — alasan wajib.
+  const onArchive = useCallback((row: FlowRow) => {
+    const reason = prompt('Alasan arsip? (wajib — tercatat pada dokumen)');
+    if (!reason || reason.trim() === '') return;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/spk/${encodeURIComponent(row._id)}/archive`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason.trim(), by: 'flow-board' }),
+        });
+        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!res.ok) {
+          alert(str(body.message) ?? str(body.error) ?? `Gagal mengarsipkan (HTTP ${res.status})`);
+          return;
+        }
+        // Optimistic: the card leaves the board now; the poll confirms.
+        setRows((prev) => prev.filter((r) => r._id !== row._id));
+        setSelected((prev) => {
+          if (!prev.has(row._id)) return prev;
+          const next = new Set(prev);
+          next.delete(row._id);
+          return next;
+        });
+      } catch {
+        alert('Jaringan bermasalah — coba lagi.');
+      }
+    })();
+  }, []);
+
+  /** Eligible for bulk WA: same gate as the single "Kirim Hasil via WA" button. */
+  const waEligible = useCallback(
+    (r: FlowRow) => r.docType === 'CHECK_AND_GO' && (r.waAlert === null || r.waAlert === 'manual'),
+    [],
+  );
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Bulk WA: stamp each selected doc 'requested' SEQUENTIALLY (the gateway
+  // watcher delivers later) — exactly what WaModal does, just for many cards.
+  const onBulkWa = useCallback(async () => {
+    if (bulkSending) return;
+    const targets = rows.filter((r) => selected.has(r._id));
+    if (targets.length === 0) return;
+    const listing = targets.map((r) => `${r.plate} — ${r.customer}`).join('\n');
+    const ok = confirm(
+      `Kirim hasil Check & Go via WhatsApp ke ${targets.length} customer?\n\n${listing}\n\nPesan dikirim otomatis oleh gateway (±30 dtk per antrean).`,
+    );
+    if (!ok) return;
+    setBulkSending(true);
+    const okIds: string[] = [];
+    const fails: string[] = [];
+    for (const r of targets) {
+      try {
+        const res = await fetch(`/api/checkgo/${encodeURIComponent(r._id)}/alert`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ by: 'flow-board-bulk' }),
+        });
+        if (res.ok) {
+          okIds.push(r._id);
+        } else {
+          const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+          const reason =
+            res.status === 409 ? 'sudah pernah terkirim'
+            : str(body.message) ?? str(body.error) ?? `HTTP ${res.status}`;
+          fails.push(`${r.plate}: ${reason}`);
+        }
+      } catch {
+        fails.push(`${r.plate}: jaringan bermasalah`);
+      }
+    }
+    alert(
+      `Terkirim ke antrean: ${okIds.length} — Gagal: ${fails.length}` +
+      (fails.length > 0 ? `\n${fails.join('\n')}` : ''),
+    );
+    if (okIds.length > 0) {
+      const okSet = new Set(okIds);
+      setRows((prev) => prev.map((r) => (okSet.has(r._id) ? { ...r, waAlert: 'requested' } : r)));
+    }
+    setSelected(new Set());
+    setBulkSending(false);
+  }, [bulkSending, rows, selected]);
+
   const branches = useMemo(() => [...new Set(rows.map((r) => r.branchCode).filter((b) => b !== ''))].sort(), [rows]);
 
   const filtered = useMemo(() => {
@@ -743,6 +858,11 @@ export default function FlowBoard() {
         .fb-errtxt { color: var(--block); font-size: 11.5px; line-height: 1.4; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
         .fb-retry { margin-top: 6px; font-size: 12px; font-weight: 700; padding: 5px 12px; border: 1.5px solid var(--block); border-radius: 8px; background: #fff; color: var(--block); cursor: pointer; }
         .fb-retry:active { background: #fdecea; }
+        .fb-archbtn { border: 0; background: none; padding: 0; cursor: pointer; font-size: inherit; line-height: inherit; }
+        .fb-archbtn:hover { filter: brightness(.85); }
+        .fb-selchk { margin-left: 2px; width: 16px; height: 16px; flex: none; cursor: pointer; accent-color: var(--nawilis); }
+        .fb-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(10,61,143,.14); }
+        .fb-bulkbar .btn { width: auto; }
         .fb-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis); }
         .fb-msub { font-size: 12.5px; color: #33415c; margin-top: 4px; }
         .fb-mhint { font-size: 12px; color: var(--muted); margin-top: 6px; }
@@ -797,7 +917,17 @@ export default function FlowBoard() {
                 </div>
                 {byCol[c.key].length === 0 && <div className="fb-empty">—</div>}
                 {byCol[c.key].map((r) => (
-                  <Card key={r._id} row={r} onAction={(row, def) => setModal({ row, def })} onRetry={onRetry} onWa={setWaModal} />
+                  <Card
+                    key={r._id}
+                    row={r}
+                    onAction={(row, def) => setModal({ row, def })}
+                    onRetry={onRetry}
+                    onWa={setWaModal}
+                    onArchive={onArchive}
+                    selectable={waEligible(r)}
+                    selected={selected.has(r._id)}
+                    onToggleSelect={toggleSelect}
+                  />
                 ))}
               </div>
             ))}
@@ -807,6 +937,20 @@ export default function FlowBoard() {
         <div className="sync" style={{ marginTop: 6, textAlign: 'center', color: 'var(--muted)' }}>
           <a href="/">Form SPK</a>{' · '}<a href="/checkgo">Check &amp; Go</a>{' · '}<a href="/customers">Daftar customer</a>{' · '}<a href="/admin">Dashboard</a>
         </div>
+
+        {/* Bulk-WA action bar — visible only while cards are ticked. */}
+        {selected.size > 0 && (
+          <div className="fb-bulkbar">
+            <button type="button" className="btn primary" style={{ width: 'auto' }} disabled={bulkSending} onClick={() => void onBulkWa()}>
+              {bulkSending
+                ? <><span className="fb-spin fb-spin-w" /> Mengantre…</>
+                : `💬 Kirim WA ke ${selected.size} customer`}
+            </button>
+            <button type="button" className="btn ghost" disabled={bulkSending} onClick={() => setSelected(new Set())}>
+              Batal
+            </button>
+          </div>
+        )}
       </div>
 
       {modal && (
