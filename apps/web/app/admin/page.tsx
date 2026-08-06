@@ -43,11 +43,52 @@ function SigThumb({ src, title }: { src?: string | null; title: string }) {
 
 const RUNG_LABEL = ['0 · Full auto', '1 · Sampled audit', '2 · Assisted entry', '3 · Manual'];
 
+interface DbUsage {
+  dbName: string;
+  collections: Array<{ name: string; count: number; dataBytes: number; storageBytes: number; indexBytes: number }>;
+  totals: { dataBytes: number; storageBytes: number; indexBytes: number };
+}
+
+const mb = (n: number) => `${(n / 1024 / 1024).toFixed(2)} MB`;
+
 export default function Admin() {
   const [sum, setSum] = useState<Summary | null>(null);
   const [awaiting, setAwaiting] = useState<Row[]>([]);
   const [all, setAll] = useState<Row[]>([]);
   const [mech, setMech] = useState('');
+  const [usage, setUsage] = useState<DbUsage | null>(null);
+  const [purging, setPurging] = useState(false);
+
+  const loadUsage = useCallback(async () => {
+    try { setUsage(await fetch('/api/admin/db-usage').then((r) => r.json())); } catch { /* panel stays empty */ }
+  }, []);
+
+  /**
+   * Wipe everything the branches produced — AFTER the backup is on the
+   * admin's own disk. Reference mirrors are untouchable from here by design.
+   */
+  async function purgeAll() {
+    setPurging(true);
+    try {
+      // 1. Backup lands locally first, always.
+      const blob = await fetch('/api/admin/purge').then((r) => r.blob());
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `spk-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      // 2. The deletion needs the word typed, not a reflex OK.
+      const typed = prompt('Backup sudah terunduh.\n\nKetik HAPUS untuk menghapus SEMUA data operasional (SPK, events, antrean, riwayat kendaraan).\nData referensi (stores, mekanik, katalog) TIDAK ikut terhapus.');
+      if (typed !== 'HAPUS') return;
+      const res = await fetch('/api/admin/purge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: 'HAPUS' }) });
+      const out = await res.json();
+      alert(res.ok ? `Terhapus: ${Object.entries(out.deleted).map(([k, v]) => `${k} ${v}`).join(', ')}` : out.message ?? 'Gagal.');
+      await Promise.all([load(), loadUsage()]);
+    } finally {
+      setPurging(false);
+    }
+  }
 
   const load = useCallback(async () => {
     const [s, a, everything] = await Promise.all([
@@ -73,9 +114,10 @@ export default function Admin() {
 
   useEffect(() => {
     void load();
+    void loadUsage();
     const t = setInterval(load, 10_000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, loadUsage]);
 
   async function assign(id: string) {
     if (!mech) {
@@ -203,6 +245,46 @@ export default function Admin() {
               {all.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--muted)' }}>Belum ada SPK.</td></tr>}
             </tbody>
           </table>
+        </div>
+
+        <div className="card">
+          <div className="label">MongoDB · {usage?.dbName ?? '…'}</div>
+          {usage ? (
+            <>
+              <table>
+                <thead>
+                  <tr><th>Koleksi</th><th style={{ textAlign: 'right' }}>Dokumen</th><th style={{ textAlign: 'right' }}>Data</th><th style={{ textAlign: 'right' }}>Disk</th><th style={{ textAlign: 'right' }}>Index</th></tr>
+                </thead>
+                <tbody>
+                  {usage.collections.filter((c) => c.count > 0 || c.dataBytes > 0).map((c) => (
+                    <tr key={c.name}>
+                      <td>{c.name}</td>
+                      <td style={{ textAlign: 'right' }}>{c.count.toLocaleString('id-ID')}</td>
+                      <td style={{ textAlign: 'right' }}>{mb(c.dataBytes)}</td>
+                      <td style={{ textAlign: 'right' }}>{mb(c.storageBytes)}</td>
+                      <td style={{ textAlign: 'right' }}>{mb(c.indexBytes)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ fontWeight: 700 }}>
+                    <td>TOTAL</td><td />
+                    <td style={{ textAlign: 'right' }}>{mb(usage.totals.dataBytes)}</td>
+                    <td style={{ textAlign: 'right' }}>{mb(usage.totals.storageBytes)}</td>
+                    <td style={{ textAlign: 'right' }}>{mb(usage.totals.indexBytes)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="row" style={{ marginTop: 10, alignItems: 'center', gap: 10 }}>
+                <button className="btn ghost" style={{ color: 'var(--block)' }} disabled={purging} onClick={() => void purgeAll()}>
+                  {purging ? 'Memproses…' : '🗑 Hapus SEMUA data operasional (backup dulu)'}
+                </button>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  Backup JSON terunduh otomatis sebelum hapus. Data referensi (stores, mekanik, katalog, SKU map) tidak tersentuh.
+                </span>
+              </div>
+            </>
+          ) : (
+            <div style={{ color: 'var(--muted)' }}>Memuat…</div>
+          )}
         </div>
 
         <div style={{ textAlign: 'center', marginTop: 12 }}>

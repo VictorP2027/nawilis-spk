@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch();
+const ctx = await b.newContext();
+await ctx.request.post('http://127.0.0.1:3100/api/login', { data: { password: 'nawilis2026' } });
+const page = await ctx.newPage();
+const errs: string[] = [];
+page.on('pageerror', (e) => errs.push(e.message.slice(0, 100)));
+await page.goto('http://127.0.0.1:3100/checkgo/01KZB3TAYA346C7PZY82D4B5A7/print', { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+console.log('signature images =', await page.locator('img[src^="data:image"]').count());
+const body = (await page.textContent('body')) ?? '';
+console.log('names =', /Fred/.test(body), /(FLORIA)/.test(body), '| checker line =', /FLORIA PERMATA/.test(body));
+console.log('errs:', errs[0] ?? 'none');
+await b.close(); process.exit(0);

@@ -253,6 +253,9 @@ export default function CheckGoIntake() {
   // healthy first option in one tap; individual rows can still be flipped
   // afterwards, and tapping it again clears the whole section (honest toggle).
   type Sec = (typeof CHECKGO_SECTIONS)[number];
+  // The report is OPTIONAL and long; it starts folded so the required intake
+  // fields read as one screen. The header always says how much is inside.
+  const [reportOpen, setReportOpen] = useState(false);
   const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length;
   const sectionDone = (s: Sec) =>
     (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && itemVerdict[it.code]).length;
@@ -315,7 +318,16 @@ export default function CheckGoIntake() {
   const modelUnknown = tipe.trim() !== '' && makeKnown && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = advisor.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === advisor.trim().toUpperCase());
 
-  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && hargaOk && estimasiOk && custSigned && !submitting;
+  const emailOk = /\S+@\S+\.\S+/.test(email.trim());
+  // A branch whose mechanic list failed to load must not be locked out — but
+  // when the list is there, the check has to name who performed it.
+  const mekanikOk = mekanikList.length === 0 || mekanik !== '';
+  // The report IS the product being sold: every section answered, every wheel's
+  // pressure recorded. "Semua baik" makes the healthy car eight taps.
+  const reportOk =
+    CHECKGO_SECTIONS.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
+    CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '');
+  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && hargaOk && estimasiOk && emailOk && mekanikOk && reportOk && custSigned && advSigned && !submitting;
 
   async function submit() {
     setSubmitting(true);
@@ -452,7 +464,7 @@ export default function CheckGoIntake() {
 
             <div className="label" style={{ marginTop: 12 }}>Mekanik yang mengerjakan (opsional)</div>
             {mekanikList.length > 0 ? (
-              <select value={mekanik} onChange={(e) => setMekanik(e.target.value)}>
+              <select value={mekanik} onChange={(e) => setMekanik(e.target.value)} style={!mekanikOk ? { borderColor: '#dc2626' } : undefined}>
                 <option value="">— pilih mekanik —</option>
                 {mekanikList.map((m) => (
                   <option key={m.code} value={m.code}>{m.name}</option>
@@ -558,11 +570,36 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div className="label">Check and Go Report (opsional)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 10, lineHeight: 1.4 }}>
-            Isi seperti lembar kertas — semua boleh dikosongkan. Kosong = satu pemeriksaan umum
-            &quot;Check and Go&quot;. Tanggal &amp; pemeriksa diambil dari data di atas.
+          {(() => {
+            const full =
+              CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) === sectionSlots(s2)).length +
+              (CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '') ? 1 : 0);
+            return (
+              <button
+                type="button"
+                onClick={() => setReportOpen((o) => !o)}
+                style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+              >
+                <span className="label" style={{ marginBottom: 0 }}>Check and Go Report — WAJIB</span>
+                <span style={{ fontSize: 12.5, color: reportOk ? '#15803d' : 'var(--block, #dc2626)', fontWeight: 700 }}>
+                  {reportOk ? '✓ lengkap' : `${full}/8 — belum lengkap`} {reportOpen ? '▲' : '▼'}
+                </span>
+              </button>
+            );
+          })()}
+          {reportOpen && (<>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', margin: '8px 0 10px', lineHeight: 1.4 }}>
+            Semua bagian wajib dijawab — &quot;Semua baik&quot; mengisi satu bagian sehat dengan satu
+            ketuk. Tanggal &amp; pemeriksa diambil dari data di atas.
           </div>
+          {!reportOk && (
+            <div className="req-note" style={{ marginBottom: 8 }}>
+              ⚠ belum lengkap: {[
+                ...CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) < sectionSlots(s2)).map((s2) => `${s2.no}. ${s2.title}`),
+                ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? [`${CHECKGO_TIRE.no}. Tekanan ban (semua roda)`] : []),
+              ].join(' · ')}
+            </div>
+          )}
 
           {/* Sticky one-tap navigation across the 8 printed sections. A chip
               turns green when its section is fully answered. */}
@@ -754,6 +791,7 @@ export default function CheckGoIntake() {
               />
             ))}
           </div>
+          </>)}
         </div>
 
         <div className="card">
@@ -768,7 +806,8 @@ export default function CheckGoIntake() {
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
           <div className="row" style={{ marginTop: 10 }}>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoCapitalize="none" placeholder="Email — opsional" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoCapitalize="none" placeholder="Email — WAJIB" style={!emailOk ? { borderColor: '#dc2626' } : undefined} />
+            {!emailOk && <div className="req-note">⚠ wajib — email valid, contoh nama@domain.com</div>}
           </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
           <input list="advisor-list-cg" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
@@ -783,10 +822,10 @@ export default function CheckGoIntake() {
           {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib</div>}
 
           <div className="label" style={{ marginTop: 14 }}>
-            Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — opsional
+            Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — WAJIB
           </div>
           <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
-          {!advSigned && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>Boleh dikosongkan — nama penerima tetap tercatat.</div>}
+          {!advSigned && <div className="req-note">⚠ wajib — advisor menandatangani hasil pemeriksaan</div>}
         </div>
 
         {result && (

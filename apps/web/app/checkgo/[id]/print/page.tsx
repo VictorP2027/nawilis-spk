@@ -35,7 +35,10 @@ interface Doc {
       tireRekomendasi: { picks: string[]; lain: string[] };
     } | null;
   };
-  signatures?: { menerima?: { namaJelas?: string | null } };
+  signatures?: {
+    menyerahkan?: { namaJelas?: string | null; imageDataUrl?: string | null };
+    menerima?: { namaJelas?: string | null; imageDataUrl?: string | null };
+  };
   turboly?: { serviceOrderNo?: string | null };
 }
 
@@ -258,6 +261,28 @@ export default function PrintCheckGo() {
           </tbody>
         </table>
 
+        {/* Signatures: drawn on the tablet at intake; the printout carries them. */}
+        <table className="pk" style={{ marginTop: 6 }}>
+          <tbody>
+            <tr>
+              {([['Yang menyerahkan,', doc.signatures?.menyerahkan], ['Yang menerima,', doc.signatures?.menerima]] as const).map(([label, sg]) => (
+                <td key={label} style={{ width: '50%', textAlign: 'center', verticalAlign: 'bottom', height: 86 }}>
+                  <div style={{ fontSize: 10 }}>{label}</div>
+                  {sg?.imageDataUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={sg.imageDataUrl} alt="" style={{ height: 44, margin: '2px auto', display: 'block' }} />
+                  ) : (
+                    <div style={{ height: 44 }} />
+                  )}
+                  <div style={{ fontSize: 10, borderTop: '1px solid #9fb2d4', width: 170, margin: '0 auto', paddingTop: 2 }}>
+                    ( {sg?.namaJelas ?? '\u00a0'} )
+                  </div>
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+
         {/* Digital provenance — the one block the paper never had. */}
         <div style={{ fontSize: 9, color: '#667', marginTop: 8, borderTop: '1px solid #b9c6de', paddingTop: 4 }}>
           Dokumen digital {doc._id} · {branch?.name ?? doc.branchCode}
@@ -267,8 +292,12 @@ export default function PrintCheckGo() {
       </div>
 
       <style jsx global>{`
+        @page { size: A4; margin: 10mm; }
+        @page { size: A4; margin: 10mm; }
         @media print {
           .no-print { display: none !important; }
+          .print-wrap table.pk { break-inside: avoid; }
+          .print-wrap table.pk { break-inside: avoid; }
           .print-wrap { background: #fff !important; padding: 0 !important; }
           .print-wrap .sheet { box-shadow: none !important; border-width: 1.5px; width: 100%; }
           nav, header { display: none !important; }
