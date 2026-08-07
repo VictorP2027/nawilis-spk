@@ -60,7 +60,17 @@ export const CONDITION_ITEMS: ReadonlyArray<{ code: string; label: string; marks
  * diagram (viewBox 360×520). Rectangles use x/y/w/h; the 4 wheels use shape:'circle'
  * with cx/cy/r so ban/velg are selectable too.
  */
-export type DamageZone = { code: string; label: string; abbr: string } & (
+export type DamageZone = {
+  code: string;
+  label: string;
+  abbr: string;
+  /**
+   * Nudge the caption off the shape's centre. Only the wheels need it: the rim
+   * sits inside the tyre, so two labels and two ✕ marks would otherwise stack
+   * on the same point and neither would be readable.
+   */
+  labelDy?: number;
+} & (
   | { shape?: 'rect'; x: number; y: number; w: number; h: number }
   | { shape: 'circle'; cx: number; cy: number; r: number }
 );
@@ -77,11 +87,22 @@ export const DAMAGE_ZONES: ReadonlyArray<DamageZone> = [
   { code: 'SPAKBOR_DEPAN_KANAN', label: 'Spakbor Depan Kanan', abbr: 'SPKB', x: 264, y: 58, w: 16, h: 48 },
   { code: 'SPAKBOR_BELAKANG_KIRI', label: 'Spakbor Belakang Kiri', abbr: 'SPKB', x: 80, y: 402, w: 16, h: 48 },
   { code: 'SPAKBOR_BELAKANG_KANAN', label: 'Spakbor Belakang Kanan', abbr: 'SPKB', x: 264, y: 402, w: 16, h: 48 },
-  // ── Wheels (ban + velg) — clickable circles ──
-  { code: 'RODA_DEPAN_KIRI', label: 'Roda Depan Kiri (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 40, cy: 70, r: 27 },
-  { code: 'RODA_DEPAN_KANAN', label: 'Roda Depan Kanan (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 320, cy: 70, r: 27 },
-  { code: 'RODA_BELAKANG_KIRI', label: 'Roda Belakang Kiri (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 40, cy: 450, r: 27 },
-  { code: 'RODA_BELAKANG_KANAN', label: 'Roda Belakang Kanan (Ban/Velg)', abbr: 'BAN', shape: 'circle', cx: 320, cy: 450, r: 27 },
+  // ── Wheels — the TYRE is the outer ring, the RIM is the disc inside it ──
+  // A scuffed rim and a cracked tyre are different jobs at different prices, so
+  // one "Ban/Velg" blob could not say which was damaged. The RODA_* codes keep
+  // their old spelling on purpose: documents captured before the rim existed
+  // still resolve to a label instead of printing a raw code.
+  { code: 'RODA_DEPAN_KIRI', label: 'Ban Depan Kiri', abbr: 'BAN', shape: 'circle', cx: 40, cy: 70, r: 27, labelDy: -16 },
+  { code: 'RODA_DEPAN_KANAN', label: 'Ban Depan Kanan', abbr: 'BAN', shape: 'circle', cx: 320, cy: 70, r: 27, labelDy: -16 },
+  { code: 'RODA_BELAKANG_KIRI', label: 'Ban Belakang Kiri', abbr: 'BAN', shape: 'circle', cx: 40, cy: 450, r: 27, labelDy: -16 },
+  { code: 'RODA_BELAKANG_KANAN', label: 'Ban Belakang Kanan', abbr: 'BAN', shape: 'circle', cx: 320, cy: 450, r: 27, labelDy: -16 },
+  // Listed AFTER the tyres so they paint on top and take the tap — an SVG
+  // sibling drawn later wins the hit test, which is what makes the inner disc
+  // selectable at all.
+  { code: 'VELG_DEPAN_KIRI', label: 'Velg Depan Kiri', abbr: 'VELG', shape: 'circle', cx: 40, cy: 70, r: 13, labelDy: 3 },
+  { code: 'VELG_DEPAN_KANAN', label: 'Velg Depan Kanan', abbr: 'VELG', shape: 'circle', cx: 320, cy: 70, r: 13, labelDy: 3 },
+  { code: 'VELG_BELAKANG_KIRI', label: 'Velg Belakang Kiri', abbr: 'VELG', shape: 'circle', cx: 40, cy: 450, r: 13, labelDy: 3 },
+  { code: 'VELG_BELAKANG_KANAN', label: 'Velg Belakang Kanan', abbr: 'VELG', shape: 'circle', cx: 320, cy: 450, r: 13, labelDy: 3 },
   // ── Cabin: glass ──
   { code: 'KACA_DEPAN', label: 'Kaca Depan', abbr: 'KACA', x: 122, y: 126, w: 116, h: 30 },
   { code: 'KACA_KIRI_1', label: 'Kaca Samping Kiri 1', abbr: 'KACA', x: 110, y: 160, w: 18, h: 44 },

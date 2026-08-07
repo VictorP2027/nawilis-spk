@@ -606,8 +606,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                   ) : (
                     <rect className={`zone ${on ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="2"><title>{z.label}</title></rect>
                   )}
-                  <text x={cx} y={cy + 3} textAnchor="middle" fontSize="8" fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
-                  {on && <text x={cx} y={cy + 6} textAnchor="middle" fontSize="17" fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
+                  <text x={cx} y={cy + (z.labelDy ?? 3)} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 7 : 8} fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
+                  {on && <text x={cx} y={cy + (z.labelDy ?? 3) + 3} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 13 : 17} fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
                 </g>
               );
             })}
