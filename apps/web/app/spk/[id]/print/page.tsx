@@ -78,7 +78,7 @@ export default function PrintSpk() {
 
       <div className="sheet">
         <div className="hd">
-          <div className="logo"><div className="word">NAWILIS<small>SPOORING · BALANCING SPECIALIST</small></div></div>
+          <div className="logo"><img src="/nawilis-logo.webp" alt="NAWILIS — Spooring - Balancing Specialist" style={{ height: 34, width: 'auto', display: 'block' }} /></div>
           <div className="title">
             <b>SURAT PERINTAH KERJA (S.P.K.)</b>
             <small>{branch?.name ?? doc.branchCode}</small>

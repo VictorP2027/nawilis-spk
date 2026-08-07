@@ -113,7 +113,7 @@ export default function PrintCheckGo() {
 
       <div className="sheet">
         <div className="hd">
-          <div className="logo"><div className="word">NAWILIS<small>SPOORING · BALANCING SPECIALIST</small></div></div>
+          <div className="logo"><img src="/nawilis-logo.webp" alt="NAWILIS — Spooring - Balancing Specialist" style={{ height: 34, width: 'auto', display: 'block' }} /></div>
           <div className="title"><b>CHECK and GO REPORT</b><small>SAFETY &amp; COMFORT FIRST</small></div>
           <div className="serial">{doc._id.slice(-8)}</div>
         </div>
