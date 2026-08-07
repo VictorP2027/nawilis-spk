@@ -106,12 +106,28 @@ export default function Intake() {
     return () => { live = false; };
   }, [merk]);
   useEffect(() => {
-    if (!branch) { setAdvisors([]); return; }
+    if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); return; }
     let live = true;
+    // Both rosters are per store — a pick made under the previous branch must
+    // not survive into a store where that person may not exist.
+    setSalesperson('');
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`).then((r) => r.json())
-      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } }).catch(() => {});
+      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } })
+      .catch(() => { if (live) { setAdvisors([]); setSalespeople([]); } });
     return () => { live = false; };
   }, [branch]);
+
+  // The salesperson follows the advisor while nobody has overridden the box,
+  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
+  const salesAuto = useRef(true);
+  useEffect(() => {
+    if (!salespeople.length) return;
+    setSalesperson((prev) => {
+      if (prev && !salesAuto.current) return prev;
+      const m = salespeople.find((s) => s.name.toUpperCase() === advisor.trim().toUpperCase());
+      return m ? m.name : '';
+    });
+  }, [advisor, salespeople]);
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -210,7 +226,7 @@ export default function Intake() {
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
-      salespersonName: salesperson.trim() || advisor || null,
+      salespersonName: effSalesperson || null,
       signatures: {
         menyerahkanPresent: !!sigCust.current?.get(),
         menyerahkanNamaJelas: nama || null,
@@ -287,6 +303,11 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   // Advisor wajib: Turboly menolak Service Order tanpa Service Advisor, dan
   // kita tidak pernah memilih advisor otomatis (kredit penjualan salah orang).
   const advisorOk = advisor.trim() !== '';
+  // Salesperson is mandatory in Turboly and comes from its own per-store list;
+  // an unloaded roster falls back to the advisor rather than locking the branch.
+  const salespersonKnown = salespeople.length > 0;
+  const effSalesperson = salespersonKnown ? salesperson.trim() : advisor.trim();
+  const salespersonOk = effSalesperson !== '';
   // Alamat wajib: linked to the person (prefilled from Turboly) and required
   // so every registration carries a reachable address.
   const alamatOk = alamat.trim() !== '';
@@ -301,7 +322,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const tipeOk = tipe.trim() !== '';
   const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
-  const canSubmit = !!branch && waOk && advisorOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && custSigned && advSigned && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && custSigned && advSigned && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -540,12 +561,22 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
-          <div className="label" style={{ marginTop: 12 }}>Salesperson <span style={{ fontWeight: 400, color: '#8a94a6' }}>(kosong = sama dengan advisor)</span></div>
-          <input list="sales-list-q" value={salesperson} onChange={(e) => setSalesperson(e.target.value)} placeholder={salespeople.length ? 'Pilih dari daftar' : '= advisor'} />
-          <datalist id="sales-list-q">{salespeople.map((a) => <option key={a.code} value={a.name} />)}</datalist>
-          {salespeople.length > 0 && !salesperson.trim() && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
-            <div className="warn-note">⚠ Advisor bukan salesperson di cabang ini — pilih salesperson dari daftar, atau order gagal (&quot;Salesperson can&apos;t be blank&quot;).</div>
+          {/* Turboly stars Salesperson exactly like Service Advisor, and fills
+              it from a different per-store roster — a select, because unlike the
+              advisor there is no "new salesperson" case to type. */}
+          <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
+          {salespersonKnown ? (
+            <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={!salespersonOk ? { borderColor: '#dc2626' } : undefined}>
+              <option value="">— pilih salesperson —</option>
+              {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
+            </select>
+          ) : (
+            <div className="warn-note">⚠ {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — order memakai nama advisor.</div>
           )}
+          {salespersonKnown && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
+            <div className="warn-note">⚠ {advisor.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
+          )}
+          {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
         </div>
 
         {/* Optional fields collapsed behind one toggle — keeps the form neat. */}

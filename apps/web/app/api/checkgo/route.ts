@@ -67,7 +67,7 @@ const InspectionItemInput = z.object({
  * the quick form) + harga General Check + optional inspection items. docType
  * from the client is accepted but ignored — the stored doc is CHECK_AND_GO.
  */
-const CheckGoBody = SpkIntakeInput.omit({ docType: true, jobLines: true, capturedAt: true }).extend({
+const CheckGoBody = SpkIntakeInput.omit({ docType: true, capturedAt: true }).extend({
   docType: z.string().optional(),
   capturedAt: z.string().datetime().optional(),
   harga: z.coerce.number().nonnegative().default(DEFAULT_HARGA),
@@ -95,6 +95,7 @@ export async function POST(req: Request): Promise<Response> {
     capturedAt,
     mechanicCode,
     mechanicName,
+    jobLines: orderedLines,
     ...rest
   } = parsed.data;
   void _clientDocType;
@@ -115,8 +116,17 @@ export async function POST(req: Request): Promise<Response> {
     inspectionItems.push(intakeRow('Check and Go', null, null));
   }
 
-  // Reuse the proven SPK pipeline: build the intake with the ONE General Check
-  // line; docType is corrected to CHECK_AND_GO right after the insert.
+  // The General Check is the thing being sold and is always line one. Anything
+  // the counter ticked from the Rekomendasi rides after it, deduplicated by
+  // service code — Turboly takes one line per service, and a repeated code
+  // would be a second line for the same job. A client-sent CHECKGO line is
+  // dropped: the price and SKU of the check itself are the server's to set.
+  const extraLines = orderedLines.filter(
+    (l, i, arr) => l.serviceCode !== CHECKGO_SERVICE_CODE && arr.findIndex((x) => x.serviceCode === l.serviceCode) === i,
+  );
+
+  // Reuse the proven SPK pipeline: build the intake with the General Check line
+  // first; docType is corrected to CHECK_AND_GO right after the insert.
   const intake: SpkIntakeInputT = {
     ...rest,
     docType: 'SPK_NAWILIS',
@@ -132,6 +142,7 @@ export async function POST(req: Request): Promise<Response> {
         quotedPrice: harga,
         chosenSku: CHECKGO_SKU,
       },
+      ...extraLines,
     ],
   };
 

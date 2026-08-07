@@ -172,17 +172,36 @@ export default function Sheet() {
     setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? '');
   };
   const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
+  // Salesperson is mandatory in Turboly, from its own per-store roster; an
+  // unloaded roster falls back to the advisor rather than locking the branch.
+  const salespersonKnown = salespeople.length > 0;
+  const effSalesperson = salespersonKnown ? salesperson.trim() : menerima.trim();
 
   // Load the real service advisors for the chosen branch (synced from Turboly).
   useEffect(() => {
-    if (!branch) { setAdvisors([]); return; }
+    if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); return; }
     let live = true;
+    // Both rosters are per store — a pick from the previous branch must not
+    // survive into a store where that person may not exist.
+    setSalesperson('');
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`)
       .then((r) => r.json())
       .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } })
-      .catch(() => { if (live) setAdvisors([]); });
+      .catch(() => { if (live) { setAdvisors([]); setSalespeople([]); } });
     return () => { live = false; };
   }, [branch]);
+
+  // The salesperson follows the advisor while nobody has overridden the box,
+  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
+  const salesAuto = useRef(true);
+  useEffect(() => {
+    if (!salespeople.length) return;
+    setSalesperson((prev) => {
+      if (prev && !salesAuto.current) return prev;
+      const m = salespeople.find((s) => s.name.toUpperCase() === menerima.trim().toUpperCase());
+      return m ? m.name : '';
+    });
+  }, [menerima, salespeople]);
 
   const [pk, setPk] = useState<Record<string, PkRow>>(() =>
     Object.fromEntries(SERVICES.map((s) => [s.code, { order: false, qty: 1, keterangan: '', mk: '', waktu: '' }])),
@@ -245,7 +264,7 @@ export default function Sheet() {
       rekomendasiService: rekom || null,
       estimasiMinutes: estimasi ? Number(estimasi) : null,
       serviceAdvisorName: menerima || null,
-      salespersonName: salesperson.trim() || menerima || null,
+      salespersonName: effSalesperson || null,
       signatures: {
         menyerahkanPresent: !!menyerahkan || !!sigMenyerahkan.current?.get(),
         menyerahkanNamaJelas: menyerahkan || null,
@@ -269,6 +288,7 @@ export default function Sheet() {
     const waNatS = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
     if (!/^8\d{8,11}$/.test(waNatS)) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
+    if (!effSalesperson) { setResult({ ok: false, text: 'Salesperson wajib dipilih — Turboly menolak order tanpa salesperson.' }); setSubmitting(false); return; }
     if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
     if (!SERVICES.some((sv) => pk[sv.code]?.order)) { setResult({ ok: false, text: 'Pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item.' }); setSubmitting(false); return; }
     const requiredSheet: Array<[string, string]> = [[tanggal, 'Tanggal'], [noPol, 'Nomor Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [tipe, 'Tipe'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun'], [estimasi, 'Estimasi waktu pekerjaan'], [menyerahkan, 'Yang menyerahkan (nama customer)']];
@@ -597,10 +617,17 @@ export default function Sheet() {
             <datalist id="advisor-list">
               {advisors.map((a) => <option key={a.code} value={a.name} />)}
             </datalist>
-            <input list="sales-list" value={salesperson} onChange={(e) => setSalesperson(e.target.value)} placeholder="Salesperson (kosong = advisor)" style={{ marginTop: 4 }} />
-            <datalist id="sales-list">{salespeople.map((a) => <option key={a.code} value={a.name} />)}</datalist>
-            {salespeople.length > 0 && !salesperson.trim() && menerima.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === menerima.trim().toUpperCase()) && (
-              <div className="warn-inline">⚠ Advisor bukan salesperson di cabang ini — pilih salesperson.</div>
+            {/* Turboly stars Salesperson too, from its own per-store roster. */}
+            {salespersonKnown ? (
+              <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
+                <option value="">— pilih Salesperson — WAJIB</option>
+                {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
+              </select>
+            ) : (
+              <div className="warn-inline">⚠ Daftar salesperson cabang kosong — order memakai nama advisor.</div>
+            )}
+            {salespersonKnown && menerima.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === menerima.trim().toUpperCase()) && (
+              <div className="warn-inline">⚠ {menerima.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
             )}
             {advisorUnknown && <div className="warn-inline">⚠ Nama tidak ada di daftar advisor cabang ini — boleh lanjut; order Turboly akan memakai advisor terdaftar sebagai fallback.</div>}
           </div>

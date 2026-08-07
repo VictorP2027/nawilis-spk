@@ -348,3 +348,41 @@ export const CHECKGO_TIRE: {
   ],
   freeLines: 3,
 };
+
+/**
+ * Which ticked Rekomendasi becomes an orderable Turboly service.
+ *
+ * The Check & Go sheet's right-hand column is the checker saying what the car
+ * NEEDS; the twelve SERVICES above are what Nawilis can actually SELL. Those
+ * two vocabularies overlap but are not the same list, so the mapping is
+ * explicit rather than name-matched — "Engine Flush" happens to spell the same
+ * in both, "Ganti cairan coolant" is sold as "Kuras Radiator", and most of the
+ * electrical/filter recommendations are parts counter work with no service SKU
+ * at all.
+ *
+ * Keyed `SECTION:REKOMENDASI` because rekomendasi codes are only unique within
+ * their section (and ENGINE_FLUSH collides with a service code).
+ *
+ * A recommendation MISSING from this table is not a bug: it stays a written
+ * recommendation on the report and in the WhatsApp message, it just does not
+ * pre-tick a job. Never map one to an approximate service — a wrong SO line is
+ * worse than an absent one.
+ */
+export const REKOMENDASI_SERVICE: Readonly<Record<string, string>> = {
+  'OLI_MESIN:GANTI_OLI': 'OLI',
+  'OLI_MESIN:ENGINE_FLUSH': 'ENGINE_FLUSH',
+  'PENDINGIN:GANTI_COOLANT': 'KURAS_RADIATOR',
+  'REM:KMR': 'SERVICE_REM',
+  'REM:BUBUT_DISC': 'BUBUT_REM',
+  'ATF:KURAS_ATF': 'AUTM_TRANS_FLUSH',
+  // Both tyre jobs are the same Turboly service card; which one it is comes
+  // from the variant dropdown on the tile (Bongkar Pasang Ban vs Rotasi Ban).
+  'TIRE:GANTI_BAN': 'BAN',
+  'TIRE:ROTASI_BAN': 'BAN',
+  'TIRE:SPOORING': 'SPOORING',
+  'TIRE:BALANCING': 'BALANCING',
+  'TIRE:BALANCING_ON_CAR': 'BALANCING_ON_CAR',
+  // Deliberately unmapped (no service SKU among the twelve): GANTI_TUTUP_RADIATOR,
+  // GANTI_KANVAS_DPN/BLK, KURAS_PSF, PERBAIKAN, SCANNER, TAMBAH_AIR_AKI,
+  // GANTI_AKI, GANTI_LAMPU, the four filter options and GANTI_WYPER.
+};

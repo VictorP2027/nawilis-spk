@@ -1,22 +1,28 @@
 'use client';
 
 import BrandMark from './../components/BrandMark';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
 import { ProductInput } from '../../lib/productSuggest';
 import {
   BRANCHES,
   CHECKGO_SECTIONS,
   CHECKGO_TIRE,
+  REKOMENDASI_SERVICE,
+  SERVICES,
   type CheckgoVerdictOpt,
 } from '../../lib/refdata.client';
 
 /**
- * Check & Go intake — a vehicle CHECK service (not a repair). One fixed
- * service line: JAS-NAWJAS-GC "General Check", qty 1, typable price
- * (default Rp 100.000 inc tax). The checklist below is the paper "NAWILIS
- * CHECK and GO REPORT", rendered from lib/refdata.client.ts, and is stored in
- * OUR Mongo so the customer can be told exactly what was checked/found.
+ * Check & Go intake — a vehicle CHECK service (not a repair). The order always
+ * carries JAS-NAWJAS-GC "General Check", qty 1, typable price (default
+ * Rp 100.000 inc tax), plus whatever work the check itself sold: the sheet's
+ * Rekomendasi pre-tick the Pekerjaan card via REKOMENDASI_SERVICE, and the
+ * counter edits from there. The checklist is the paper "NAWILIS CHECK and GO
+ * REPORT", rendered from lib/refdata.client.ts, and is stored in OUR Mongo so
+ * the customer can be told exactly what was checked/found.
+ *
+ * No mechanic is picked here — see the note on `showSetup` below.
  */
 
 interface VehicleHist {
@@ -69,12 +75,11 @@ const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '4
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
   const [operator, setOperator] = useState('');
-  // The mechanic who does the check. Kept as {code,name}: Turboly rejects a WO
-  // line assigned to anyone outside that branch's mechanic list, and its names
-  // are not unique, so the store-user code is the only exact answer.
-  const [mekanik, setMekanik] = useState('');
-  const [mekanikList, setMekanikList] = useState<Array<{ code: string; name: string }>>([]);
-  const [mekanikNote, setMekanikNote] = useState<string | null>(null);
+  // No mechanic is picked at intake. At the counter the check has usually not
+  // been done yet, so the tablet would be asking who WILL do it; the flow board
+  // records who actually did when it raises the Work Order, which is also the
+  // only moment Turboly needs a valid per-branch assignee. "Diperiksa Oleh" on
+  // the print and the WhatsApp message falls back to the advisor until then.
   const [showSetup, setShowSetup] = useState(false);
   const [wa, setWa] = useState('');
   const [nama, setNama] = useState('');
@@ -110,6 +115,39 @@ export default function CheckGoIntake() {
   const [submitting, setSubmitting] = useState(false);
 
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  // Turboly keeps TWO rosters per store and an advisor is not automatically on
+  // both: YUNIAR SETYOWATI is an advisor at Pamulang but not a salesperson
+  // there, and sending her name into both fields is what made D 1990 ASB fail
+  // with 'Salesperson can't be blank'. 11 of 26 stores have such a person, so
+  // the salesperson has to be answerable separately when the advisor is not one.
+  const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
+  const [salesperson, setSalesperson] = useState('');
+
+  /**
+   * "Diperiksa Oleh" — the footer field of the paper sheet, and the only one of
+   * the three people on this form the paper actually asks for.
+   *
+   * Free text with the branch's mechanics as suggestions, and never required:
+   * it names who did the check on the printout and in the customer's WhatsApp,
+   * so it must accept whoever that was, including someone Turboly has never
+   * heard of. It is NOT the Work Order assignee — that is a Turboly store-user
+   * id, chosen on the flow board at Buat Work Order, where it is enforced.
+   */
+  const [inspector, setInspector] = useState('');
+  const [mekanikList, setMekanikList] = useState<{ code: string; name: string }[]>([]);
+
+  /**
+   * The work the customer is being sold on the back of this check.
+   *
+   * It is pre-ticked from the Rekomendasi the checker already marked on the
+   * sheet — the sheet IS the recommendation, so asking again would be asking
+   * twice — but it stays fully editable: the customer may decline, or want
+   * something the checker did not write down. `auto` remembers which ticks this
+   * form made, so un-ticking one Rekomendasi retracts only its own job and
+   * never a job a human chose.
+   */
+  const [jobs, setJobs] = useState<Record<string, { qty: number; sku?: string; brandType?: string; auto?: boolean }>>({});
+  const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
   const [makes, setMakes] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [makeKnown, setMakeKnown] = useState(false);
@@ -127,30 +165,51 @@ export default function CheckGoIntake() {
   useEffect(() => { if (branch) localStorage.setItem('branch', branch); }, [branch]);
   useEffect(() => { if (operator) localStorage.setItem('operator', operator); }, [operator]);
 
-  // Mechanics are per branch, so the list is refetched whenever the branch
-  // changes and any stale pick is dropped — carrying one across branches would
-  // send a mechanic Turboly refuses.
-  useEffect(() => {
-    if (!branch) { setMekanikList([]); setMekanik(''); setMekanikNote(null); return; }
-    let alive = true;
-    setMekanik('');
-    fetch(`/api/mechanics?branch=${encodeURIComponent(branch)}`)
-      .then((r) => r.json())
-      .then((o: { mechanics?: Array<{ code?: string; name?: string }>; note?: string }) => {
-        if (!alive) return;
-        const list = (o.mechanics ?? [])
-          .map((m) => ({ code: String(m.code ?? ''), name: String(m.name ?? '') }))
-          .filter((m) => m.code && m.name);
-        setMekanikList(list);
-        setMekanikNote(list.length === 0 ? (o.note ?? 'Daftar mekanik cabang ini kosong') : null);
-      })
-      .catch(() => { if (alive) { setMekanikList([]); setMekanikNote('Daftar mekanik gagal dimuat'); } });
-    return () => { alive = false; };
-  }, [branch]);
-
   useEffect(() => {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
   }, []);
+  useEffect(() => {
+    fetch('/api/service-options').then((r) => r.json()).then((d) => setSvcOpts(d.services ?? {})).catch(() => {});
+  }, []);
+
+  // The services the ticked Rekomendasi imply. A Set, because two tyre
+  // recommendations can name the same service card.
+  const recommended = useMemo(() => {
+    const out = new Set<string>();
+    for (const sec of CHECKGO_SECTIONS) {
+      for (const c of secRekom[sec.code] ?? []) {
+        const svc = REKOMENDASI_SERVICE[`${sec.code}:${c}`];
+        if (svc) out.add(svc);
+      }
+    }
+    for (const c of tireRekom) {
+      const svc = REKOMENDASI_SERVICE[`${CHECKGO_TIRE.code}:${c}`];
+      if (svc) out.add(svc);
+    }
+    return out;
+  }, [secRekom, tireRekom]);
+
+  // Mirror the recommendations into the job selection, touching ONLY the ticks
+  // this effect owns: a job the operator added by hand survives un-ticking its
+  // recommendation, and one they deliberately removed is not silently restored.
+  useEffect(() => {
+    setJobs((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const code of recommended) {
+        if (next[code]) continue;
+        // A 'pcs' service on this sheet is always per wheel, and a car has
+        // four — starting at 1 would make every tyre job wrong by default.
+        const unit = SERVICES.find((s) => s.code === code)?.unit;
+        next[code] = { qty: unit === 'pcs' ? 4 : 1, auto: true };
+        changed = true;
+      }
+      for (const [code, sel] of Object.entries(next)) {
+        if (sel.auto && !recommended.has(code)) { delete next[code]; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [recommended]);
   useEffect(() => {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnown(false); return; }
@@ -160,12 +219,34 @@ export default function CheckGoIntake() {
     return () => { live = false; };
   }, [merk]);
   useEffect(() => {
-    if (!branch) { setAdvisors([]); return; }
+    if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); setMekanikList([]); return; }
     let live = true;
+    // Both rosters are per store, so a pick made under the previous branch is
+    // dropped rather than carried into a store it does not belong to.
+    setSalesperson('');
+    fetch(`/api/mechanics?branch=${encodeURIComponent(branch)}`).then((r) => r.json())
+      .then((d: { mechanics?: Array<{ code?: string; name?: string }> }) => {
+        if (live) setMekanikList((d.mechanics ?? []).map((m) => ({ code: String(m.code ?? ''), name: String(m.name ?? '') })).filter((m) => m.name));
+      }).catch(() => { if (live) setMekanikList([]); });
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`).then((r) => r.json())
-      .then((d) => { if (live) setAdvisors(d.advisors ?? []); }).catch(() => {});
+      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } }).catch(() => {});
     return () => { live = false; };
   }, [branch]);
+
+  // The salesperson tracks the advisor for as long as nobody has overridden the
+  // box: pick an advisor who is on both rosters and the field fills itself;
+  // switch to a different advisor and it follows, instead of leaving the
+  // previous person credited. The moment someone chooses a salesperson by hand
+  // it stops following — a ref, not state, so the effect cannot loop on itself.
+  const salesAuto = useRef(true);
+  useEffect(() => {
+    if (!salespeople.length) return;
+    setSalesperson((prev) => {
+      if (prev && !salesAuto.current) return prev;
+      const m = salespeople.find((s) => s.name.toUpperCase() === advisor.trim().toUpperCase());
+      return m ? m.name : '';
+    });
+  }, [advisor, salespeople]);
 
   // PHONE-FIRST: typing the WA auto-populates the person + car(s); chips switch cars.
   const waDigits = wa.replace(/\D/g, '');
@@ -306,6 +387,7 @@ export default function CheckGoIntake() {
   const advisorOk = advisor.trim() !== '';
 
   // Estimasi optional — blank falls back to the 30-minute default.
+  const jobCount = Object.keys(jobs).length;
   const estimasiVal = estimasi.trim() === '' ? DEFAULT_ESTIMASI : Number(estimasi.trim());
   const estimasiOk = Number.isInteger(estimasiVal) && estimasiVal > 0;
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -314,15 +396,24 @@ export default function CheckGoIntake() {
   const modelUnknown = tipe.trim() !== '' && makeKnown && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = advisor.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === advisor.trim().toUpperCase());
 
-  // A branch whose mechanic list failed to load must not be locked out — but
-  // when the list is there, the check has to name who performed it.
-  const mekanikOk = mekanikList.length === 0 || mekanik !== '';
+  // Turboly stars BOTH Service Advisor and Salesperson — neither may be blank —
+  // and it fills them from two per-store rosters that only mostly overlap. So
+  // the salesperson is asked for outright, pre-selected to the advisor whenever
+  // she is on that roster too (the common case, no taps) and left blank when
+  // she is not, which is exactly the case that used to fail the push hours
+  // later in /admin instead of at the counter.
+  // A roster that never loaded must not lock the branch out: with no list we
+  // cannot tell who is eligible, so we send the advisor and let Turboly judge.
+  const salespersonKnown = salespeople.length > 0;
+  const effSalesperson = salespersonKnown ? salesperson.trim() : advisor.trim();
+  const salespersonOk = effSalesperson !== '';
+
   // The report IS the product being sold: every section answered, every wheel's
   // pressure recorded. "Semua baik" makes the healthy car eight taps.
   const reportOk =
     CHECKGO_SECTIONS.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
     CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '');
-  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && estimasiOk && mekanikOk && reportOk && custSigned && advSigned && !submitting;
+  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && salespersonOk && estimasiOk && reportOk && custSigned && advSigned && !submitting;
 
   async function submit() {
     setSubmitting(true);
@@ -352,12 +443,21 @@ export default function CheckGoIntake() {
       complaint: null,
       estimasiMinutes: estimasiVal,
       serviceAdvisorName: advisor || null,
-      salespersonName: advisor || null,
-      // Carried so the Work Order can be assigned without asking again. Both
-      // are sent: the code is what Turboly matches on, the name is what a human
-      // reads on the board.
-      mechanicCode: mekanik || null,
-      mechanicName: mekanikList.find((m) => m.code === mekanik)?.name ?? null,
+      salespersonName: effSalesperson || null,
+      // Who did the check — the paper's "Diperiksa Oleh". Name only: the Work
+      // Order assignee is a Turboly id and is chosen on the flow board.
+      mechanicName: inspector.trim() || null,
+      // The services the checker recommended and the counter confirmed. These
+      // join the fixed General Check line on the Turboly order; the server
+      // decides what "filled in" means, so this sends exactly what is ticked.
+      jobLines: SERVICES.filter((s) => jobs[s.code]).map((s) => ({
+        serviceCode: s.code,
+        ordered: true,
+        qty: jobs[s.code]!.qty,
+        quotedPrice: null,
+        chosenSku: jobs[s.code]!.sku || svcOpts[s.code]?.defaultSku || null,
+        keterangan: jobs[s.code]!.brandType?.trim() || null,
+      })),
       // The whole sheet goes out as CODES, blanks included: the server is the
       // one place that decides what counts as "filled", so this form and
       // /checkgo/sheet can never disagree about it.
@@ -426,11 +526,14 @@ export default function CheckGoIntake() {
     setSecVerdict({}); setItemVerdict({}); setReading({});
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
     setTire({}); setTireRekom([]); setTireLain([]);
+    setJobs({});
     sigCust.current?.clear();
     sigAdv.current?.clear();
     setAdvSigned(false);
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
+    setSalesperson('');
+    setInspector('');
   }
 
   return (
@@ -533,11 +636,16 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          {/* One fixed service line and one optional number — a whole card of
-              chrome for that was scroll distance, not information. */}
+          {/* The fixed line and one optional number — a whole card of chrome
+              for that was scroll distance, not information. The count of extra
+              jobs is here because they are chosen much further down the page:
+              this is the only place the whole order is visible at once. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className="label" style={{ marginBottom: 0 }}>Pekerjaan</span>
-            <span style={{ fontWeight: 700, fontSize: 13.5 }}>General Check (JAS-NAWJAS-GC) · 1×</span>
+            <span style={{ fontWeight: 700, fontSize: 13.5 }}>
+              General Check (JAS-NAWJAS-GC) · 1×
+              {jobCount > 0 && ` + ${jobCount} pekerjaan`}
+            </span>
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Estimasi</span>
               <input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" placeholder="30" style={{ ...(!estimasiOk ? { borderColor: '#dc2626' } : {}), width: 64, fontSize: 16, padding: '4px 8px' }} />
@@ -774,6 +882,76 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
+          <div className="label">Pekerjaan yang diorder</div>
+          <div className="hint" style={{ fontSize: 12, color: 'var(--muted, #667)', marginBottom: 8 }}>
+            Otomatis tercentang dari Rekomendasi di atas — ubah kalau customer menolak atau minta tambahan.
+            General Check selalu ikut.
+          </div>
+          <div className="tiles">
+            {SERVICES.map((s) => {
+              const sel = jobs[s.code];
+              const on = !!sel;
+              const fromSheet = !!sel?.auto;
+              return (
+                <button
+                  key={s.code}
+                  type="button"
+                  className={`tile ${on ? 'on' : ''}`}
+                  // A manual tap always wins, and takes ownership: clearing
+                  // `auto` stops the Rekomendasi effect from ever reclaiming it.
+                  onClick={() =>
+                    setJobs((p) => {
+                      const next = { ...p };
+                      if (next[s.code]) delete next[s.code];
+                      else next[s.code] = { qty: s.unit === 'pcs' ? 4 : 1 };
+                      return next;
+                    })
+                  }
+                >
+                  {s.label}
+                  {fromSheet && <span style={{ display: 'block', fontSize: 10, opacity: 0.75 }}>dari rekomendasi</span>}
+                  {on && s.unit !== 'check' && (
+                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                      <input
+                        type="number"
+                        min={1}
+                        value={sel.qty}
+                        onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: Math.max(1, Number(e.target.value) || 1) } }))}
+                        style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
+                      />
+                      <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>
+                    </span>
+                  )}
+                  {on && s.catalog?.length ? (
+                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'block', marginTop: 6 }}>
+                      <ProductInput
+                        cat={s.catalog[0]!}
+                        value={sel.brandType ?? ''}
+                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v } }))}
+                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
+                        style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+                      />
+                    </span>
+                  ) : null}
+                  {/* The variant dropdown is what separates Ganti Ban from
+                      Rotasi Ban — both recommendations tick the same card. */}
+                  {on && svcOpts[s.code]?.options?.length ? (
+                    <select
+                      value={sel.sku || svcOpts[s.code]!.defaultSku}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: e.target.value } }))}
+                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
+                    >
+                      {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
+                    </select>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="card">
           <div className="label">Customer</div>
           <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama — WAJIB" style={!namaOk ? { borderColor: '#dc2626' } : undefined} />
           {!namaOk && <div className="req-note">⚠ wajib diisi</div>}
@@ -784,24 +962,35 @@ export default function CheckGoIntake() {
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#dc2626' } : undefined} />
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
-          <div className="label" style={{ marginTop: 12 }}>Mekanik yang mengerjakan — WAJIB</div>
-          {mekanikList.length > 0 ? (
-            <select value={mekanik} onChange={(e) => setMekanik(e.target.value)} style={!mekanikOk ? { borderColor: '#dc2626' } : undefined}>
-              <option value="">— pilih mekanik —</option>
-              {mekanikList.map((m) => (
-                <option key={m.code} value={m.code}>{m.name}</option>
-              ))}
-            </select>
-          ) : (
-            <div className="warn-note">⚠ {mekanikNote ?? 'Pilih cabang dulu'} — Work Order nanti diisi mekanik lewat papan alur.</div>
-          )}
-          {!mekanikOk && <div className="req-note">⚠ wajib — pemeriksa harus tercatat</div>}
+          <div className="label" style={{ marginTop: 12 }}>Diperiksa oleh (mekanik)</div>
+          <input list="mekanik-list-cg" value={inspector} onChange={(e) => setInspector(e.target.value)} placeholder={mekanikList.length ? 'Pilih dari daftar / ketik' : 'Nama pemeriksa — boleh dikosongkan'} />
+          <datalist id="mekanik-list-cg">{mekanikList.map((m) => <option key={m.code} value={m.name} />)}</datalist>
+          <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
+            Tercetak di &quot;Diperiksa Oleh&quot; dan dikirim ke customer lewat WhatsApp. Kosong = nama advisor.
+          </div>
 
-          <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
+          <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor) — WAJIB</div>
           <input list="advisor-list-cg" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           <datalist id="advisor-list-cg">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
+
+          {/* A select, not a datalist: a typo here is the exact failure this
+              replaces, and unlike the advisor there is no "new salesperson"
+              case — the name must already exist in Turboly. */}
+          <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
+          {salespersonKnown ? (
+            <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={!salespersonOk ? { borderColor: '#dc2626' } : undefined}>
+              <option value="">— pilih salesperson —</option>
+              {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
+            </select>
+          ) : (
+            <div className="warn-note">⚠ {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — order memakai nama advisor.</div>
+          )}
+          {salespersonKnown && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
+            <div className="warn-note">⚠ {advisor.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
+          )}
+          {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
         </div>
 
         <div className="card">

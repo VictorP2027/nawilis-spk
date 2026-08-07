@@ -1,5 +1,5 @@
 import { collections, transition, loadMirror } from '@spk/core';
-import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib } from '@spk/core/turboly';
+import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib, fillServiceOrderInspection, inspectionRowsFromCheckGo } from '@spk/core/turboly';
 import type { BranchSinks } from './sessions.js';
 import { config } from './config.js';
 
@@ -268,6 +268,27 @@ export async function pushQueued(
         }
         out.pushed++;
         log(`✓ ${doc._id} → Service Order ${res.serviceOrderNo}${res.approved === false ? ' ⚠ MASIH DRAFT (approve tidak terkonfirmasi)' : res.approved ? ' [APPROVED]' : ''}`);
+
+        // Check & Go findings → the SO's Inspection List (Turboly's own
+        // answer to "where do the selections go": the Inspection List becomes
+        // the SRO's notes and feeds /reports/inspection_lists). Best-effort:
+        // a miss here never fails a push whose order already exists.
+        const checkGo = (doc as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null }> } }).checkGo;
+        const soId = /\/service_orders\/(\d+)/.exec(res.serviceOrderUrl ?? '')?.[1];
+        if (String(doc.docType) === 'CHECK_AND_GO' && soId && (checkGo?.inspectionItems?.length ?? 0) > 0) {
+          try {
+            const rows = inspectionRowsFromCheckGo(checkGo!.inspectionItems!);
+            await fillServiceOrderInspection(
+              { baseUrl: config.turbolyBaseUrl, username: process.env.TURBOLY_USERNAME ?? '', password: process.env.TURBOLY_PASSWORD ?? '' },
+              soId,
+              rows,
+              'NAWILIS CHECK & GO',
+            );
+            log(`  ✓ inspection list terisi (${rows.length} baris)`);
+          } catch (e) {
+            log(`  ⚠ inspection list gagal diisi (SO tetap utuh): ${(e as Error).message ?? e}`);
+          }
+        }
 
         const v = await branchSinks.withSink(claimed.branchCode, (sink) =>
           sink.verifyByToken({ ...claimed, turboly: pushedTurboly }),

@@ -45,6 +45,11 @@ export default function CheckGoSheet() {
   const [submitting, setSubmitting] = useState(false);
 
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);
+  // Turboly's Salesperson is a SEPARATE per-store roster; 11 of 26 stores have
+  // an advisor who is not on it, and reusing the advisor's name for both fields
+  // is what makes those orders fail with "Salesperson can't be blank".
+  const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
+  const [salesperson, setSalesperson] = useState('');
   const [makes, setMakes] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [makeKnownInModels, setMakeKnownInModels] = useState(false);
@@ -63,14 +68,27 @@ export default function CheckGoSheet() {
     return () => { live = false; };
   }, [merk]);
   useEffect(() => {
-    if (!branch) { setAdvisors([]); return; }
+    if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); return; }
     let live = true;
+    setSalesperson(''); // both rosters are per store — a stale pick is a wrong pick
     fetch(`/api/advisors?branch=${encodeURIComponent(branch)}`)
       .then((r) => r.json())
-      .then((d) => { if (live) setAdvisors(d.advisors ?? []); })
-      .catch(() => { if (live) setAdvisors([]); });
+      .then((d) => { if (live) { setAdvisors(d.advisors ?? []); setSalespeople(d.salespeople ?? []); } })
+      .catch(() => { if (live) { setAdvisors([]); setSalespeople([]); } });
     return () => { live = false; };
   }, [branch]);
+
+  // The salesperson follows the advisor while nobody has overridden the box,
+  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
+  const salesAuto = useRef(true);
+  useEffect(() => {
+    if (!salespeople.length) return;
+    setSalesperson((prev) => {
+      if (prev && !salesAuto.current) return prev;
+      const m = salespeople.find((s) => s.name.toUpperCase() === menerima.trim().toUpperCase());
+      return m ? m.name : '';
+    });
+  }, [menerima, salespeople]);
 
   // PHONE-FIRST lookup: WA number → person + car(s); chips switch cars.
   const [custVehicles, setCustVehicles] = useState<CustVehicle[]>([]);
@@ -156,6 +174,11 @@ export default function CheckGoSheet() {
   const makeUnknown = merk.trim() !== '' && makes.length > 0 && !makes.some((m) => m.toUpperCase() === merk.trim().toUpperCase());
   const modelUnknown = tipe.trim() !== '' && makeKnownInModels && models.length > 0 && !models.some((m) => m.toUpperCase() === tipe.trim().toUpperCase());
   const advisorUnknown = menerima.trim() !== '' && advisors.length > 0 && !advisors.some((a) => a.name.toUpperCase() === menerima.trim().toUpperCase());
+  // Turboly stars both Service Advisor and Salesperson. An unloaded roster
+  // means "we cannot tell" — send the advisor and let Turboly judge, rather
+  // than lock the branch out.
+  const salespersonKnown = salespeople.length > 0;
+  const effSalesperson = salespersonKnown ? salesperson.trim() : menerima.trim();
   const hargaVal = Number(harga.replace(/[^\d]/g, ''));
   const hargaOk = Number.isFinite(hargaVal) && hargaVal > 0;
   const waNat = wa.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
@@ -169,6 +192,7 @@ export default function CheckGoSheet() {
     if (!branch) { setResult({ ok: false, text: 'Pilih cabang dulu (di bawah).' }); setSubmitting(false); return; }
     if (!waOk) { setResult({ ok: false, text: 'Nomor WhatsApp Indonesia (+62) wajib — mulai 08… atau +62 8…, contoh 08123456789.' }); setSubmitting(false); return; }
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
+    if (!effSalesperson) { setResult({ ok: false, text: 'Salesperson wajib dipilih — Turboly menolak order tanpa salesperson.' }); setSubmitting(false); return; }
     if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
     const required: Array<[string, string]> = [[noPol, 'No. Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [tipe, 'Tipe'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun']];
     const missing = required.filter(([v]) => !String(v).trim()).map(([, label]) => label);
@@ -199,7 +223,7 @@ export default function CheckGoSheet() {
       complaint: null,
       estimasiMinutes: Number.isInteger(estVal) && estVal > 0 ? estVal : DEFAULT_ESTIMASI,
       serviceAdvisorName: menerima || null,
-      salespersonName: menerima || null,
+      salespersonName: effSalesperson || null,
       harga: hargaVal,
       inspectionItems: insp
         .filter((r) => r.item.trim() !== '')
@@ -390,6 +414,18 @@ export default function CheckGoSheet() {
             </datalist>
             {!menerima.trim() && <div className="err-inline">⚠ Wajib — Turboly menolak order tanpa advisor.</div>}
             {advisorUnknown && <div className="warn-inline">⚠ Nama tidak ada di daftar advisor cabang ini — harus sama persis dengan nama di Turboly.</div>}
+            {/* Turboly requires a Salesperson too, from its own per-store list. */}
+            {salespersonKnown ? (
+              <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
+                <option value="">— pilih Salesperson — WAJIB</option>
+                {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
+              </select>
+            ) : (
+              <div className="warn-inline">⚠ Daftar salesperson cabang kosong — order memakai nama advisor.</div>
+            )}
+            {salespersonKnown && menerima.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === menerima.trim().toUpperCase()) && (
+              <div className="warn-inline">⚠ {menerima.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
+            )}
           </div>
         </div>
 

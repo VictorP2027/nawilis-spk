@@ -244,3 +244,20 @@ svg.car .zone.on { fill: rgba(0, 72, 204, .22); stroke: var(--nawilis); stroke-w
 
 /* Flow board: why a queued job is waiting (retry reason / vendor outage) */
 .fb-waitwhy { font-size: 10.5px; color: #8a6d3b; margin-top: 3px; line-height: 1.35; }
+
+/* ── Printing the sheets ──────────────────────────────────────────────────
+   Browsers drop background colours from printouts unless asked not to, and
+   every section header on these forms is white-on-Nawilis-blue — so the
+   printed Check & Go and SPK came out with invisible headings and blank
+   verdict pills. print-color-adjust:exact is what puts the blue on paper.
+   The screen chrome (the "Cetak" button, the page's grey backdrop, the drop
+   shadow) has no business on the sheet either. */
+@media print {
+  *, *::before, *::after { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .no-print { display: none !important; }
+  .sheet-wrap { background: #fff; min-height: 0; padding: 0; }
+  .sheet { width: 100%; max-width: none; margin: 0; box-shadow: none; }
+  /* A row split across a page break loses the verdict beside its label. */
+  table.pk tr, .sheet .sign { break-inside: avoid; }
+}
+@page { size: A4 portrait; margin: 10mm; }

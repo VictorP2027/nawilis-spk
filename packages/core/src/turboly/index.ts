@@ -9,6 +9,7 @@ export * from './payload.js';
 export * from './flowSink.js';
 export * from './httpRegister.js';
 export * from './httpServiceOrder.js';
+export * from './httpInspection.js';
 export * from './httpVehicle.js';
 
 import { RpaSink } from './rpaSink.js';
