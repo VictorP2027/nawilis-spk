@@ -46,7 +46,7 @@ export const SignaturePad = forwardRef<SigHandle, { onInk?: (has: boolean) => vo
     g.lineWidth = 2;
     g.lineCap = 'round';
     g.lineJoin = 'round';
-    g.strokeStyle = '#1a2b6d';
+    g.strokeStyle = '#1E2E91';
     if (snap) g.drawImage(snap, 0, 0, snap.width, snap.height, 0, 0, c.offsetWidth, c.offsetHeight);
   };
   useEffect(() => {

@@ -42,7 +42,7 @@ const CHIPS: Array<{ key: string; label: string }> = [
 
 const MODE_BADGE: Record<string, { text: string; bg: string; fg: string }> = {
   live: { text: '✓ Terkirim', bg: '#e7f6ec', fg: '#116b2e' },
-  manual: { text: '📱 Manual', bg: '#e8f0fe', fg: '#1a4fba' },
+  manual: { text: '📱 Manual', bg: '#EAF0FF', fg: '#0048CC' },
   requested: { text: '⏳ Antre', bg: '#fff4d6', fg: '#8a6100' },
   failed: { text: '✗ Gagal', bg: '#fdeaea', fg: '#a11a1a' },
 };
@@ -331,13 +331,13 @@ export default function AlertsLedgerPage() {
       <style>{`
         .al-page { max-width: 980px; margin: 0 auto; padding: 18px 14px 60px; }
         .al-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-        .al-title { font-size: 20px; font-weight: 900; color: var(--nawilis, #0a3d8f); }
+        .al-title { font-size: 20px; font-weight: 900; color: var(--nawilis, #1E2E91); }
         .al-total { font-size: 12.5px; color: #5a6b87; }
         .al-tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
         .al-search { flex: 1 1 220px; padding: 9px 12px; border: 1px solid #ccd5e3; border-radius: 8px; font-size: 14px; }
         .al-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
         .al-chip { border: 1px solid #ccd5e3; background: #fff; border-radius: 999px; padding: 5px 11px; font-size: 12.5px; cursor: pointer; }
-        .al-chip.on { background: var(--nawilis, #0a3d8f); border-color: var(--nawilis, #0a3d8f); color: #fff; }
+        .al-chip.on { background: var(--nawilis, #1E2E91); border-color: var(--nawilis, #1E2E91); color: #fff; }
         .al-tablewrap { margin-top: 14px; overflow-x: auto; border: 1px solid #e3e9f2; border-radius: 10px; background: #fff; }
         table.al { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 640px; }
         table.al th { text-align: left; padding: 9px 10px; background: #f4f6fb; color: #40506b; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
@@ -349,16 +349,16 @@ export default function AlertsLedgerPage() {
         .al-plate a:hover { text-decoration: underline; }
         .al-empty { padding: 26px; text-align: center; color: #7d8aa0; font-size: 13.5px; }
         .al-note { margin-top: 8px; font-size: 12px; color: #8a6100; }
-        .al-back { font-size: 13px; text-decoration: none; color: var(--nawilis, #0a3d8f); }
+        .al-back { font-size: 13px; text-decoration: none; color: var(--nawilis, #1E2E91); }
         .al-err { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #fdeaea; color: #a11a1a; font-size: 13px; }
-        .al-check { width: 17px; height: 17px; accent-color: var(--nawilis, #0a3d8f); cursor: pointer; }
-        .al-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid #e3e9f2; box-shadow: 0 -4px 16px rgba(10,61,143,.14); flex-wrap: wrap; }
+        .al-check { width: 17px; height: 17px; accent-color: var(--nawilis, #1E2E91); cursor: pointer; }
+        .al-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid #e3e9f2; box-shadow: 0 -4px 16px rgba(30,46,145,.14); flex-wrap: wrap; }
         .al-btn { padding: 9px 16px; border-radius: 8px; border: 1px solid #ccd5e3; background: #fff; font-size: 13.5px; font-weight: 700; cursor: pointer; }
-        .al-btn.primary { background: var(--nawilis, #0a3d8f); border-color: var(--nawilis, #0a3d8f); color: #fff; }
+        .al-btn.primary { background: var(--nawilis, #1E2E91); border-color: var(--nawilis, #1E2E91); color: #fff; }
         .al-btn:disabled { opacity: .55; cursor: default; }
         .al-ovr { position: fixed; inset: 0; z-index: 90; background: rgba(10, 20, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
         .al-modal { background: #fff; border-radius: 12px; max-width: 480px; width: 100%; padding: 18px; max-height: 85vh; overflow-y: auto; }
-        .al-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis, #0a3d8f); }
+        .al-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis, #1E2E91); }
         .al-msg { margin-top: 10px; padding: 10px; background: #f4f6fb; border-radius: 8px; font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow-y: auto; font-family: inherit; }
         .al-msgedit { display: block; width: 100%; border: 1px solid #ccd5e3; resize: vertical; line-height: 1.45; }
         .al-msgedit:disabled { opacity: .6; }

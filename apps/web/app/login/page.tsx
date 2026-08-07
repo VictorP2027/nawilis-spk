@@ -22,7 +22,7 @@ export default function Login() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#dce4f0' }}>
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#EAF0FF' }}>
       <form onSubmit={submit} className="card" style={{ width: 340, textAlign: 'center' }}>
         <div style={{ fontWeight: 900, fontSize: 24, color: 'var(--nawilis)', letterSpacing: 1 }}>NAWILIS</div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 16 }}>SPK — Masuk staf</div>

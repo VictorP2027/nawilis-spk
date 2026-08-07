@@ -314,7 +314,7 @@ export default function Sheet() {
         <div className="hd">
           <div className="logo">
             <svg className="mark" viewBox="0 0 40 40" aria-label="NAWILIS">
-              <rect width="40" height="40" rx="6" fill="#0a3d8f" />
+              <rect width="40" height="40" rx="6" fill="#1E2E91" />
               <path d="M8 30 L16 10 L20 20 L24 10 L32 30 L26 30 L22 21 L20 25 L18 21 L14 30 Z" fill="#fff" />
             </svg>
             <div className="word">NAWILIS<small>SPOORING · BALANCING SPECIALIST</small></div>

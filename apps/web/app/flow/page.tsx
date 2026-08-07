@@ -1087,7 +1087,7 @@ export default function FlowBoard() {
         .fb-col-h { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 800; letter-spacing: .7px; text-transform: uppercase; color: var(--nawilis); padding: 2px 4px 6px; }
         .fb-count { background: #fff; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; font-weight: 700; padding: 0 8px; color: #55627a; }
         .fb-empty { border: 1.5px dashed #c4cede; border-radius: 10px; text-align: center; color: #9aa6ba; font-size: 12px; padding: 14px 0; }
-        .fb-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(10,61,143,.07); font-size: 13px; }
+        .fb-card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 11px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(30,46,145,.07); font-size: 13px; }
         .fb-card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
         .fb-plate { font-weight: 800; font-size: 14.5px; letter-spacing: .3px; }
         .fb-cust { font-size: 12.5px; color: #33415c; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1110,7 +1110,7 @@ export default function FlowBoard() {
         .fb-archbtn { border: 0; background: none; padding: 0; cursor: pointer; font-size: inherit; line-height: inherit; }
         .fb-archbtn:hover { filter: brightness(.85); }
         .fb-selchk { margin-left: 2px; width: 16px; height: 16px; flex: none; cursor: pointer; accent-color: var(--nawilis); }
-        .fb-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(10,61,143,.14); }
+        .fb-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(30,46,145,.14); }
         .fb-bulkbar .btn { width: auto; }
         .fb-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis); }
         .fb-msub { font-size: 12.5px; color: #33415c; margin-top: 4px; }

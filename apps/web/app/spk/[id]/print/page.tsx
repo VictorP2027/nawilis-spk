@@ -118,7 +118,7 @@ export default function PrintSpk() {
               const l = lines.get(s.code);
               const on = !!l?.ordered;
               return (
-                <tr key={s.code} style={on ? { background: '#eef4ff' } : undefined}>
+                <tr key={s.code} style={on ? { background: '#EAF0FF' } : undefined}>
                   <td style={{ textAlign: 'center' }}>{i + 1}</td>
                   <td>{s.label.toUpperCase()}{s.tag ? ` (${s.tag})` : ''}</td>
                   <td style={{ textAlign: 'center', fontWeight: 700 }}>
@@ -131,7 +131,7 @@ export default function PrintSpk() {
               );
             })}
             {extraLines.map((l, i) => (
-              <tr key={l.serviceCode} style={{ background: '#eef4ff' }}>
+              <tr key={l.serviceCode} style={{ background: '#EAF0FF' }}>
                 <td style={{ textAlign: 'center' }}>{SERVICES.length + i + 1}</td>
                 <td>{l.serviceCode}</td>
                 <td style={{ textAlign: 'center', fontWeight: 700 }}>{l.qty > 1 ? l.qty : '✓'}</td>

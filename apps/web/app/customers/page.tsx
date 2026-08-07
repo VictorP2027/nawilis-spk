@@ -675,10 +675,10 @@ export default function Customers(): React.ReactElement {
     <>
       <style>{`
         .cst-live { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px;
-                    background: #eef3ff; color: #1b3a6b; border-left: 4px solid var(--nawilis-2); }
+                    background: #EAF0FF; color: #1E2E91; border-left: 4px solid var(--nawilis-2); }
         .cst-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--nawilis-2); flex: none;
                    animation: cst-pulse 1.1s ease-in-out infinite; }
-        .cst-bar { height: 3px; border-radius: 3px; margin-top: 8px; background: #d6e2fb; overflow: hidden; }
+        .cst-bar { height: 3px; border-radius: 3px; margin-top: 8px; background: #EAF0FF; overflow: hidden; }
         .cst-bar i { display: block; height: 100%; width: 38%; background: var(--nawilis-2); animation: cst-slide 1.4s ease-in-out infinite; }
         @keyframes cst-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
         @keyframes cst-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }

@@ -1,7 +1,9 @@
 :root {
-  --nawilis: #0a3d8f;      /* NAWILIS royal navy */
-  --nawilis-2: #1763d6;    /* brighter blue accent */
-  --nawilis-tint: #e6eefb; /* light blue for section headers / selected fills */
+  --nawilis: #1E2E91;      /* NAWILIS royal navy */
+  --nawilis-2: #0048CC;    /* brighter blue accent */
+  --nawilis-tint: #EAF0FF; /* light blue for section headers / selected fills */
+  --nawilis-deep: #001B5E;
+  --accent: #FFD400;
   --bg: #eef2f8;
   --card: #ffffff;
   --line: #e2e2e6;
@@ -15,7 +17,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 
-.topbar { background: var(--nawilis); color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; }
+.topbar { background: var(--nawilis); color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; border-bottom: 3px solid #FFD400; }
 .topbar .brand { font-weight: 800; letter-spacing: 0.5px; }
 .topbar .branch { font-size: 14px; background: rgba(255,255,255,.15); padding: 4px 10px; border-radius: 999px; }
 
@@ -43,14 +45,14 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .finding { padding: 8px 10px; border-radius: 8px; margin-top: 6px; font-size: 14px; }
 .finding.BLOCK { background: #fdecea; color: var(--block); }
 .finding.CONFIRM { background: #fff6e0; color: var(--warn); }
-.finding.WARN { background: #eef3ff; color: #315; }
+.finding.WARN { background: #EAF0FF; color: #1E2E91; }
 
 .hist { font-size: 14px; color: var(--muted); background: #f0f7f0; border: 1px solid #cfe6cf; border-radius: 10px; padding: 10px 12px; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .badge.green { background: #e6f4ea; color: var(--ok); }
 .badge.yellow { background: #fff6e0; color: var(--warn); }
-.badge.blue { background: #e7effd; color: #2b57b3; }
+.badge.blue { background: #EAF0FF; color: #0048CC; }
 .badge.red { background: #fdecea; color: var(--block); }
 .badge.gray { background: #eee; color: #555; }
 
@@ -61,7 +63,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .sheet {
   width: 820px; max-width: 100%; margin: 0 auto; background: #ffffff;
   border: 2px solid var(--nawilis); padding: 14px 16px; color: #14213d;
-  font-family: Arial, Helvetica, sans-serif; box-shadow: 0 6px 24px rgba(10,61,143,.28);
+  font-family: Arial, Helvetica, sans-serif; box-shadow: 0 6px 24px rgba(30,46,145,.28);
 }
 .sheet * { box-sizing: border-box; }
 .sheet input, .sheet textarea { font-size: 13px; padding: 2px 4px; border: none; border-bottom: 1px solid #9fb2d4; background: transparent; width: 100%; font-family: inherit; color: #14213d; }
@@ -97,7 +99,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 .sheet .opt.on { background: var(--nawilis); color: #fff; }
 .sheet .car { width: 100%; }
 .sheet .zone { fill: transparent; stroke: #6b82ad; stroke-width: 1; cursor: pointer; }
-.sheet .zone.on { fill: rgba(23,99,214,.22); stroke: var(--nawilis); stroke-width: 1.5; }
+.sheet .zone.on { fill: rgba(0,72,204,.22); stroke: var(--nawilis); stroke-width: 1.5; }
 .sheet .auth { font-size: 9.5px; margin: 8px 0; line-height: 1.3; color: #33415c; }
 .sheet .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sheet .sign .b { border: 1px solid var(--nawilis); border-radius: 8px; min-height: 74px; padding: 4px 6px 6px; font-size: 10px; position: relative; }
@@ -134,7 +136,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
     border: 1.5px solid #b9c6de; border-radius: 10px; background: #fff;
   }
   .sheet input:focus, .sheet textarea:focus, .sheet select:focus {
-    border-color: var(--nawilis-2); box-shadow: 0 0 0 3px rgba(23, 99, 214, .15);
+    border-color: var(--nawilis-2); box-shadow: 0 0 0 3px rgba(0, 72, 204, .15);
   }
   .sheet input[type=radio], .sheet input[type=checkbox] {
     min-height: 0; padding: 0; border: none; width: 20px; height: 20px; flex: none;
@@ -186,7 +188,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--nawilis-2);
 
   /* Sticky submit bar */
   .sheet-actions { position: sticky; bottom: 8px; z-index: 20; }
-  .sheet-actions .btn.primary { min-height: 52px; font-size: 16px; box-shadow: 0 6px 18px rgba(10, 61, 143, .35); }
+  .sheet-actions .btn.primary { min-height: 52px; font-size: 16px; box-shadow: 0 6px 18px rgba(30, 46, 145, .35); }
 }
 
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -212,7 +214,7 @@ th { color: var(--muted); font-weight: 600; }
 
 /* Damage diagram zones (used by both / and /sheet) */
 svg.car .zone { fill: transparent; stroke: #6b82ad; stroke-width: 1; cursor: pointer; }
-svg.car .zone.on { fill: rgba(23, 99, 214, .22); stroke: var(--nawilis); stroke-width: 1.5; }
+svg.car .zone.on { fill: rgba(0, 72, 204, .22); stroke: var(--nawilis); stroke-width: 1.5; }
 
 /* On-glass signature pad (sheet sign boxes) */
 .sigpad { position: relative; margin-top: 4px; }

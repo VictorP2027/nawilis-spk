@@ -562,7 +562,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
               <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
             ))}
-            <rect x="80" y="8" width="200" height="500" rx="34" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
+            <rect x="80" y="8" width="200" height="500" rx="34" fill="#EAF0FF" stroke="var(--nawilis)" strokeWidth="1.5" />
             {DAMAGE_ZONES.map((z) => {
               const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
               const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
