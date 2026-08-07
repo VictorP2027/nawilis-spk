@@ -94,7 +94,8 @@ export default function Admin() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `spk-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+      // .zip since 2026-08-07: backup.json + signatures/ as real PNGs.
+      a.download = `spk-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.zip`;
       a.click();
       URL.revokeObjectURL(url);
       // 2. The deletion needs the word typed, not a reflex OK.
