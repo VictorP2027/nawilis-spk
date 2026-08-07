@@ -1,5 +1,6 @@
 'use client';
 
+import BrandMark from './../components/BrandMark';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
 import { ProductInput } from '../../lib/productSuggest';
@@ -435,7 +436,7 @@ export default function CheckGoIntake() {
   return (
     <>
       <div className="topbar">
-        <span className="brand">NAWILIS · CHECK &amp; GO</span>
+        <BrandMark page="CHECK & GO" />
         <button type="button" className="branch" style={{ border: 'none', cursor: 'pointer', font: 'inherit' }} onClick={() => setShowSetup((v) => !v)} title="Ganti cabang / petugas">
           {BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'} ▾
         </button>

@@ -1,5 +1,6 @@
 'use client';
 
+import BrandMark from './../components/BrandMark';
 import { useEffect, useState, useCallback } from 'react';
 
 interface Summary {
@@ -151,7 +152,7 @@ export default function Admin() {
   return (
     <>
       <div className="topbar">
-        <span className="brand">NAWILIS · SPK — Dashboard</span>
+        <BrandMark page="DASHBOARD" />
         <span className="branch">{s ? RUNG_LABEL[s.degradation.rung] : '…'}</span>
       </div>
       <div className="wrap" style={{ maxWidth: 1000 }}>

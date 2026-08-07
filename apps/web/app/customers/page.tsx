@@ -1,5 +1,6 @@
 'use client';
 
+import BrandMark from './../components/BrandMark';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BRANCHES } from '../../lib/refdata.client';
 
@@ -696,7 +697,7 @@ export default function Customers(): React.ReactElement {
       `}</style>
 
       <div className="topbar">
-        <span className="brand">NAWILIS · CUSTOMER BARU</span>
+        <BrandMark page="CUSTOMER BARU" />
         <span className="branch">{BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih store'}</span>
       </div>
       <div className="wrap">

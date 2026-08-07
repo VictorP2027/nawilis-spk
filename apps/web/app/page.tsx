@@ -1,5 +1,6 @@
 'use client';
 
+import BrandMark from './components/BrandMark';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { SignaturePad, type SigHandle } from './components/SignaturePad';
 import { SERVICES, BRANCHES, DAMAGE_ZONES, CONDITION_ITEMS } from '../lib/refdata.client';
@@ -340,7 +341,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   return (
     <>
       <div className="topbar">
-        <span className="brand">NAWILIS · SPK</span>
+        <BrandMark page="SPK" />
         <button type="button" className="branch" style={{ border: 'none', cursor: 'pointer', font: 'inherit' }} onClick={() => setShowSetup((v) => !v)} title="Ganti cabang / petugas">
           {BRANCHES.find((b) => b.code === branch)?.name ?? 'Pilih cabang'} ▾
         </button>

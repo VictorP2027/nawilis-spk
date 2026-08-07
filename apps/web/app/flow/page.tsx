@@ -13,6 +13,7 @@
  * failed jobs render a red error chip with [Coba lagi].
  */
 
+import BrandMark from './../components/BrandMark';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1118,7 +1119,7 @@ export default function FlowBoard() {
       `}</style>
 
       <div className="topbar">
-        <span className="brand">NAWILIS · FLOW</span>
+        <BrandMark page="FLOW" />
         <span className="branch">{filtered.length} dokumen aktif{failedCount > 0 ? ` · ${failedCount} gagal` : ''}</span>
       </div>
 
