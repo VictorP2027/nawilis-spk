@@ -492,12 +492,22 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
             disabled={!data || posting}
             onClick={() => {
               if (!data) return;
-              window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+              // A blocked popup means nothing was sent — refuse to stamp.
+              const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+              if (tab === null) {
+                setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
+                return;
+              }
               void fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ by: 'flow-board', manual: true }),
-              }).then((r) => { if (r.ok) onDone(row._id); });
+              }).then((r) => {
+                if (r.ok) onDone(row._id);
+                else setErr('Stempel gagal — jika pesan sudah terkirim di WhatsApp, jangan kirim ulang; muat ulang halaman.');
+              }).catch(() => {
+                setErr('Jaringan bermasalah saat menandai — jika pesan sudah terkirim, jangan kirim ulang.');
+              });
             }}
           >
             📱 Kirim manual (WhatsApp Web)
@@ -529,6 +539,8 @@ function BulkManualModal({ targets, onClose, onSent }: {
   const [err, setErr] = useState<string | null>(null);
   const [sentCount, setSentCount] = useState(0);
   const [skipped, setSkipped] = useState<string[]>([]);
+  const [failedMarks, setFailedMarks] = useState<string[]>([]);
+  const [marking, setMarking] = useState(false);
   const row = idx < targets.length ? targets[idx] : null;
 
   useEffect(() => {
@@ -547,27 +559,55 @@ function BulkManualModal({ targets, onClose, onSent }: {
     return () => { live = false; };
   }, [row]);
 
-  function openAndMark() {
-    if (!row || !data) return;
+  async function openAndMark() {
+    if (!row || !data || marking) return;
     // The user's click is the gesture that lets this tab open — one per step,
-    // so popup blockers stay quiet.
-    window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
-    void fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ by: 'flow-board-bulk-manual', manual: true }),
-    }).then((r) => { if (r.ok) onSent(row._id); });
-    setSentCount((n) => n + 1);
+    // so popup blockers stay quiet. A strict blocker still returns null, and
+    // then nothing was sent: stamping would bury the customer, so refuse.
+    const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+    if (tab === null) {
+      setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
+      return;
+    }
+    // Await the stamp before advancing: a failed stamp must be reported, not
+    // counted as sent — the stamp is the only thing stopping a re-send.
+    setMarking(true);
+    try {
+      const res = await fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by: 'flow-board-bulk-manual', manual: true }),
+      });
+      if (res.ok) {
+        onSent(row._id);
+        setSentCount((n) => n + 1);
+      } else {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        setFailedMarks((s) => [...s, `${row.plate}: ${res.status === 409 ? 'sudah ditangani pengirim lain' : body.message ?? `HTTP ${res.status}`}`]);
+      }
+    } catch {
+      setFailedMarks((s) => [...s, `${row.plate}: jaringan — stempel GAGAL walau chat sudah terbuka`]);
+    }
+    setMarking(false);
+    setData(null); // cleared here, not in the effect — no stale-customer frame
+    setErr(null);
     setIdx((i) => i + 1);
   }
 
   function skip() {
+    if (marking) return;
     if (row) setSkipped((s) => [...s, row.plate]);
+    setData(null);
+    setErr(null);
     setIdx((i) => i + 1);
   }
 
+  function safeClose() {
+    if (!marking) onClose();
+  }
+
   return (
-    <div className="ovr-overlay" onClick={onClose}>
+    <div className="ovr-overlay" onClick={safeClose}>
       <div className="ovr-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
         {row ? (
           <>
@@ -590,10 +630,10 @@ function BulkManualModal({ targets, onClose, onSent }: {
               </>
             )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn ghost" onClick={onClose}>Berhenti</button>
-              <button type="button" className="btn ghost" onClick={skip}>Lewati</button>
-              <button type="button" className="btn primary" disabled={!data} onClick={openAndMark}>
-                📱 Buka WhatsApp &amp; tandai terkirim
+              <button type="button" className="btn ghost" disabled={marking} onClick={safeClose}>Berhenti</button>
+              <button type="button" className="btn ghost" disabled={marking} onClick={skip}>Lewati</button>
+              <button type="button" className="btn primary" disabled={!data || marking} onClick={() => void openAndMark()}>
+                {marking ? 'Menandai…' : '📱 Buka WhatsApp & tandai terkirim'}
               </button>
             </div>
           </>
@@ -604,6 +644,14 @@ function BulkManualModal({ targets, onClose, onSent }: {
               ✓ {sentCount} pesan dibuka &amp; ditandai terkirim manual.
               {skipped.length > 0 && <><br />Dilewati: {skipped.join(', ')}</>}
             </div>
+            {failedMarks.length > 0 && (
+              <div className="fb-errchip" style={{ marginTop: 10 }}>
+                <div className="fb-errtxt">
+                  ⚠ Stempel gagal untuk: {failedMarks.join(' · ')} —
+                  jika chat-nya sempat terbuka dan terkirim, JANGAN kirim ulang; cek riwayat chat pengirim.
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
               <button type="button" className="btn primary" onClick={onClose}>Tutup</button>
             </div>

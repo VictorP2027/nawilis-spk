@@ -84,9 +84,31 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // themselves). Manual is recorded as handled so the gateway never sends the
   // same customer a duplicate.
   const mode = body.manual ? 'manual' : 'requested';
-  await collections.spk().updateOne(
-    { _id: id },
+  // The stamp is written CONDITIONALLY — the filter re-checks the doc's state
+  // at write time, because two operators (or an operator and the drainer) can
+  // act on the same stale row. A manual stamp may only land on a doc that is
+  // unsent, failed, or carrying a legacy link-only stamp (mode 'manual'
+  // without a sender); anything else means someone got there first. The
+  // gateway path keeps its historical contract: anything but 'live'.
+  const filter = body.manual
+    ? {
+        _id: id,
+        $or: [
+          { 'checkGo.alert': { $exists: false } },
+          { 'checkGo.alert.mode': { $in: [null, 'failed'] } },
+          { 'checkGo.alert.mode': 'manual', 'checkGo.alert.by': { $in: [null] } },
+        ],
+      }
+    : { _id: id, 'checkGo.alert.mode': { $ne: 'live' } };
+  const res = await collections.spk().updateOne(
+    filter as never,
     { $set: { 'checkGo.alert': { mode, to, by, at }, updatedAt: at } },
   );
+  if (res.matchedCount === 0) {
+    return NextResponse.json(
+      { error: 'conflict', message: 'Status berubah — dokumen ini sudah terkirim atau sedang antre. Muat ulang halaman.' },
+      { status: 409 },
+    );
+  }
   return NextResponse.json({ ok: true, mode, to });
 }

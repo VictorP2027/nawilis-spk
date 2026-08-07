@@ -47,6 +47,180 @@ const MODE_BADGE: Record<string, { text: string; bg: string; fg: string }> = {
   failed: { text: '✗ Gagal', bg: '#fdeaea', fg: '#a11a1a' },
 };
 
+interface WaPreview {
+  profile: { nama: string; wa: string | null; plate: string; branch: string };
+  to: string;
+  text: string;
+  /** The doc's CURRENT stamp, fresh from the server — the list row may be stale. */
+  status: { mode?: string | null; by?: string | null } | null;
+}
+
+/**
+ * Eligible for the manual bulk stepper: never sent, or carrying only a legacy
+ * auto-stamp (mode 'manual' with no sender recorded — a wa.me link was minted
+ * but nobody confirmed pressing send). Queued rows belong to the gateway and
+ * live rows are done; both stay untickable.
+ */
+function stepperEligible(r: LedgerRow): boolean {
+  return r.mode === null || (r.mode === 'manual' && !r.by);
+}
+
+/**
+ * Zero-setup bulk send, ledger edition: the sender's own WhatsApp login is
+ * the only infrastructure. One step per customer — the button opens the chat
+ * with the full message pre-filled, the person presses send there, the doc is
+ * stamped 'manual' (so no gateway or robot ever duplicates it), next loads.
+ */
+function ManualStepper({ targets, onClose, onSent }: {
+  targets: LedgerRow[];
+  onClose: () => void;
+  onSent: (id: string) => void;
+}) {
+  const [idx, setIdx] = useState(0);
+  const [preview, setPreview] = useState<WaPreview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [sentCount, setSentCount] = useState(0);
+  const [skipped, setSkipped] = useState<string[]>([]);
+  const [failedMarks, setFailedMarks] = useState<string[]>([]);
+  const [marking, setMarking] = useState(false);
+  const row = idx < targets.length ? targets[idx] : null;
+
+  // The list row can be minutes stale; the fresh GET tells the truth. If
+  // someone else already handled this customer, sending again would be a
+  // duplicate — block the button, offer Lewati.
+  const curMode = preview?.status?.mode ?? null;
+  const alreadyHandled =
+    curMode === 'live' || curMode === 'requested' || (curMode === 'manual' && Boolean(preview?.status?.by));
+
+  useEffect(() => {
+    if (!row) return;
+    let live = true;
+    setPreview(null);
+    setErr(null);
+    fetch(`/api/checkgo/${encodeURIComponent(row.id)}/alert`, { cache: 'no-store' })
+      .then(async (r) => {
+        const body = (await r.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!live) return;
+        if (!r.ok || body === null) {
+          setErr(typeof body?.message === 'string' ? body.message : 'Tidak bisa memuat pesan.');
+          return;
+        }
+        setPreview(body as unknown as WaPreview);
+      })
+      .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
+    return () => { live = false; };
+  }, [row]);
+
+  async function openAndMark() {
+    if (!row || !preview || marking || alreadyHandled) return;
+    // One tab per user click keeps popup blockers quiet — but a strict
+    // blocker still returns null, and then NOTHING was sent: stamping would
+    // silently bury this customer forever, so refuse instead.
+    const tab = window.open(`https://wa.me/${preview.to}?text=${encodeURIComponent(preview.text)}`, '_blank');
+    if (tab === null) {
+      setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
+      return;
+    }
+    // The stamp is AWAITED before advancing: the record must match reality
+    // before the next customer loads, and a failure must be told, not lost.
+    setMarking(true);
+    try {
+      const res = await fetch(`/api/checkgo/${encodeURIComponent(row.id)}/alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by: 'alerts-ledger-manual', manual: true }),
+      });
+      if (res.ok) {
+        onSent(row.id);
+        setSentCount((n) => n + 1);
+      } else {
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        setFailedMarks((s) => [...s, `${row.plate}: ${res.status === 409 ? 'sudah ditangani pengirim lain' : body.message ?? `HTTP ${res.status}`}`]);
+      }
+    } catch {
+      setFailedMarks((s) => [...s, `${row.plate}: jaringan — stempel GAGAL walau chat sudah terbuka`]);
+    }
+    setMarking(false);
+    setPreview(null); // cleared here, not in the effect — no stale-customer frame
+    setErr(null);
+    setIdx((i) => i + 1);
+  }
+
+  function skip() {
+    if (marking) return;
+    if (row) setSkipped((s) => [...s, row.plate]);
+    setPreview(null);
+    setErr(null);
+    setIdx((i) => i + 1);
+  }
+
+  function safeClose() {
+    if (!marking) onClose();
+  }
+
+  return (
+    <div className="al-ovr" onClick={safeClose}>
+      <div className="al-modal" onClick={(e) => e.stopPropagation()}>
+        {row ? (
+          <>
+            <div className="al-mtitle">Kirim manual — customer {idx + 1} dari {targets.length}</div>
+            {err && (
+              <div className="al-err" style={{ marginTop: 10 }}>
+                ✗ {err} — <b>Lewati</b> untuk lanjut ke customer berikutnya.
+              </div>
+            )}
+            {!preview && !err && <div className="al-sub" style={{ marginTop: 10 }}>Memuat pesan…</div>}
+            {preview && (
+              <>
+                <div className="al-sub" style={{ marginTop: 8 }}>
+                  <b>{preview.profile.nama}</b> · {preview.profile.wa ?? preview.to} · {preview.profile.plate} · {preview.profile.branch}
+                </div>
+                <pre className="al-msg">{preview.text}</pre>
+                {alreadyHandled ? (
+                  <div className="al-err" style={{ marginTop: 6 }}>
+                    ⚠ Sudah ditangani ({curMode === 'live' ? 'terkirim gateway' : curMode === 'requested' ? 'antre gateway' : 'dikirim manual'}) —
+                    mengirim lagi berarti customer menerima dua kali. <b>Lewati</b>.
+                  </div>
+                ) : (
+                  <div className="al-sub" style={{ marginTop: 6 }}>
+                    Tombol di bawah membuka WhatsApp dengan pesan sudah terisi —
+                    tekan kirim di sana, lalu kembali ke tab ini.
+                  </div>
+                )}
+              </>
+            )}
+            <div className="al-mbtns">
+              <button type="button" className="al-btn" disabled={marking} onClick={safeClose}>Berhenti</button>
+              <button type="button" className="al-btn" disabled={marking} onClick={skip}>Lewati</button>
+              <button type="button" className="al-btn primary" disabled={!preview || marking || alreadyHandled} onClick={() => void openAndMark()}>
+                {marking ? 'Menandai…' : '📱 Buka WhatsApp & tandai terkirim'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="al-mtitle">Selesai</div>
+            <div className="al-sub" style={{ marginTop: 8 }}>
+              ✓ {sentCount} pesan dibuka &amp; ditandai terkirim manual.
+              {skipped.length > 0 && <><br />Dilewati: {skipped.join(', ')}</>}
+            </div>
+            {failedMarks.length > 0 && (
+              <div className="al-err" style={{ marginTop: 10 }}>
+                ⚠ Stempel gagal untuk: {failedMarks.join(' · ')}<br />
+                Jika chat WhatsApp-nya sempat terbuka dan terkirim, JANGAN kirim ulang —
+                periksa dulu di riwayat chat pengirim.
+              </div>
+            )}
+            <div className="al-mbtns">
+              <button type="button" className="al-btn primary" onClick={onClose}>Tutup</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -71,6 +245,9 @@ export default function AlertsLedgerPage() {
   }, [qLive]);
 
   const [authGone, setAuthGone] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [stepper, setStepper] = useState<LedgerRow[] | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -93,7 +270,32 @@ export default function AlertsLedgerPage() {
       })
       .catch(() => { if (live) { setErr('Jaringan bermasalah — muat ulang.'); setLoading(false); } });
     return () => { live = false; };
-  }, [q, status]);
+  }, [q, status, refreshTick]);
+
+  // A new result set invalidates ticks that may no longer be visible/eligible.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set((data?.rows ?? []).filter(stepperEligible).map((r) => r.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [data]);
+
+  const eligibleRows = useMemo(() => (data?.rows ?? []).filter(stepperEligible), [data]);
+  const allTicked = eligibleRows.length > 0 && eligibleRows.every((r) => selected.has(r.id));
+
+  function toggleAll() {
+    setSelected(allTicked ? new Set() : new Set(eligibleRows.map((r) => r.id)));
+  }
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   const total = useMemo(
     () => (data ? Object.values(data.counts).reduce((a, b) => a + b, 0) : 0),
@@ -125,6 +327,16 @@ export default function AlertsLedgerPage() {
         .al-note { margin-top: 8px; font-size: 12px; color: #8a6100; }
         .al-back { font-size: 13px; text-decoration: none; color: var(--nawilis, #0a3d8f); }
         .al-err { margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #fdeaea; color: #a11a1a; font-size: 13px; }
+        .al-check { width: 17px; height: 17px; accent-color: var(--nawilis, #0a3d8f); cursor: pointer; }
+        .al-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid #e3e9f2; box-shadow: 0 -4px 16px rgba(10,61,143,.14); flex-wrap: wrap; }
+        .al-btn { padding: 9px 16px; border-radius: 8px; border: 1px solid #ccd5e3; background: #fff; font-size: 13.5px; font-weight: 700; cursor: pointer; }
+        .al-btn.primary { background: var(--nawilis, #0a3d8f); border-color: var(--nawilis, #0a3d8f); color: #fff; }
+        .al-btn:disabled { opacity: .55; cursor: default; }
+        .al-ovr { position: fixed; inset: 0; z-index: 90; background: rgba(10, 20, 40, .45); display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .al-modal { background: #fff; border-radius: 12px; max-width: 480px; width: 100%; padding: 18px; max-height: 85vh; overflow-y: auto; }
+        .al-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis, #0a3d8f); }
+        .al-msg { margin-top: 10px; padding: 10px; background: #f4f6fb; border-radius: 8px; font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow-y: auto; font-family: inherit; }
+        .al-mbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
       `}</style>
 
       <div className="al-head">
@@ -167,6 +379,17 @@ export default function AlertsLedgerPage() {
         <table className="al">
           <thead>
             <tr>
+              <th style={{ width: 30 }}>
+                {eligibleRows.length > 0 && (
+                  <input
+                    type="checkbox"
+                    className="al-check"
+                    checked={allTicked}
+                    onChange={toggleAll}
+                    title="Pilih semua yang belum terkirim"
+                  />
+                )}
+              </th>
               <th>Tanggal</th>
               <th>Kendaraan / Customer</th>
               <th>Cabang</th>
@@ -176,15 +399,25 @@ export default function AlertsLedgerPage() {
           </thead>
           <tbody>
             {loading && !data && (
-              <tr><td colSpan={5} className="al-empty">Memuat…</td></tr>
+              <tr><td colSpan={6} className="al-empty">Memuat…</td></tr>
             )}
             {data && data.rows.length === 0 && !loading && (
-              <tr><td colSpan={5} className="al-empty">Tidak ada dokumen yang cocok.</td></tr>
+              <tr><td colSpan={6} className="al-empty">Tidak ada dokumen yang cocok.</td></tr>
             )}
             {data?.rows.map((r) => {
               const badge = r.mode ? MODE_BADGE[r.mode] : null;
               return (
                 <tr key={r.id}>
+                  <td>
+                    {stepperEligible(r) && (
+                      <input
+                        type="checkbox"
+                        className="al-check"
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleOne(r.id)}
+                      />
+                    )}
+                  </td>
                   <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(r.createdAt)}</td>
                   <td>
                     <div className="al-plate">
@@ -227,6 +460,34 @@ export default function AlertsLedgerPage() {
         <div className="al-note">
           Menampilkan {data.rows.length} dokumen terbaru — persempit dengan pencarian untuk melihat yang lebih lama.
         </div>
+      )}
+
+      {selected.size > 0 && !stepper && (
+        <div className="al-bulkbar">
+          <button
+            type="button"
+            className="al-btn primary"
+            onClick={() => setStepper((data?.rows ?? []).filter((r) => selected.has(r.id)))}
+          >
+            📱 Kirim manual satu-satu — {selected.size} customer
+          </button>
+          <button type="button" className="al-btn" onClick={() => setSelected(new Set())}>Batal</button>
+        </div>
+      )}
+
+      {stepper && (
+        <ManualStepper
+          targets={stepper}
+          onClose={() => {
+            setStepper(null);
+            setSelected(new Set());
+            setRefreshTick((t) => t + 1); // pull fresh stamps + chip counts
+          }}
+          onSent={(id) => setData((prev) => prev === null ? prev : ({
+            ...prev,
+            rows: prev.rows.map((r) => (r.id === id ? { ...r, mode: 'manual', by: 'alerts-ledger-manual', at: new Date().toISOString() } : r)),
+          }))}
+        />
       )}
     </main>
   );
