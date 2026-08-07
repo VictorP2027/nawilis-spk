@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@spk/core';
 import { db } from '../../../../lib/db';
 import { buildZip, type ZipEntry } from '../../../../lib/zip';
+import { renderBackupPrintHtml } from '../../../../lib/backupPrint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,6 +55,14 @@ export async function GET(): Promise<Response> {
       seen.add(name);
       entries.push({ name, data: Buffer.from(m[1]!, 'base64') });
     }
+    // The printable rendition — self-contained HTML, signatures embedded, so
+    // each record can be re-printed after the live /print pages point at
+    // nothing. Suffixed with the doc id: several visits of one plate must not
+    // clobber each other, and the id ties the print to its row in backup.json.
+    entries.push({
+      name: `prints/${plate}_${String(s._id)}.html`,
+      data: new TextEncoder().encode(renderBackupPrintHtml(s)),
+    });
   }
   entries.unshift({
     name: 'backup.json',
