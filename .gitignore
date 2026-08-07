@@ -30,3 +30,5 @@ coverage/
 # Throwaway probes: they hold live credentials and customer data.
 *-tmp.mjs
 .wa-web-profile/
+.netlify/
+deno.lock
