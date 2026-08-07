@@ -187,3 +187,48 @@ npm run seed:turboly -- ./turboly-export.json    # on the VM or locally against 
 - **Free limits:** Google Cloud e2-micro is Always Free **forever** (no 12-month clock) in
   us-west1 / us-central1 / us-east1. Atlas M0 = 512 MB (plenty for years of SPKs).
   Vercel Hobby = fine for internal use. 1 GB/mo egress is far more than this worker uses.
+
+---
+
+## Standby site, in case Vercel pauses (added 2026-08-07)
+
+Vercel's free tier pauses a project that exceeds its allowance, and pausing takes
+the intake forms down at every branch. Everything else survives — Atlas, the
+GitHub Actions pusher, the flow worker, the WhatsApp drainer — because none of
+them route through Vercel. What is lost is the thing staff actually touch.
+
+**The app is stateless**, so a second deployment pointed at the same
+`MONGODB_URI` is a working copy of the site rather than a separate system. Both
+can serve at once; Mongo arbitrates and the pusher does not care which one
+captured a document.
+
+### Netlify (recommended — no credit card, 100 GB/month)
+
+`netlify.toml` in the repo root is ready; setup is three steps and is written at
+the top of that file. Two properties make it the better standby:
+
+- It builds on a **GitHub push**, so the copy follows `main` by itself instead of
+  waiting for someone to remember `vercel --prod` mid-outage. The corollary is
+  that it only ever has what has been PUSHED.
+- Route handlers run as Node functions, which the `mongodb` driver requires — it
+  opens TCP sockets and cannot run on an edge runtime.
+
+Copy only the web app's variables: `MONGODB_URI`, `MONGODB_DB`,
+`SPK_SESSION_SECRET`, `STAFF_PASSWORD`, `GH_DISPATCH_TOKEN`, `GH_REPO`,
+`NEXT_PUBLIC_TURBOLY_BASE_URL`. The `TURBOLY_*` and `PUSH_*` variables belong to
+the worker and must NOT be duplicated here.
+
+### What a switch actually costs
+
+The fallback has a different hostname, so branches follow a different link and
+any installed PWA/service-worker cache starts empty on it. A custom domain
+pointed at whichever host is live removes that friction entirely — it is the one
+piece that needs buying.
+
+### Emergency-only alternative
+
+`next start` on the shop Mac behind a free Cloudflare Tunnel gives a stable
+https URL with no account limits at all. It is already the machine running WAHA,
+so it is on anyway — but it makes the branches depend on one desk, which is the
+dependency this architecture spent its whole life removing. Use it to survive a
+day, not as the plan.

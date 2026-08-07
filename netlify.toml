@@ -1,0 +1,38 @@
+# Standby host, in case Vercel pauses the project.
+#
+# The web app is stateless — every piece of state lives in MongoDB Atlas — so a
+# second deployment pointed at the same MONGODB_URI is a working copy of the
+# site, not a separate system. Both can run at once; Mongo is the arbiter, and
+# the pusher (GitHub Actions) does not care which one captured a document.
+#
+# Deliberately NOT a mirror of the Vercel flow: Netlify builds from a GitHub
+# push, so the standby follows `main` on its own instead of waiting for someone
+# to remember `vercel --prod` during an outage. That also means it only ever has
+# what has been PUSHED — commits sitting locally are not on the standby.
+#
+# Setup (once, no credit card):
+#   1. netlify.com → Add new site → Import from GitHub → VictorP2027/nawilis-spk
+#   2. Site configuration → Environment variables, copy from .env:
+#        MONGODB_URI  MONGODB_DB  SPK_SESSION_SECRET  STAFF_PASSWORD
+#        GH_DISPATCH_TOKEN  GH_REPO  NEXT_PUBLIC_TURBOLY_BASE_URL
+#      (the TURBOLY_* and PUSH_* variables are worker-side and NOT needed here)
+#   3. Deploy. The URL it gives you is the fallback to hand the branches.
+#
+# Note the session secret must MATCH Vercel's if you want staff already logged
+# in on one to stay logged in on the other; otherwise they simply log in again.
+
+[build]
+  command = "npm run build -w @spk/core && npm run build -w @spk/web"
+  publish = "apps/web/.next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # The Playwright browsers are for the worker, never the web app; downloading
+  # them here would only slow the build and can fail the install outright.
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+
+# Netlify's Next.js runtime: App Router pages plus route handlers as Node
+# functions, which is what the mongodb driver needs (it opens TCP sockets and
+# cannot run on an edge runtime).
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
