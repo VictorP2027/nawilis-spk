@@ -29,7 +29,20 @@ export async function GET(req: Request): Promise<Response> {
   const rows = await collections.tbMechanics().find(q).sort({ name: 1 }).toArray();
 
   return NextResponse.json({
-    mechanics: rows.map((m) => ({ code: m.mechanicCode, name: m.name, role: m.role, storeCode: m.storeCode })),
+    // `role` is the person's PRIMARY role, and sending it as the label made a
+    // "pilih mekanik" list read "(advisor)" next to people Turboly itself lists
+    // as mechanics — DEVI FITRIANI and DIAN SETYAWATI at Bekasi appear in both
+    // of Turboly's store-user lookups, verified live. Everyone in this response
+    // is assignable by construction, so the label says what they can DO here,
+    // and `alsoAdvisor` marks the dual-role people instead of mislabelling them.
+    mechanics: rows.map((m) => ({
+      code: m.mechanicCode,
+      name: m.name,
+      role: m.role,
+      label: m.role === 'mechanic' ? 'mekanik' : 'mekanik + advisor',
+      alsoAdvisor: m.role !== 'mechanic',
+      storeCode: m.storeCode,
+    })),
     // The board shows this when the list is empty: without it an operator sees
     // a blank picker and no reason for it.
     note: rows.length === 0 && branch ? `Belum ada mekanik ter-sync untuk ${branch} — jalankan sync-catalogs` : undefined,

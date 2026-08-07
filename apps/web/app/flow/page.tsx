@@ -241,7 +241,9 @@ function ActionModal({ row, def, onClose, onDone }: ModalProps) {
           if (!mo) continue;
           const name = str(mo.name);
           if (!name) continue;
-          out.push({ code: str(mo.code) ?? str(mo.mechanicCode) ?? str(mo._id) ?? name, name, role: str(mo.role) });
+          // Prefer the server's capability label; fall back to the raw role so
+          // an older deployment of the API still renders something sane.
+          out.push({ code: str(mo.code) ?? str(mo.mechanicCode) ?? str(mo._id) ?? name, name, role: str(mo.label) ?? str(mo.role) });
         }
         setMechanics(out);
         setMechLoading(false);
