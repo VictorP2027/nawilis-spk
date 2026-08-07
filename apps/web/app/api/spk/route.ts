@@ -70,7 +70,22 @@ export async function GET(req: Request): Promise<Response> {
   if (plate) q['vehicle.plateVariants'] = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const rows = await collections
     .spk()
-    .find(q, { projection: { customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1, 'push.correlationToken': 1, 'push.lastError': 1, 'push.failureClass': 1, turboly: 1, 'signatures.menyerahkan.present': 1, 'signatures.menerima.present': 1 }, sort: { createdAt: -1 }, limit: 100 })
+    .find(q, {
+      projection: {
+        customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1,
+        'push.correlationToken': 1, 'push.lastError': 1, 'push.failureClass': 1, turboly: 1,
+        // Whether a signature IMAGE exists — not whether one was declared.
+        // `signatures.*.present` is set from the form's own flags and is true
+        // for records that carry no ink at all (an API-created row, an operator
+        // who typed a name without signing), so a thumbnail keyed off it points
+        // at an image the server cannot serve and renders broken. This asks the
+        // database the only question that matters: is there something to show.
+        sigCust: { $toBool: { $ifNull: ['$signatures.menyerahkan.imageDataUrl', false] } },
+        sigAdv: { $toBool: { $ifNull: ['$signatures.menerima.imageDataUrl', false] } },
+      },
+      sort: { createdAt: -1 },
+      limit: 100,
+    })
     .toArray();
   // The admin page re-asks every 10 seconds and the answer is usually the same
   // list, so an unchanged poll answers 304 with no body. Together with moving
