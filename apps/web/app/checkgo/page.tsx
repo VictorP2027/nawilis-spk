@@ -4,6 +4,7 @@ import BrandMark from './../components/BrandMark';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SignaturePad, type SigHandle } from '../components/SignaturePad';
 import { ProductInput } from '../../lib/productSuggest';
+import { submitOrQueue, flush } from '../../lib/outbox';
 import {
   BRANCHES,
   CHECKGO_SECTIONS,
@@ -170,6 +171,15 @@ export default function CheckGoIntake() {
   }, []);
   useEffect(() => {
     fetch('/api/service-options').then((r) => r.json()).then((d) => setSvcOpts(d.services ?? {})).catch(() => {});
+  }, []);
+
+  // Drain anything parked offline while this page is open — otherwise a queued
+  // Check & Go would wait for someone to visit the SPK form, which on a
+  // check-only tablet may be never.
+  useEffect(() => {
+    void flush();
+    const t = setInterval(() => { void flush(); }, 20_000);
+    return () => clearInterval(t);
   }, []);
 
   // The services the ticked Rekomendasi imply. A Set, because two tyre
@@ -495,11 +505,14 @@ export default function CheckGoIntake() {
       },
     };
     try {
-      const res = await fetch('/api/checkgo', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      // Through the outbox, like the two SPK forms. A Check & Go is eight
+      // sections of work that only exists on this tablet until it lands: losing
+      // it to a dropped connection means doing the whole inspection again, on a
+      // car that may already have left.
+      const res = await submitOrQueue(payload.uploadId, payload, '/api/checkgo');
+      if (res === 'queued') { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); resetForm(); setSubmitting(false); return; }
+      if (res === 'queued_no_images') { setResult({ ok: true, text: '✓ Tersimpan offline (tanda tangan gambar dilepas — penyimpanan penuh). Akan dikirim otomatis saat online.' }); resetForm(); setSubmitting(false); return; }
+      if (res === 'lost') { setResult({ ok: false, text: '✗ GAGAL menyimpan: penyimpanan perangkat penuh & tidak ada koneksi. Data TIDAK tersimpan — jangan tutup halaman, hubungkan internet lalu coba lagi.' }); setSubmitting(false); return; }
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');

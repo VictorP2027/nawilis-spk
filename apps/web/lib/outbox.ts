@@ -18,6 +18,13 @@ export interface OutboxItem {
   payload: unknown;
   createdAt: number;
   lastError?: string;
+  /**
+   * Where this submission belongs. Absent on items queued before Check & Go
+   * used the outbox, and those were all SPK — so a missing url MUST keep
+   * meaning /api/spk, or a tablet upgrading with a full outbox would replay
+   * them to the wrong endpoint.
+   */
+  url?: string;
 }
 
 export type QueueResult = 'queued' | 'queued_no_images' | 'lost';
@@ -76,7 +83,7 @@ export async function flush(): Promise<number> {
   const remaining: OutboxItem[] = [];
   for (const item of items) {
     try {
-      const res = await fetch('/api/spk', {
+      const res = await fetch(item.url ?? '/api/spk', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(item.payload),
@@ -101,9 +108,9 @@ export async function flush(): Promise<number> {
  * 'queued' (safe), 'queued_no_images' (saved, signature images dropped for
  * space), 'lost' (storage full — the caller MUST tell the operator).
  */
-export async function submitOrQueue(uploadId: string, payload: unknown): Promise<Response | QueueResult> {
+export async function submitOrQueue(uploadId: string, payload: unknown, url = '/api/spk'): Promise<Response | QueueResult> {
   try {
-    const res = await fetch('/api/spk', {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -111,6 +118,6 @@ export async function submitOrQueue(uploadId: string, payload: unknown): Promise
     if (!res.ok && res.status >= 500) throw new Error(`HTTP ${res.status}`);
     return res;
   } catch {
-    return enqueue({ uploadId, payload, createdAt: Date.now() });
+    return enqueue({ uploadId, payload, createdAt: Date.now(), url });
   }
 }

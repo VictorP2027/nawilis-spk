@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { SignaturePad, type SigHandle } from '../../components/SignaturePad';
 import { BRANCHES } from '../../../lib/refdata.client';
+import { submitOrQueue, flush } from '../../../lib/outbox';
 
 /**
  * Compact, printable paper-style Check & Go form — the /sheet look, reduced to
@@ -56,6 +57,11 @@ export default function CheckGoSheet() {
 
   useEffect(() => {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
+  }, []);
+  useEffect(() => {
+    void flush();
+    const t = setInterval(() => { void flush(); }, 20_000);
+    return () => clearInterval(t);
   }, []);
   useEffect(() => {
     const m = merk.trim();
@@ -239,11 +245,11 @@ export default function CheckGoSheet() {
     };
 
     try {
-      const res = await fetch('/api/checkgo', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      // Same outbox as every other intake — see the note in /checkgo.
+      const res = await submitOrQueue(payload.uploadId, payload, '/api/checkgo');
+      if (res === 'queued') { setResult({ ok: true, text: '✓ Tersimpan offline — akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
+      if (res === 'queued_no_images') { setResult({ ok: true, text: '✓ Tersimpan offline (tanda tangan gambar dilepas — penyimpanan penuh). Akan dikirim otomatis saat online.' }); setSubmitting(false); return; }
+      if (res === 'lost') { setResult({ ok: false, text: '✗ GAGAL menyimpan: penyimpanan perangkat penuh & tidak ada koneksi. Data TIDAK tersimpan — jangan tutup halaman, hubungkan internet lalu coba lagi.' }); setSubmitting(false); return; }
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
