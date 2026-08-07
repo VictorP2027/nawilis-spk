@@ -269,11 +269,33 @@ export async function pushQueued(
         out.pushed++;
         log(`✓ ${doc._id} → Service Order ${res.serviceOrderNo}${res.approved === false ? ' ⚠ MASIH DRAFT (approve tidak terkonfirmasi)' : res.approved ? ' [APPROVED]' : ''}`);
 
-        // Check & Go findings → the SO's Inspection List (Turboly's own
-        // answer to "where do the selections go": the Inspection List becomes
-        // the SRO's notes and feeds /reports/inspection_lists). Best-effort:
-        // a miss here never fails a push whose order already exists.
-        const checkGo = (doc as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null }> } }).checkGo;
+        const v = await branchSinks.withSink(claimed.branchCode, (sink) =>
+          sink.verifyByToken({ ...claimed, turboly: pushedTurboly }),
+        );
+        if (v.found) {
+          await transition(doc._id, 'pushed', 'confirmed', {
+            turboly: { ...pushedTurboly, serviceOrderNo: v.serviceOrderNo, readback: { matchedOn: ['reference_token'], lineCount: v.lineCount, lineSkus: v.lineSkus, km: v.km } },
+          });
+          out.confirmed++;
+          log(`  ✓ verified → confirmed`);
+        } else {
+          log(`  ⚠ not verified (left in 'pushed')`);
+        }
+
+        // Check & Go findings → the SO's Inspection List (Turboly's own answer
+        // to "where do the selections go": the Inspection List becomes the
+        // SRO's notes and feeds /reports/inspection_lists).
+        //
+        // LAST, and deliberately after the read-back. This is a raw-HTTP call
+        // that LOGS IN AGAIN, and Turboly allows one session per user — so it
+        // can kick the Playwright session out from under whatever runs next.
+        // Everything that decides the document's state has already happened by
+        // here, which is what makes the failure it can cause survivable: the
+        // order exists, it is confirmed, and a missing Inspection List is a
+        // gap in the ERP's notes rather than a lost Service Order.
+        const checkGo = (doc as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null; feedback?: string | null; inspected?: boolean }> } }).checkGo;
+        // Only the RPA sink records a Service Order URL, so only that path can
+        // address the order afterwards; an HTTP-path push skips this silently.
         const soId = /\/service_orders\/(\d+)/.exec(res.serviceOrderUrl ?? '')?.[1];
         if (String(doc.docType) === 'CHECK_AND_GO' && soId && (checkGo?.inspectionItems?.length ?? 0) > 0) {
           try {
@@ -288,19 +310,6 @@ export async function pushQueued(
           } catch (e) {
             log(`  ⚠ inspection list gagal diisi (SO tetap utuh): ${(e as Error).message ?? e}`);
           }
-        }
-
-        const v = await branchSinks.withSink(claimed.branchCode, (sink) =>
-          sink.verifyByToken({ ...claimed, turboly: pushedTurboly }),
-        );
-        if (v.found) {
-          await transition(doc._id, 'pushed', 'confirmed', {
-            turboly: { ...pushedTurboly, serviceOrderNo: v.serviceOrderNo, readback: { matchedOn: ['reference_token'], lineCount: v.lineCount, lineSkus: v.lineSkus, km: v.km } },
-          });
-          out.confirmed++;
-          log(`  ✓ verified → confirmed`);
-        } else {
-          log(`  ⚠ not verified (left in 'pushed')`);
         }
       } catch (e) {
         out.failed++;
