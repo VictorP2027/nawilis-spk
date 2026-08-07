@@ -94,13 +94,26 @@ async function drainOnce(): Promise<void> {
       return;
     }
     for (const doc of docs as never as Array<Record<string, never>>) {
-      const d = doc as never as { _id: string; vehicle?: { noPolisi?: { display?: string } } };
+      const d = doc as never as {
+        _id: string;
+        vehicle?: { noPolisi?: { display?: string } };
+        checkGo?: { alert?: { by?: string; text?: string } };
+      };
+      // Queue-stamp fields that must survive the send: who approved, and any
+      // edited wording — the edit is also what actually gets sent.
+      const queued = d.checkGo?.alert ?? {};
+      const editedText = typeof queued.text === 'string' && queued.text.trim() !== '' ? queued.text : null;
+      const keep = {
+        ...(queued.by ? { by: queued.by } : {}),
+        ...(editedText ? { text: editedText } : {}),
+      };
       let alert;
       try {
         alert = buildCheckGoAlert(doc as never);
+        if (editedText) alert = { ...alert, text: editedText };
       } catch (e) {
         console.error(`  SKIP ${d._id} — ${(e as Error).message}`);
-        if (SEND) await stamp(d._id, { mode: 'failed', error: String((e as Error).message).slice(0, 300) });
+        if (SEND) await stamp(d._id, { mode: 'failed', error: String((e as Error).message).slice(0, 300), ...keep });
         continue;
       }
       if (!SEND) { console.log(`  would send → ${alert.to} (${d.vehicle?.noPolisi?.display ?? d._id})`); continue; }
@@ -113,7 +126,7 @@ async function drainOnce(): Promise<void> {
         await btn.click();
         // The composer emptying is the send confirmation this UI gives us.
         await page.waitForTimeout(2_500);
-        await stamp(d._id, { mode: 'live', provider: 'wa-web-robot', to: alert.to, providerMessageId: null });
+        await stamp(d._id, { mode: 'live', provider: 'wa-web-robot', to: alert.to, providerMessageId: null, ...keep });
         console.log(`  sent → ${alert.to} (${d.vehicle?.noPolisi?.display ?? d._id})`);
         await sleep(PAUSE_MS);
       } catch (e) {

@@ -154,19 +154,42 @@ async function drainOnce() {
     console.log(`[${new Date().toISOString()}] ${batch.length} doc(s) eligible${overflow ? ` — capped at ${MAX_PER_RUN}, rest next run` : ''}`);
   }
 
+  // Template-mode providers (Meta/Twilio with an approved template) send
+  // templateParams, not free text — a staff edit CANNOT be honored there.
+  const templateMode =
+    (process.env.WHATSAPP_PROVIDER === 'meta' && process.env.WHATSAPP_REPORT_TEMPLATE) ||
+    (process.env.WHATSAPP_PROVIDER === 'twilio' && process.env.TWILIO_REPORT_CONTENT_SID);
+
   let sent = 0;
   for (const doc of batch) {
     const label = `${doc._id} ${doc.vehicle?.noPolisi?.display ?? '?'} ${doc.branchCode}`;
+    // What the queue stamp carried: the person who queued it and any edited
+    // wording. Both must SURVIVE the send — the stamp after delivery is the
+    // dispute record of who approved what.
+    const queued = doc.checkGo?.alert ?? {};
+    const editedText = typeof queued.text === 'string' && queued.text.trim() !== '' ? queued.text : null;
+    const keep = {
+      ...(queued.by ? { by: queued.by } : {}),
+      ...(editedText ? { text: editedText } : {}),
+    };
     let alert;
     try {
       alert = buildCheckGoAlert(doc);
+      // Staff may have edited the message when they queued it — what they
+      // approved is what gets sent.
+      if (editedText && !templateMode) {
+        alert = { ...alert, text: editedText };
+      }
+      if (editedText && templateMode) {
+        console.warn(`  WARN ${label} — template mode ignores the staff edit; sending approved template instead`);
+      }
     } catch (e) {
       console.error(`  SKIP ${label} — ${e.message}`);
-      if (SEND) await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
+      if (SEND) await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300), ...keep });
       continue;
     }
     if (!SEND) {
-      console.log(`  would send → ${alert.to}  (${label})`);
+      console.log(`  would send → ${alert.to}  (${label})${editedText ? '  [edited text]' : ''}`);
       continue;
     }
     try {
@@ -175,6 +198,8 @@ async function drainOnce() {
         mode: res.mode, provider: client.provider, to: alert.to,
         providerMessageId: res.providerMessageId ?? null,
         whatsappUrl: res.whatsappUrl ?? null,
+        ...keep,
+        ...(editedText && templateMode ? { textIgnored: true } : {}),
       });
       sent += 1;
       console.log(`  sent → ${alert.to}  id=${res.providerMessageId ?? '-'}  (${label})`);
@@ -187,7 +212,7 @@ async function drainOnce() {
         return false;
       }
       console.error(`  FAIL ${label} — ${e.message}`);
-      await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300) });
+      await stamp(doc._id, { mode: 'failed', error: String(e.message).slice(0, 300), ...keep });
     }
   }
   if (SEND && (batch.length || !WATCH_SECS)) console.log(`  pass done: sent ${sent}/${batch.length}`);

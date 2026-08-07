@@ -416,7 +416,22 @@ function ActionModal({ row, def, onClose, onDone }: ModalProps) {
 // WhatsApp confirm — the human gate in front of the customer's phone.
 // ─────────────────────────────────────────────────────────────────────────
 
-interface WaPreview { profile: { nama: string; wa: string | null; plate: string; branch: string }; to: string; text: string }
+interface WaPreview {
+  profile: { nama: string; wa: string | null; plate: string; branch: string };
+  to: string;
+  /** Effective message: a pending staff edit when one is stored, else canonical. */
+  text: string;
+  /** Regenerated canonical wording — what "Kembalikan asli" restores. */
+  canonicalText?: string;
+  /** The doc's CURRENT stamp — board rows can be a poll-interval stale. */
+  status?: { mode?: string | null; by?: string | null } | null;
+}
+
+/** True when the fresh GET says someone already handled this customer. */
+function waHandled(p: WaPreview | null): boolean {
+  const m = p?.status?.mode ?? null;
+  return m === 'live' || m === 'requested' || (m === 'manual' && Boolean(p?.status?.by));
+}
 
 /**
  * Nothing is sent from here. [Kirim] stamps the doc 'requested'; the drainer
@@ -426,6 +441,7 @@ interface WaPreview { profile: { nama: string; wa: string | null; plate: string;
  */
 function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; onDone: (spkId: string) => void }) {
   const [data, setData] = useState<WaPreview | null>(null);
+  const [draft, setDraft] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
 
@@ -437,6 +453,7 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
         if (!live) return;
         if (!r.ok) { setErr(str(body.message) ?? 'Tidak bisa memuat pesan.'); return; }
         setData(body as unknown as WaPreview);
+        setDraft((body as unknown as WaPreview).text);
       })
       .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
     return () => { live = false; };
@@ -449,7 +466,9 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
       const res = await fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ by: 'flow-board' }),
+        // Edited text rides on the stamp; the gateway drainer sends the
+        // approved wording instead of regenerating it.
+        body: JSON.stringify({ by: 'flow-board', ...(data !== null && draft.trim() !== '' && draft !== (data.canonicalText ?? data.text) ? { text: draft } : {}) }),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       if (!res.ok) {
@@ -475,10 +494,30 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
             <div className="fb-msub" style={{ marginTop: 8 }}>
               <b>{data.profile.nama}</b> · {data.profile.wa ?? data.to} · {data.profile.plate} · {data.profile.branch}
             </div>
-            <pre style={{ marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', borderRadius: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto', fontFamily: 'inherit' }}>
-              {data.text}
-            </pre>
-            <div className="fb-mhint">Pesan di atas dikirim apa adanya ke nomor customer. Periksa nama &amp; nomor dulu.</div>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={10}
+              maxLength={4000}
+              disabled={posting}
+              style={{ display: 'block', width: '100%', marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12, fontFamily: 'inherit', lineHeight: 1.45, resize: 'vertical' }}
+            />
+            <div className="fb-mhint" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <span>✏️ Pesan bisa diedit — yang di kotak inilah yang dikirim. Periksa nama &amp; nomor dulu.</span>
+              {draft !== (data.canonicalText ?? data.text) && (
+                <button type="button" className="btn ghost" style={{ width: 'auto', padding: '3px 10px', fontSize: 12 }} onClick={() => setDraft(data.canonicalText ?? data.text)}>
+                  ↺ Kembalikan asli
+                </button>
+              )}
+            </div>
+            {waHandled(data) && (
+              <div className="fb-errchip" style={{ marginTop: 10 }}>
+                <div className="fb-errtxt">
+                  ⚠ Sudah ditangani ({data.status?.mode === 'live' ? 'terkirim gateway' : data.status?.mode === 'requested' ? 'antre gateway' : 'dikirim manual'}) —
+                  mengirim lagi berarti customer menerima dua kali.
+                </div>
+              </div>
+            )}
           </>
         )}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
@@ -489,11 +528,12 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
           <button
             type="button"
             className="btn ghost"
-            disabled={!data || posting}
+            disabled={!data || posting || waHandled(data) || draft.trim() === ''}
             onClick={() => {
-              if (!data) return;
+              if (!data || waHandled(data) || draft.trim() === '') return;
+              const text = draft;
               // A blocked popup means nothing was sent — refuse to stamp.
-              const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+              const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(text)}`, '_blank');
               if (tab === null) {
                 setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
                 return;
@@ -501,7 +541,7 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
               void fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ by: 'flow-board', manual: true }),
+                body: JSON.stringify({ by: 'flow-board', manual: true, ...(text !== (data.canonicalText ?? data.text) ? { text } : {}) }),
               }).then((r) => {
                 if (r.ok) onDone(row._id);
                 else setErr('Stempel gagal — jika pesan sudah terkirim di WhatsApp, jangan kirim ulang; muat ulang halaman.');
@@ -512,7 +552,7 @@ function WaModal({ row, onClose, onDone }: { row: FlowRow; onClose: () => void; 
           >
             📱 Kirim manual (WhatsApp Web)
           </button>
-          <button type="button" className="btn primary" disabled={!data || posting} onClick={() => void send()}>
+          <button type="button" className="btn primary" disabled={!data || posting || waHandled(data) || draft.trim() === ''} onClick={() => void send()}>
             {posting ? <><span className="fb-spin fb-spin-w" /> Mengantre…</> : 'Kirim ke Customer'}
           </button>
         </div>
@@ -536,6 +576,7 @@ function BulkManualModal({ targets, onClose, onSent }: {
 }) {
   const [idx, setIdx] = useState(0);
   const [data, setData] = useState<WaPreview | null>(null);
+  const [draft, setDraft] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [sentCount, setSentCount] = useState(0);
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -554,17 +595,19 @@ function BulkManualModal({ targets, onClose, onSent }: {
         if (!live) return;
         if (!r.ok) { setErr(str(body.message) ?? 'Tidak bisa memuat pesan.'); return; }
         setData(body as unknown as WaPreview);
+        setDraft((body as unknown as WaPreview).text);
       })
       .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
     return () => { live = false; };
   }, [row]);
 
   async function openAndMark() {
-    if (!row || !data || marking) return;
+    if (!row || !data || marking || waHandled(data) || draft.trim() === '') return;
+    const text = draft;
     // The user's click is the gesture that lets this tab open — one per step,
     // so popup blockers stay quiet. A strict blocker still returns null, and
     // then nothing was sent: stamping would bury the customer, so refuse.
-    const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(data.text)}`, '_blank');
+    const tab = window.open(`https://wa.me/${data.to}?text=${encodeURIComponent(text)}`, '_blank');
     if (tab === null) {
       setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
       return;
@@ -576,7 +619,7 @@ function BulkManualModal({ targets, onClose, onSent }: {
       const res = await fetch(`/api/checkgo/${encodeURIComponent(row._id)}/alert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ by: 'flow-board-bulk-manual', manual: true }),
+        body: JSON.stringify({ by: 'flow-board-bulk-manual', manual: true, ...(text !== (data.canonicalText ?? data.text) ? { text } : {}) }),
       });
       if (res.ok) {
         onSent(row._id);
@@ -619,9 +662,30 @@ function BulkManualModal({ targets, onClose, onSent }: {
                 <div className="fb-msub" style={{ marginTop: 8 }}>
                   <b>{data.profile.nama}</b> · {data.profile.wa ?? data.to} · {data.profile.plate} · {data.profile.branch}
                 </div>
-                <pre style={{ marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', borderRadius: 8, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto', fontFamily: 'inherit' }}>
-                  {data.text}
-                </pre>
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={8}
+                  maxLength={4000}
+                  disabled={marking}
+                  style={{ display: 'block', width: '100%', marginTop: 10, padding: 10, background: 'var(--surface-2, #f4f6fb)', border: '1px solid var(--line)', borderRadius: 8, fontSize: 12, fontFamily: 'inherit', lineHeight: 1.45, resize: 'vertical' }}
+                />
+                <div className="fb-mhint" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                  <span>✏️ Pesan bisa diedit sebelum dikirim.</span>
+                  {draft !== (data.canonicalText ?? data.text) && (
+                    <button type="button" className="btn ghost" style={{ width: 'auto', padding: '3px 10px', fontSize: 12 }} onClick={() => setDraft(data.canonicalText ?? data.text)}>
+                      ↺ Kembalikan asli
+                    </button>
+                  )}
+                </div>
+                {waHandled(data) && (
+                  <div className="fb-errchip" style={{ marginTop: 10 }}>
+                    <div className="fb-errtxt">
+                      ⚠ Sudah ditangani ({data.status?.mode === 'live' ? 'terkirim gateway' : data.status?.mode === 'requested' ? 'antre gateway' : 'dikirim manual'}) —
+                      mengirim lagi berarti customer menerima dua kali. <b>Lewati</b>.
+                    </div>
+                  </div>
+                )}
                 <div className="fb-mhint">
                   Tombol di bawah membuka WhatsApp dengan pesan sudah terisi —
                   tekan kirim di sana, lalu kembali ke tab ini untuk customer
@@ -632,7 +696,7 @@ function BulkManualModal({ targets, onClose, onSent }: {
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14, flexWrap: 'wrap' }}>
               <button type="button" className="btn ghost" disabled={marking} onClick={safeClose}>Berhenti</button>
               <button type="button" className="btn ghost" disabled={marking} onClick={skip}>Lewati</button>
-              <button type="button" className="btn primary" disabled={!data || marking} onClick={() => void openAndMark()}>
+              <button type="button" className="btn primary" disabled={!data || marking || waHandled(data) || draft.trim() === ''} onClick={() => void openAndMark()}>
                 {marking ? 'Menandai…' : '📱 Buka WhatsApp & tandai terkirim'}
               </button>
             </div>
@@ -919,6 +983,18 @@ export default function FlowBoard() {
     (r: FlowRow) => r.docType === 'CHECK_AND_GO' && r.waAlert === null,
     [],
   );
+
+  // Every poll re-validates the ticks: a row someone else queued or sent must
+  // fall out of the selection, or a stale bulk click re-stamps it (erasing a
+  // colleague's queued edit, or double-messaging an already-served customer).
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const ok = new Set(rows.filter(waEligible).map((r) => r._id));
+      const next = new Set([...prev].filter((id) => ok.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows, waEligible]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelected((prev) => {

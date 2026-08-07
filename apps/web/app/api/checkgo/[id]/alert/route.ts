@@ -38,6 +38,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   const { doc } = r;
   try {
     const alert = buildCheckGoAlert(doc);
+    const stamp = (doc.checkGo as { alert?: { mode?: string; at?: string; text?: string } }).alert ?? null;
+    // A queued staff edit IS the pending message — previews must show it, or
+    // an operator "verifying" their edit sees canonical wording instead.
+    const pendingEdit = typeof stamp?.text === 'string' && stamp.text.trim() !== '' ? stamp.text : null;
     return NextResponse.json({
       profile: {
         nama: doc.customer.nama,
@@ -46,8 +50,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
         branch: doc.branchCode,
       },
       to: alert.to,
-      text: alert.text,
-      status: (doc.checkGo as { alert?: { mode?: string; at?: string } }).alert ?? null,
+      text: pendingEdit ?? alert.text,
+      canonicalText: alert.text,
+      status: stamp,
     });
   } catch (e) {
     // Usually an unusable number — the button should show WHY it cannot send.
@@ -75,9 +80,19 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return NextResponse.json({ error: 'not_sendable', message: (e as Error).message }, { status: 422 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as { by?: string; manual?: boolean };
+  const body = (await req.json().catch(() => ({}))) as { by?: string; manual?: boolean; text?: unknown };
   const by = body.by ?? 'flow-board';
   const at = new Date().toISOString();
+  // Optional staff-edited message. Stored on the stamp so (a) the gateway
+  // drainer sends the approved wording, not a regeneration, and (b) the
+  // ledger can show exactly what went out. Absent = canonical text.
+  let editedText: string | null = null;
+  if (typeof body.text === 'string' && body.text.trim() !== '') {
+    if (body.text.length > 4000) {
+      return NextResponse.json({ error: 'text_too_long', message: 'Pesan terlalu panjang (maks 4000 karakter).' }, { status: 422 });
+    }
+    editedText = body.text;
+  }
   // Two ways to send: the gateway queue ('requested', delivered by the
   // watcher) or a human on plain WhatsApp Web ('manual' — the modal opened a
   // wa.me link with the full message pre-filled and someone pressed send
@@ -102,7 +117,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     : { _id: id, 'checkGo.alert.mode': { $ne: 'live' } };
   const res = await collections.spk().updateOne(
     filter as never,
-    { $set: { 'checkGo.alert': { mode, to, by, at }, updatedAt: at } },
+    { $set: { 'checkGo.alert': { mode, to, by, at, ...(editedText !== null ? { text: editedText } : {}) }, updatedAt: at } },
   );
   if (res.matchedCount === 0) {
     return NextResponse.json(

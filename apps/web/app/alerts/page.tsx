@@ -50,7 +50,10 @@ const MODE_BADGE: Record<string, { text: string; bg: string; fg: string }> = {
 interface WaPreview {
   profile: { nama: string; wa: string | null; plate: string; branch: string };
   to: string;
+  /** Effective message: a pending staff edit when one is stored, else canonical. */
   text: string;
+  /** The regenerated canonical wording — what "Kembalikan asli" restores. */
+  canonicalText: string;
   /** The doc's CURRENT stamp, fresh from the server — the list row may be stale. */
   status: { mode?: string | null; by?: string | null } | null;
 }
@@ -78,6 +81,7 @@ function ManualStepper({ targets, onClose, onSent }: {
 }) {
   const [idx, setIdx] = useState(0);
   const [preview, setPreview] = useState<WaPreview | null>(null);
+  const [draft, setDraft] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [sentCount, setSentCount] = useState(0);
   const [skipped, setSkipped] = useState<string[]>([]);
@@ -106,17 +110,20 @@ function ManualStepper({ targets, onClose, onSent }: {
           return;
         }
         setPreview(body as unknown as WaPreview);
+        setDraft((body as unknown as WaPreview).text);
       })
       .catch(() => { if (live) setErr('Jaringan bermasalah — coba lagi.'); });
     return () => { live = false; };
   }, [row]);
 
   async function openAndMark() {
-    if (!row || !preview || marking || alreadyHandled) return;
+    if (!row || !preview || marking || alreadyHandled || draft.trim() === '') return;
+    const canonical = preview.canonicalText ?? preview.text;
+    const text = draft;
     // One tab per user click keeps popup blockers quiet — but a strict
     // blocker still returns null, and then NOTHING was sent: stamping would
     // silently bury this customer forever, so refuse instead.
-    const tab = window.open(`https://wa.me/${preview.to}?text=${encodeURIComponent(preview.text)}`, '_blank');
+    const tab = window.open(`https://wa.me/${preview.to}?text=${encodeURIComponent(text)}`, '_blank');
     if (tab === null) {
       setErr('Popup diblokir browser — izinkan popup untuk situs ini, lalu tekan tombol lagi.');
       return;
@@ -128,7 +135,9 @@ function ManualStepper({ targets, onClose, onSent }: {
       const res = await fetch(`/api/checkgo/${encodeURIComponent(row.id)}/alert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ by: 'alerts-ledger-manual', manual: true }),
+        // The edited text rides on the stamp so the ledger records what was
+        // actually sent, not what would have been generated.
+        body: JSON.stringify({ by: 'alerts-ledger-manual', manual: true, ...(text !== canonical ? { text } : {}) }),
       });
       if (res.ok) {
         onSent(row.id);
@@ -175,7 +184,22 @@ function ManualStepper({ targets, onClose, onSent }: {
                 <div className="al-sub" style={{ marginTop: 8 }}>
                   <b>{preview.profile.nama}</b> · {preview.profile.wa ?? preview.to} · {preview.profile.plate} · {preview.profile.branch}
                 </div>
-                <pre className="al-msg">{preview.text}</pre>
+                <textarea
+                  className="al-msg al-msgedit"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  rows={9}
+                  maxLength={4000}
+                  disabled={marking || alreadyHandled}
+                />
+                <div className="al-sub" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 4 }}>
+                  <span>✏️ Pesan bisa diedit sebelum dikirim.</span>
+                  {draft !== (preview.canonicalText ?? preview.text) && (
+                    <button type="button" className="al-btn" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => setDraft(preview.canonicalText ?? preview.text)}>
+                      ↺ Kembalikan asli
+                    </button>
+                  )}
+                </div>
                 {alreadyHandled ? (
                   <div className="al-err" style={{ marginTop: 6 }}>
                     ⚠ Sudah ditangani ({curMode === 'live' ? 'terkirim gateway' : curMode === 'requested' ? 'antre gateway' : 'dikirim manual'}) —
@@ -192,7 +216,7 @@ function ManualStepper({ targets, onClose, onSent }: {
             <div className="al-mbtns">
               <button type="button" className="al-btn" disabled={marking} onClick={safeClose}>Berhenti</button>
               <button type="button" className="al-btn" disabled={marking} onClick={skip}>Lewati</button>
-              <button type="button" className="al-btn primary" disabled={!preview || marking || alreadyHandled} onClick={() => void openAndMark()}>
+              <button type="button" className="al-btn primary" disabled={!preview || marking || alreadyHandled || draft.trim() === ''} onClick={() => void openAndMark()}>
                 {marking ? 'Menandai…' : '📱 Buka WhatsApp & tandai terkirim'}
               </button>
             </div>
@@ -336,6 +360,8 @@ export default function AlertsLedgerPage() {
         .al-modal { background: #fff; border-radius: 12px; max-width: 480px; width: 100%; padding: 18px; max-height: 85vh; overflow-y: auto; }
         .al-mtitle { font-size: 17px; font-weight: 900; color: var(--nawilis, #0a3d8f); }
         .al-msg { margin-top: 10px; padding: 10px; background: #f4f6fb; border-radius: 8px; font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow-y: auto; font-family: inherit; }
+        .al-msgedit { display: block; width: 100%; border: 1px solid #ccd5e3; resize: vertical; line-height: 1.45; }
+        .al-msgedit:disabled { opacity: .6; }
         .al-mbtns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
       `}</style>
 
