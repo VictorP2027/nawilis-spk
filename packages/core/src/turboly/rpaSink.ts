@@ -100,8 +100,8 @@ export class RpaSink implements ServiceOrderSink {
     await page.selectOption('#store-id', { value: payload.storeTurbolyId });
     await page.waitForTimeout(2800); // advisors load after store (AJAX)
 
-    await this.selectByLabelExact('#service-advisor-id', payload.serviceAdvisorName);
-    await this.selectByLabelExact('#salesperson-id', payload.salespersonName);
+    await this.selectPersonExact('#service-advisor-id', payload.serviceAdvisorName, 'Service Advisor');
+    await this.selectPersonExact('#salesperson-id', payload.salespersonName, 'Salesperson');
 
     // 2-3. Customer + vehicle. Attach to existing Turboly records first; if the customer
     // isn't found, create customer+vehicle; if the customer is found but the vehicle isn't,
@@ -214,6 +214,29 @@ export class RpaSink implements ServiceOrderSink {
       if (got.d === payload.planServiceDate && got.t === payload.planServiceTime) break;
     }
     await this.dismissModals(); // clear any stray warning before the click can be intercepted
+    // The person dropdowns reload via AJAX after any store/customer change and
+    // can come back BLANK even though they were set in step 1 — Turboly then
+    // rejects the save with "Salesperson can't be blank". Re-verify both right
+    // before the click and re-select once if the reload wiped them.
+    for (const [sel, want, role] of [
+      ['#service-advisor-id', payload.serviceAdvisorName, 'Service Advisor'],
+      ['#salesperson-id', payload.salespersonName, 'Salesperson'],
+    ] as const) {
+      if (!want) continue;
+      const cur = await page
+        .evaluate((s) => {
+          const el = document.querySelector(s) as HTMLSelectElement | null;
+          return { v: el?.value ?? '', t: el?.selectedOptions?.[0]?.textContent?.trim() ?? '' };
+        }, sel)
+        .catch(() => ({ v: '', t: '' }));
+      const normEq = (a: string, b: string) => a.trim().toUpperCase().replace(/\s+/g, ' ') === b.trim().toUpperCase().replace(/\s+/g, ' ');
+      // Blank OR a different person than intended (a reload can restore the
+      // list with a stale default) — re-run the POLLING selector, which waits
+      // out an in-flight reload instead of one-shot no-op'ing past it.
+      if (cur.v === '' || !normEq(cur.t, want)) {
+        await this.selectPersonExact(sel, want, role);
+      }
+    }
     await page.getByRole('button', { name: /^save$/i }).first().click({ timeout: 15000 });
     await page.waitForTimeout(1500);
     // Because this vehicle may have in-progress docs, Turboly re-prompts a
@@ -249,6 +272,24 @@ export class RpaSink implements ServiceOrderSink {
         return { ...fail('transient', 'Turboly sedang MAINTENANCE (upgrade terjadwal) — dicoba ulang otomatis setelah online lagi'), screenshotRef };
       }
       let msg = inlineErr ?? 'save did not confirm';
+      // "Salesperson/Service Advisor can't be blank" while the payload DID
+      // carry that name is Turboly's own select-repopulation race: switching
+      // store reloads the person dropdowns via AJAX, and a save landing in
+      // that window posts blank. The identical retry succeeds (proven on
+      // 01KZD0YSZ4… at NWL-PML2, 2026-08-07) — so it retries itself instead
+      // of parking a red card for a human. A blank that matches an ACTUALLY
+      // empty payload name still parks as data: retrying can't invent a name.
+      const blankPerson = /(salesperson|service advisor)[^•]*can't be blank/i.exec(msg);
+      const blankRole = blankPerson?.[1];
+      if (blankRole) {
+        const hadName = /salesperson/i.test(blankRole) ? payload.salespersonName : payload.serviceAdvisorName;
+        if (hadName && hadName.trim() !== '') {
+          return {
+            ...fail('transient', `dropdown ${blankRole} Turboly ter-reset saat simpan (race muat-ulang daftar user store) — dicoba ulang otomatis`),
+            screenshotRef,
+          };
+        }
+      }
       if (/account code can't be blank/i.test(msg)) {
         msg += ' — konfigurasi store di Turboly mewajibkan Account Code tapi daftarnya KOSONG; definisikan Account Code (Setup → Accounting) atau matikan kewajibannya untuk store ini, lalu retry';
       }
@@ -453,6 +494,47 @@ export class RpaSink implements ServiceOrderSink {
     if (!opts.length) await this.assertSessionAlive('ambil daftar user store');
     const hit = opts.find((o) => norm(o.t) === norm(label));
     if (hit) await page.selectOption(sel, { value: hit.v }).catch(() => {});
+  }
+
+  /**
+   * The person dropdowns (Service Advisor / Salesperson), which Turboly makes
+   * MANDATORY and loads by AJAX after the store is picked. Two failure modes
+   * used to share one useless symptom ("Salesperson can't be blank" at save):
+   * the list arriving late (race — a retry succeeds) and the person genuinely
+   * not being a salesperson of that store (D 1990 ASB / YUNIAR SETYOWATI at
+   * NWL-PML2: advisor there, salesperson nowhere). So: WAIT for the name to
+   * appear (kills the race), and if it never does, fail loudly with the
+   * store's actual list (kills the mystery) — never submit blank, and never
+   * auto-pick, because the wrong name takes someone's sales credit.
+   */
+  private async selectPersonExact(sel: string, label: string, role: string): Promise<void> {
+    if (!label.trim()) return;
+    const page = this.session.page_();
+    const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
+    let opts: Array<{ v: string; t: string }> = [];
+    const deadline = Date.now() + 12_000;
+    for (;;) {
+      opts = await page
+        .$$eval(`${sel} option`, (els) => els.map((e) => ({ v: (e as HTMLOptionElement).value, t: (e.textContent ?? '').trim() })).filter((o) => o.v))
+        .catch(() => []);
+      const hit = opts.find((o) => norm(o.t) === norm(label));
+      if (hit) {
+        await page.selectOption(sel, { value: hit.v }).catch(() => {});
+        return;
+      }
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(600);
+    }
+    if (!opts.length) {
+      // A list still empty after 12s with a live session is a slow/failed AJAX
+      // load, not a truth about who works at this store — retry, don't park.
+      await this.assertSessionAlive('ambil daftar user store');
+      throw new TransientError(`daftar user store belum termuat setelah 12 dtk (AJAX lambat) — ${role} tidak bisa dipilih, dicoba ulang otomatis`);
+    }
+    const names = opts.map((o) => o.t).slice(0, 40).join(', ');
+    throw new DataError(
+      `${role} "${label}" tidak ada di daftar user store ini di Turboly — daftarkan orangnya sebagai ${role} untuk store ini (Turboly → Setup → Users), atau ulangi intake dengan petugas lain. Pilihan yang tersedia: ${names}`,
+    );
   }
 
   /** Open a Select2-v3 widget by container selector, type, and pick first selectable result. */
