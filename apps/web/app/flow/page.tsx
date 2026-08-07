@@ -886,10 +886,28 @@ export default function FlowBoard() {
   const [bulkSending, setBulkSending] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The board asks six times a minute and the answer is usually identical, so
+  // it carries the last ETag and lets the server reply 304 with no body. Held
+  // in a ref rather than sent by the browser cache, because `cache: no-store`
+  // (which this must keep, to defeat any intermediate cache) also suppresses
+  // the automatic If-None-Match.
+  const etagRef = useRef<string | null>(null);
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/flow/state', { cache: 'no-store' });
+      const res = await fetch('/api/flow/state', {
+        cache: 'no-store',
+        headers: etagRef.current ? { 'if-none-match': etagRef.current } : undefined,
+      });
       if (res.status === 401 || res.status === 403) { setAuthErr(true); setLoaded(true); return; }
+      // 304: the board is already showing this exact data. Only the "last
+      // updated" clock moves, so the operator can still see polling is alive.
+      if (res.status === 304) {
+        setAuthErr(false); setNetErr(false); setLoaded(true);
+        setUpdatedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        return;
+      }
+      const tag = res.headers.get('etag');
+      if (tag) etagRef.current = tag;
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       const raw = Array.isArray(body.rows) ? body.rows : [];
       const next: FlowRow[] = [];

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import {
   collections, flowJobs, effectiveFlow, boardColumn, stageLabel, nextFlowAction,
@@ -88,7 +89,16 @@ export async function GET(req: Request): Promise<Response> {
         'customer.nama': 1, 'customer.waE164': 1,
         'vehicle.noPolisi': 1, 'vehicle.km': 1, 'vehicle.merkNormalized': 1, 'vehicle.tipeNormalized': 1,
         jobLineSummary: 1, estimasi: 1, scheduledAt: 1,
-        flow: 1, turboly: 1, checkGo: 1,
+        flow: 1,
+        // NOT the whole turboly / checkGo subtrees. This response is re-fetched
+        // every 10 seconds by every open board, so anything projected here is
+        // paid for again six times a minute, forever. Measured before trimming:
+        // 84.9 KB for 32 cards, of which checkGo.report (16 KB) and
+        // checkGo.inspectionItems (27.6 KB) were 52% — and the board reads
+        // NEITHER, only checkGo.alert.mode. Same for turboly, where the card
+        // shows four document numbers and the read-back blob rode along.
+        'turboly.serviceOrderNo': 1, 'turboly.serviceOrderUrl': 1, 'turboly.workOrderNo': 1,
+        'checkGo.alert': 1, 'checkGo.harga': 1,
         'push.lastError': 1, 'push.failureClass': 1,
         createdAt: 1, updatedAt: 1,
       },
@@ -120,6 +130,14 @@ export async function GET(req: Request): Promise<Response> {
 
   const rows = docs.map((d) => {
     const f = effectiveFlow(d);
+    // effectiveFlow falls back to initFlow(), which stamps updatedAt with the
+    // CURRENT time — so a card that has never reached the board would report a
+    // brand-new timestamp on every poll. That is both untrue (nothing changed)
+    // and expensive: it made every response byte-different, so the ETag below
+    // could never match and no poll could ever answer 304. When there is no
+    // stored flow, the moment the document itself last changed is the honest
+    // answer and a stable one.
+    f.updatedAt = d.flow?.updatedAt ?? d.updatedAt;
     const docJobs = jobsBySpk.get(d._id) ?? []; // newest first (query sort)
     const activeJob = docJobs.find((j) => j.state === 'queued' || j.state === 'running') ?? null;
     // A failed job row is permanent, so without this it haunts the card long
@@ -180,10 +198,24 @@ export async function GET(req: Request): Promise<Response> {
     };
   });
 
-  return NextResponse.json({
-    now: new Date().toISOString(),
+  const payload = {
     columns: FLOW_BOARD_COLUMNS.map((c) => ({ id: c, label: FLOW_BOARD_LABELS[c] })),
     rows,
     jobs: jobs.map(brief),
-  });
+  };
+
+  // Most polls find nothing changed — a workshop does not move a card every ten
+  // seconds — so the honest answer to most of them is "same as before". The
+  // ETag is computed over the payload WITHOUT `now`, because a timestamp that
+  // ticks every request would make every response look new and defeat the whole
+  // mechanism. A 304 carries no body, which is what keeps an all-day board from
+  // costing megabytes an hour in origin transfer.
+  const etag = `W/"${createHash('sha1').update(JSON.stringify(payload)).digest('base64url')}"`;
+  if (req.headers.get('if-none-match') === etag) {
+    return new NextResponse(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'no-cache' } });
+  }
+  return NextResponse.json(
+    { now: new Date().toISOString(), ...payload },
+    { headers: { ETag: etag, 'Cache-Control': 'no-cache' } },
+  );
 }
