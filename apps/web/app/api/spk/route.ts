@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse, after } from 'next/server';
 import { SpkIntakeInput, collections, assignMechanic } from '@spk/core';
 import { db } from '../../../lib/db';
@@ -69,7 +70,18 @@ export async function GET(req: Request): Promise<Response> {
   if (plate) q['vehicle.plateVariants'] = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const rows = await collections
     .spk()
-    .find(q, { projection: { customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1, 'push.correlationToken': 1, 'push.lastError': 1, 'push.failureClass': 1, turboly: 1, 'signatures.menyerahkan.imageDataUrl': 1, 'signatures.menerima.imageDataUrl': 1 }, sort: { createdAt: -1 }, limit: 100 })
+    .find(q, { projection: { customer: 1, vehicle: 1, jobLineSummary: 1, state: 1, branchCode: 1, capture: 1, 'push.correlationToken': 1, 'push.lastError': 1, 'push.failureClass': 1, turboly: 1, 'signatures.menyerahkan.present': 1, 'signatures.menerima.present': 1 }, sort: { createdAt: -1 }, limit: 100 })
     .toArray();
-  return NextResponse.json({ rows });
+  // The admin page re-asks every 10 seconds and the answer is usually the same
+  // list, so an unchanged poll answers 304 with no body. Together with moving
+  // the signature images out of this response, that is the difference between
+  // 561 MB an hour and a few kilobytes.
+  const body = JSON.stringify({ rows });
+  const etag = `W/"${createHash('sha1').update(body).digest('base64url')}"`;
+  if (req.headers.get('if-none-match') === etag) {
+    return new NextResponse(null, { status: 304, headers: { ETag: etag, 'Cache-Control': 'no-cache' } });
+  }
+  return new NextResponse(body, {
+    headers: { 'content-type': 'application/json', ETag: etag, 'Cache-Control': 'no-cache' },
+  });
 }

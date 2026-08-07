@@ -1,7 +1,7 @@
 'use client';
 
 import BrandMark from './../components/BrandMark';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 
 interface Summary {
   byState: Record<string, number>;
@@ -22,14 +22,20 @@ interface Row {
   turboly: { serviceOrderNo: string | null };
   push?: { lastError?: string | null; failureClass?: string | null };
   signatures?: {
-    menyerahkan?: { imageDataUrl?: string | null };
-    menerima?: { imageDataUrl?: string | null };
+    menyerahkan?: { present?: boolean | null };
+    menerima?: { present?: boolean | null };
   };
 }
 
 /** Tiny inline signature thumbnail; click opens the full-size PNG in a new tab. */
-function SigThumb({ src, title }: { src?: string | null; title: string }) {
-  if (!src) return null;
+/**
+ * The image is fetched per signature and cached immutably by the browser, so
+ * this table costs one request per signature EVER — not 1.5 MB of inlined
+ * data: URLs on every ten-second poll, which is what it used to cost.
+ */
+function SigThumb({ id, who, present, title }: { id: string; who: 'menyerahkan' | 'menerima'; present?: boolean | null; title: string }) {
+  if (!present) return null;
+  const src = `/api/spk/${encodeURIComponent(id)}/signature?who=${who}`;
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
@@ -102,15 +108,25 @@ export default function Admin() {
     }
   }
 
+  // The full table is re-asked every 10 seconds; carrying its ETag lets an
+  // unchanged poll come back 304 with no body instead of the whole list.
+  const allEtag = useRef<string | null>(null);
+  const awaitingEtag = useRef<string | null>(null);
   const load = useCallback(async () => {
-    const [s, a, everything] = await Promise.all([
-      fetch('/api/admin/summary').then((r) => r.json()),
-      fetch('/api/spk?state=awaiting_assignment').then((r) => r.json()),
-      fetch('/api/spk').then((r) => r.json()),
+    /** Fetch a list, keeping what we have when the server says 304. */
+    const listed = async (url: string, tagRef: { current: string | null }, keep: (rows: Row[]) => void) => {
+      const res = await fetch(url, { headers: tagRef.current ? { 'if-none-match': tagRef.current } : undefined });
+      if (res.status === 304) return;
+      const tag = res.headers.get('etag');
+      if (tag) tagRef.current = tag;
+      const body = (await res.json().catch(() => ({}))) as { rows?: Row[] };
+      keep(body.rows ?? []);
+    };
+    await Promise.all([
+      fetch('/api/admin/summary').then((r) => r.json()).then(setSum),
+      listed('/api/spk?state=awaiting_assignment', awaitingEtag, setAwaiting),
+      listed('/api/spk', allEtag, setAll),
     ]);
-    setSum(s);
-    setAwaiting(a.rows ?? []);
-    setAll(everything.rows ?? []);
   }, []);
 
   async function del(id: string) {
@@ -235,8 +251,8 @@ export default function Admin() {
                   <td>{r.vehicle.noPolisi.display}</td>
                   <td>
                     {r.customer.nama}
-                    <SigThumb src={r.signatures?.menyerahkan?.imageDataUrl} title={`Tanda tangan customer — ${r.customer.nama}`} />
-                    <SigThumb src={r.signatures?.menerima?.imageDataUrl} title="Tanda tangan penerima (SA)" />
+                    <SigThumb id={r._id} who="menyerahkan" present={r.signatures?.menyerahkan?.present} title={`Tanda tangan customer — ${r.customer.nama}`} />
+                    <SigThumb id={r._id} who="menerima" present={r.signatures?.menerima?.present} title="Tanda tangan penerima (SA)" />
                   </td>
                   <td>{r.branchCode}</td>
                   <td>
