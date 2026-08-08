@@ -81,6 +81,22 @@ export class AuthChallengeError extends Error {
   }
 }
 
+/**
+ * The tenant itself is degraded — mid-deploy 5xx, per-account 429, or the
+ * 2026-08-08 signature where HTML pages stay authenticated while every
+ * /lookup/*.json answers 401. Distinct from AuthChallengeError on purpose:
+ * this is never fixed by re-logging in (fresh logins during an outage are a
+ * login storm that trips the rate limiter and kicks other holders), and the
+ * caller should classify it transient so the order waits out the outage
+ * instead of burning retry attempts toward a permanent strand.
+ */
+export class TenantOutageError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'TenantOutageError';
+  }
+}
+
 function decrypt(enc: string, keyB64: string): string {
   const key = Buffer.from(keyB64, 'base64');
   const raw = Buffer.from(enc, 'base64');
@@ -255,8 +271,29 @@ export class TurbolySession {
    */
   private async verifyLoggedIn(): Promise<boolean> {
     const quick = await this.probeAuth();
-    if (quick !== null) return quick;
-    return this.loggedInByPage();
+    if (quick === true) return true;
+    const byPage = await this.loggedInByPage();
+    // Probe says dead, page says alive: that is not a kicked session — it is
+    // the tenant serving authenticated HTML while its lookup endpoints answer
+    // 401 (seen live 2026-08-08 during their mid-day deploy, for ~70 min).
+    // Re-logging in cannot fix it and each attempt kicks + rate-limits, so
+    // surface it as the outage it is.
+    if (quick === false && byPage) {
+      throw new TenantOutageError(
+        'Turboly degraded: halaman ter-autentikasi tapi endpoint lookup menjawab 401 (deploy vendor berlangsung) — dicoba lagi otomatis nanti.',
+      );
+    }
+    return byPage;
+  }
+
+  /** Turboly's per-account throttle serves a full "Too many requests" PAGE. */
+  private async throwIfRateLimited(): Promise<void> {
+    const page = this.page_();
+    const title = await page.title().catch(() => '');
+    const body = (await page.evaluate(() => document.body?.innerText?.slice(0, 300) ?? '').catch(() => '')) as string;
+    if (/too many requests|\b429\b/i.test(`${title} ${body}`)) {
+      throw new TenantOutageError('Turboly menjawab 429 (Too many requests) — akun sedang dibatasi; dicoba lagi otomatis nanti.');
+    }
   }
 
   /** true/false when the answer is unambiguous, null when it isn't. */
@@ -377,7 +414,10 @@ export class TurbolySession {
         if ((await pw.count()) > 0) break;
       }
     }
-    if ((await pw.count()) === 0) throw new AuthChallengeError('Login form not found — run `npm run login:turboly` to log in by hand.');
+    if ((await pw.count()) === 0) {
+      await this.throwIfRateLimited();
+      throw new AuthChallengeError('Login form not found — run `npm run login:turboly` to log in by hand.');
+    }
     const user = page.locator('input[type="email"], input[name*="email" i], input[name*="user" i], input[type="text"]').first();
     await user.fill(cred.username);
     await pw.fill(cred.password);
@@ -387,6 +427,7 @@ export class TurbolySession {
     await page.waitForLoadState('networkidle').catch(() => {});
 
     if (!(await this.verifyLoggedIn())) {
+      await this.throwIfRateLimited();
       throw new AuthChallengeError(`Login did not complete for ${this.cfg.branchCode} (2FA/OTP or wrong credentials). Run \`npm run login:turboly\`.`);
     }
     // This login just kicked every other holder of the account — publish before

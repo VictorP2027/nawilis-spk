@@ -241,8 +241,20 @@ export async function pushQueued(
         );
         if (!res.ok) {
           out.failed++;
+          // A transient failure is the TENANT's outage (deploy window, 429
+          // throttle), not this document's fault: refund the attempt so a
+          // one-hour vendor incident can never walk an order to MAX_ATTEMPTS
+          // and strand it, and back off 10 min instead of hammering the
+          // rate limiter every cron tick.
+          const transient = (res.failureClass ?? 'structural') === 'transient';
           await transition(doc._id, 'pushing', 'failed', {
-            push: { ...claimed.push, failureClass: res.failureClass ?? 'structural', lastError: res.error ?? 'push failed', nextAttemptAt: new Date(Date.now() + 60_000).toISOString() },
+            push: {
+              ...claimed.push,
+              ...(transient ? { attempt: Math.max(0, claimed.push.attempt - 1) } : {}),
+              failureClass: res.failureClass ?? 'structural',
+              lastError: res.error ?? 'push failed',
+              nextAttemptAt: new Date(Date.now() + (transient ? 10 * 60_000 : 60_000)).toISOString(),
+            },
           }).catch(() => {});
           log(`✗ ${doc._id}: [${res.failureClass ?? '?'}] ${res.error ?? ''}`);
           continue;

@@ -1,7 +1,7 @@
 import type { Page } from 'playwright';
 import { SELECTOR_MAP as S } from './selmap.js';
 import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControls } from './locators.js';
-import { TurbolySession, AuthChallengeError } from './session.js';
+import { TurbolySession, AuthChallengeError, TenantOutageError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload } from './sink.js';
 import type { SpkDoc } from '../types.js';
 import { jaroWinkler, canonPhoneKey, localPhone } from '../indonesia.js';
@@ -42,6 +42,7 @@ export class RpaSink implements ServiceOrderSink {
       await this.session.ensureLoggedIn();
       page = this.session.page_();
     } catch (e) {
+      if (e instanceof TenantOutageError) return fail('transient', e.message);
       if (e instanceof AuthChallengeError) return fail('auth', e.message);
       return fail('infra', errMsg(e));
     }
@@ -381,6 +382,7 @@ export class RpaSink implements ServiceOrderSink {
     const shot = await this.snapshot(this.session.page_(), `${spkId}-error`).catch(() => null);
     if (e instanceof LeaseLostError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
     if (e instanceof TransientError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
+    if (e instanceof TenantOutageError) return { ...fail('transient', (e as Error).message), screenshotRef: shot };
     if (e instanceof AuthChallengeError) return { ...fail('auth', (e as Error).message), screenshotRef: shot };
     if (e instanceof DataError) return { ...fail('data', (e as Error).message), screenshotRef: shot };
     // Turboly = ONE SESSION PER USER: a login elsewhere (web-form lookup, a human
