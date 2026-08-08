@@ -247,24 +247,36 @@ await page.goto(`${base}/vehicles/new`, { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(2500);
 const makes = await readPoll('#vehicle-make-select', 20);
 if (makes.length > 10) {
-  await getDb().collection('vehicle_makes').updateOne({ _id: 'makes' }, { $set: { list: makes.map((m) => m.t), syncedAt: now } }, { upsert: true });
+  await getDb().collection('vehicle_makes').updateOne({ _id: 'makes' }, { $set: { list: [...new Set(makes.map((m) => m.t))], syncedAt: now } }, { upsert: true });
   const byMake = {};
   for (const mk of makes) {
     try {
       // Models come from a paginated JSON lookup (same one the select2 uses).
-      byMake[mk.t] = await page.evaluate(async (makeId) => {
+      const harvested = await page.evaluate(async (makeId) => {
         const out = [];
-        for (let pg = 1; pg <= 20; pg++) {
+        // The endpoint serves 30 per page NO MATTER what page_limit asks for,
+        // so "fewer than requested" fires after page one and silently cut
+        // every big make to its first 30 (HONDA lost all its cars — the bikes
+        // happen to fill page 1). The only stop conditions the server actually
+        // honours are an empty page and repetition.
+        const seen = new Set();
+        for (let pg = 1; pg <= 40; pg++) {
           const r = await fetch(`/lookup/vehicle_models?search_term=&vehicle_type=&vehicle_make=${makeId}&page=${pg}&page_limit=100`, { headers: { accept: 'application/json' } });
           if (!r.ok) break;
           const j = await r.json();
-          const list = j.vehicle_models ?? [];
-          out.push(...list.map((m) => m.name));
-          if (list.length < 100) break;
+          const list = (j.vehicle_models ?? []).map((m) => m.name).filter((n) => n && !seen.has(n));
+          if (list.length === 0) break; // empty or pure repeats = past the end
+          for (const n of list) seen.add(n);
+          out.push(...list);
         }
         return out;
       }, mk.v);
-    } catch { byMake[mk.t] = []; }
+      // Four names exist TWICE in the tenant's make table (HONDA/BMW/SUZUKI/
+      // BAJAJ — the car brand and the bike brand as separate rows). Keyed by
+      // name, the second row used to OVERWRITE the first — which is exactly
+      // how HONDA's cars vanished behind its motorcycles. Union, never replace.
+      byMake[mk.t] = [...new Set([...(byMake[mk.t] ?? []), ...harvested])];
+    } catch { byMake[mk.t] = byMake[mk.t] ?? []; }
   }
   // Per-make MERGE: a make whose harvest came back empty keeps its previous
   // models — a flaky fetch must never blank out a make (e.g. HONDA → []).
