@@ -115,7 +115,7 @@ export default function PrintSpk() {
           </div>
         </div>
 
-        <div className="box" style={{ marginTop: 8, minHeight: 40 }}>
+        <div className="box" style={{ marginTop: 6, minHeight: 28 }}>
           <span className="sec-h">KELUHAN</span>
           {/* min-height = handwriting room when the box printed empty */}
           <div style={{ fontSize: 12, minHeight: 34 }}>{doc.complaint?.keluhan ?? ''}</div>
@@ -155,7 +155,7 @@ export default function PrintSpk() {
                 work agreed at the car gets handwritten here — numbered on from
                 whatever the digital order already contains. */}
             {[0, 1].map((i) => (
-              <tr key={`blank-${i}`} style={{ height: 22 }}>
+              <tr key={`blank-${i}`} style={{ height: 18 }}>
                 <td style={{ textAlign: 'center' }}>{SERVICES.length + extraLines.length + i + 1}</td>
                 <td /><td /><td /><td /><td />
               </tr>
@@ -163,8 +163,28 @@ export default function PrintSpk() {
           </tbody>
         </table>
 
+        {/* Paper layout: pengecekan (+ fuel) LEFT, body diagram RIGHT — the
+            single band that keeps the whole printout on one A4 page. */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 8, marginTop: 8, alignItems: 'start' }}>
+        <div className="box">
+          <span className="sec-h">PENGECEKAN AWAL KENDARAAN</span>
+          <table className="pk">
+            <tbody>
+              {CONDITION_ITEMS.map((c, i) => {
+                const got = conds.get(c.code);
+                const marks = got?.marks ?? [];
+                return (
+                  <tr key={c.code}>
+                    <td style={{ width: 18, textAlign: 'center' }}>{i + 1}</td>
+                    <td>{c.label}</td>
+                    <td style={{ width: 220 }}>{marks.length ? marks.join(', ') : 'OK'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         {doc.rawForm?.bahan_bakar_pct != null && (
-          <div className="box" style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 6 }}>
             <span className="sec-h">{doc.rawForm.bahan_bakar_mode === 'ev' ? 'BATERAI EV' : 'BAHAN BAKAR'}</span>
             {doc.rawForm.bahan_bakar_mode === 'ev' ? (
               <div style={{ fontSize: 13, fontWeight: 700 }}>Sisa baterai: {doc.rawForm.bahan_bakar_pct}%</div>
@@ -183,24 +203,6 @@ export default function PrintSpk() {
             )}
           </div>
         )}
-
-        <div className="box" style={{ marginTop: 8 }}>
-          <span className="sec-h">PENGECEKAN AWAL KENDARAAN</span>
-          <table className="pk">
-            <tbody>
-              {CONDITION_ITEMS.map((c, i) => {
-                const got = conds.get(c.code);
-                const marks = got?.marks ?? [];
-                return (
-                  <tr key={c.code}>
-                    <td style={{ width: 18, textAlign: 'center' }}>{i + 1}</td>
-                    <td>{c.label}</td>
-                    <td style={{ width: 220 }}>{marks.length ? marks.join(', ') : 'OK'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
         </div>
 
         {/* The body diagram prints ALWAYS: marked zones carry an ✕, and a
@@ -214,9 +216,9 @@ export default function PrintSpk() {
             stored ?? DAMAGE_ZONES.filter((z) => (doc.complaint?.keluhan ?? '').includes(z.label)).map((z) => z.code),
           );
           return (
-            <div className="box" style={{ marginTop: 8 }}>
+            <div className="box">
               <span className="sec-h">KERUSAKAN BODI{marked.size ? ` — ${marked.size} ditandai` : ' — tidak ada tanda (coret manual bila perlu)'}</span>
-              <svg viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: 210 }}>
+              <svg viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: 150 }}>
                 {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
                   <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
                 ))}
@@ -247,6 +249,7 @@ export default function PrintSpk() {
             </div>
           );
         })()}
+        </div>
 
         <div style={{ fontSize: 10, marginTop: 8 }}>
           Saya yang bertanda tangan dibawah ini memberi wewenang penuh kepada bengkel NAWILIS untuk melakukan
@@ -255,13 +258,13 @@ export default function PrintSpk() {
 
         <div className="two" style={{ marginTop: 6 }}>
           {([['Yang menyerahkan,', sig.menyerahkan], ['Yang menerima,', sig.menerima]] as const).map(([label, s]) => (
-            <div key={label} className="box" style={{ minHeight: 90, textAlign: 'center' }}>
+            <div key={label} className="box" style={{ minHeight: 62, textAlign: 'center' }}>
               <div style={{ fontSize: 11 }}>{label}</div>
               {s?.imageDataUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={s.imageDataUrl} alt="" style={{ height: 48, margin: '4px auto', display: 'block' }} />
               ) : (
-                <div style={{ height: 48 }} />
+                <div style={{ height: 28 }} />
               )}
               <div style={{ fontSize: 11, borderTop: '1px solid #9fb2d4', width: 160, margin: '0 auto', paddingTop: 2 }}>
                 ( {s?.namaJelas ?? ' '} )

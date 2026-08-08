@@ -261,3 +261,11 @@ svg.car .zone.on { fill: rgba(0, 72, 204, .22); stroke: var(--nawilis); stroke-w
   table.pk tr, .sheet .sign { break-inside: avoid; }
 }
 @page { size: A4 portrait; margin: 10mm; }
+
+/* One-A4 guarantee for the print pages: the on-screen sheet keeps its comfy
+   padding, paper gets the tight version — the difference is exactly what kept
+   the SPK spilling 24px onto a second page. */
+@media print {
+  .print-wrap .sheet, .sheet { padding: 8px 12px; }
+  .sheet .box { padding: 4px 6px; }
+}
