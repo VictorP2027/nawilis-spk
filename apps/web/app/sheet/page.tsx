@@ -276,6 +276,7 @@ export default function Sheet() {
       // Verbatim raw fields → reproduce the Nawilis export columns exactly.
       // (DETAIL TAMBAHAN removed 2026-08-08 — its export columns stay empty.)
       raw: {
+        kerusakan_zones: [...dmg],
         nama_cs: menerima, kontak_lainnya: kontakLain, nama_customer_menyerahkan: menyerahkan,
         service_lain: [extra1, extra2].filter(Boolean).join(', '),
         bahan_bakar_mode: fuelMode,

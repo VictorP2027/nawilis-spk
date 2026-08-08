@@ -238,6 +238,7 @@ export default function Intake() {
       // serviceCode, so it lands verbatim in the SO's Notes ("Pekerjaan lain").
       ...[extra1, extra2].map((t) => t.trim()).filter(Boolean).map((t) => ({ serviceCode: t, ordered: true, qty: 1, quotedPrice: null, chosenSku: null }))],
       raw: {
+        kerusakan_zones: [...dmg],
         service_lain: [extra1, extra2].map((t) => t.trim()).filter(Boolean).join(', '),
         bahan_bakar_mode: fuelMode,
         bahan_bakar_pct: fuelMode === 'fuel' ? fuelPct : Number(evPct),
