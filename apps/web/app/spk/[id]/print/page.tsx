@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../../../lib/refdata.client';
+import { CarDiagram } from '../../../components/CarDiagram';
 
 /**
  * /spk/[id]/print — a captured SPK rendered back onto the paper it came from.
@@ -34,6 +35,7 @@ interface Doc {
   }>;
   conditionChecks?: Array<{ item: string; marks: string[]; status?: string }>;
   rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[] };
+  damageDiagram?: { imageRef?: string | null };
   signatures?: {
     menyerahkan?: { present?: boolean; namaJelas?: string | null; imageDataUrl?: string | null };
     menerima?: { present?: boolean; namaJelas?: string | null; imageDataUrl?: string | null };
@@ -205,45 +207,26 @@ export default function PrintSpk() {
         )}
         </div>
 
-        {/* The body diagram prints ALWAYS: marked zones carry an ✕, and a
-            pristine car prints the blank top-view — the paper is where late
-            damage gets hand-annotated now, next to the wet signatures. Older
-            docs (no structural zones) fall back to matching the complaint's
-            "Kerusakan bodi:" labels. */}
+        {/* The body diagram prints ALWAYS — the paper-faithful art with the
+            operator's ink laid back over it in perfect register; a pristine
+            car prints it blank, ready for a pen. Old documents that only
+            recorded tapped zones list them as text below. */}
         {(() => {
-          const stored = doc.rawForm?.kerusakan_zones;
-          const marked = new Set(
-            stored ?? DAMAGE_ZONES.filter((z) => (doc.complaint?.keluhan ?? '').includes(z.label)).map((z) => z.code),
-          );
+          const oldZones = doc.rawForm?.kerusakan_zones ?? [];
+          const ink = doc.damageDiagram?.imageRef;
           return (
             <div className="box">
-              <span className="sec-h">KERUSAKAN BODI{marked.size ? ` — ${marked.size} ditandai` : ' — tidak ada tanda (coret manual bila perlu)'}</span>
-              <svg viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: 150 }}>
-                {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
-                  <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
-                ))}
-                <rect x="80" y="8" width="200" height="500" rx="34" fill="#fff" stroke="var(--nawilis)" strokeWidth="1.5" />
-                {DAMAGE_ZONES.map((z) => {
-                  const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
-                  const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
-                  const on = marked.has(z.code);
-                  return (
-                    <g key={z.code}>
-                      {z.shape === 'circle' ? (
-                        <circle cx={z.cx} cy={z.cy} r={z.r} fill={on ? 'rgba(220,38,38,.12)' : 'transparent'} stroke={on ? '#dc2626' : '#9db0d6'} strokeWidth={on ? 1.5 : 0.8} />
-                      ) : (
-                        <rect x={z.x} y={z.y} width={z.w} height={z.h} rx="2" fill={on ? 'rgba(220,38,38,.12)' : 'transparent'} stroke={on ? '#dc2626' : '#9db0d6'} strokeWidth={on ? 1.5 : 0.8} />
-                      )}
-                      <text x={cx} y={cy + (z.labelDy ?? 3)} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 6 : 7} fill="#8a99b8">{z.abbr}</text>
-                      {on && <text x={cx} y={cy + (z.labelDy ?? 3) + 3} textAnchor="middle" fontSize="15" fill="#dc2626" fontWeight="900">✕</text>}
-                    </g>
-                  );
-                })}
-                <text x="180" y="516" textAnchor="middle" fontSize="10" fill="#888">↑ DEPAN</text>
-              </svg>
-              {marked.size > 0 && (
+              <span className="sec-h">KERUSAKAN BODI{ink ? '' : ' — coret manual bila perlu'}</span>
+              <div style={{ position: 'relative', margin: '0 auto', width: 168 }}>
+                <CarDiagram />
+                {ink?.startsWith('data:image') && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={ink} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+                )}
+              </div>
+              {oldZones.length > 0 && (
                 <div style={{ fontSize: 10, marginTop: 2 }}>
-                  Ditandai: {[...marked].map((c) => DAMAGE_ZONES.find((z) => z.code === c)?.label ?? c).join(', ')}
+                  Ditandai: {oldZones.map((c) => DAMAGE_ZONES.find((z) => z.code === c)?.label ?? c).join(', ')}
                 </div>
               )}
             </div>

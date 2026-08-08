@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FuelGauge } from '../components/FuelGauge';
-import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../lib/refdata.client';
+import { DiagramInk, type InkHandle } from '../components/DiagramInk';
+import { CarDiagram } from '../components/CarDiagram';
+import { SERVICES, BRANCHES, CONDITION_ITEMS } from '../../lib/refdata.client';
 import { submitOrQueue } from '../../lib/outbox';
 
 /** Pixel-faithful, fillable replica of the Nawilis SPK (Surat Perintah Kerja). */
@@ -45,6 +47,8 @@ export default function Sheet() {
   const [fuelPct, setFuelPct] = useState<number | null>(null);
   const [evPct, setEvPct] = useState('');
   const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
+  const [dmgInked, setDmgInked] = useState(false);
+  const dmgInk = useRef<InkHandle>(null);
   const [branch, setBranch] = useState('');
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
@@ -212,12 +216,10 @@ export default function Sheet() {
   const [cond, setCond] = useState<Record<string, string>>(() =>
     Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])),
   );
-  const [dmg, setDmg] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const setRow = (code: string, patch: Partial<PkRow>) => setPk((p) => ({ ...p, [code]: { ...p[code]!, ...patch } }));
-  const toggleDmg = (z: string) => setDmg((s) => { const n = new Set(s); n.has(z) ? n.delete(z) : n.add(z); return n; });
 
   const orderedCount = useMemo(() => Object.values(pk).filter((r) => r.order).length, [pk]);
 
@@ -238,8 +240,7 @@ export default function Sheet() {
       jobLines.push({ serviceCode: t, ordered: true, qty: 1, keterangan: null, quotedPrice: null, chosenSku: null });
     }
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
-    const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
-    const complaint = [keluhan, dmgSummary && `Kerusakan bodi: ${dmgSummary}`].filter(Boolean).join(' | ') || null;
+    const complaint = keluhan || null;
 
     const payload = {
       uploadId,
@@ -275,8 +276,8 @@ export default function Sheet() {
       },
       // Verbatim raw fields → reproduce the Nawilis export columns exactly.
       // (DETAIL TAMBAHAN removed 2026-08-08 — its export columns stay empty.)
+      attachments: (() => { const ink = dmgInk.current?.get(); return ink ? [{ kind: 'damage', ref: ink }] : []; })(),
       raw: {
-        kerusakan_zones: [...dmg],
         nama_cs: menerima, kontak_lainnya: kontakLain, nama_customer_menyerahkan: menyerahkan,
         service_lain: [extra1, extra2].filter(Boolean).join(', '),
         bahan_bakar_mode: fuelMode,
@@ -533,38 +534,14 @@ export default function Sheet() {
           </div>
           <div>
             <div className="box" style={{ height: '100%' }}>
-              <div style={{ fontSize: 9, fontWeight: 700, marginBottom: 2 }}>Pengecekan bodi — klik bagian yang rusak:</div>
-              <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
-                {/* tyre discs behind the clickable wheel zones */}
-                {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
-                  <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
-                ))}
-                {/* car body outline */}
-                <rect x="80" y="8" width="200" height="500" rx="34" fill="#f7faff" stroke="var(--nawilis)" strokeWidth="1.5" />
-                {/* clickable zones (rects + wheel circles) */}
-                {DAMAGE_ZONES.map((z) => {
-                  const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
-                  const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
-                  const on = dmg.has(z.code);
-                  return (
-                    <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
-                      {z.shape === 'circle' ? (
-                        <circle className={`zone ${on ? 'on' : ''}`} cx={z.cx} cy={z.cy} r={z.r}><title>{z.label}</title></circle>
-                      ) : (
-                        <rect className={`zone ${on ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="2"><title>{z.label}</title></rect>
-                      )}
-                      <text x={cx} y={cy + (z.labelDy ?? 3)} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 7 : 8} fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
-                      {on && <text x={cx} y={cy + (z.labelDy ?? 3) + 3} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 13 : 17} fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
-                    </g>
-                  );
-                })}
-                {/* emblem L/R markers + orientation */}
-                <text x="90" y="39" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">L</text>
-                <text x="270" y="39" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">R</text>
-                <text x="90" y="473" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">L</text>
-                <text x="270" y="473" textAnchor="middle" fontSize="8" fill="#333" pointerEvents="none">R</text>
-                <text x="180" y="518" textAnchor="middle" fontSize="10" fill="#888" pointerEvents="none">↑ DEPAN</text>
-              </svg>
+              <div style={{ fontSize: 9, fontWeight: 700, marginBottom: 2 }}>
+                Pengecekan bodi — ✏ gambar kerusakan langsung
+                {dmgInked && <button type="button" className="chk-chip" style={{ marginLeft: 6 }} onClick={() => { dmgInk.current?.clear(); }}>✕ Hapus</button>}
+              </div>
+              <div style={{ position: 'relative' }}>
+                <CarDiagram />
+                <DiagramInk ref={dmgInk} active onInk={setDmgInked} />
+              </div>
               <div className="fld" style={{ marginTop: 4 }}><label style={{ fontSize: 10 }}>Estimasi (menit)</label><input value={estimasi} onChange={(e) => setEstimasi(e.target.value)} inputMode="numeric" /></div>
             </div>
           </div>

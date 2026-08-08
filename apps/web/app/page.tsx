@@ -4,7 +4,9 @@ import BrandMark from './components/BrandMark';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FuelGauge } from './components/FuelGauge';
-import { SERVICES, BRANCHES, DAMAGE_ZONES, CONDITION_ITEMS } from '../lib/refdata.client';
+import { DiagramInk, type InkHandle } from './components/DiagramInk';
+import { CarDiagram } from './components/CarDiagram';
+import { SERVICES, BRANCHES, CONDITION_ITEMS } from '../lib/refdata.client';
 import { ProductInput } from '../lib/productSuggest';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
@@ -56,7 +58,6 @@ export default function Intake() {
   const [advisor, setAdvisor] = useState('');
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
-  const [dmg, setDmg] = useState<Set<string>>(new Set());
   const router = useRouter();
   // Signatures moved to PAPER: submit redirects to the print page and both
   // parties sign the printout. No pads, no on-glass images.
@@ -70,12 +71,16 @@ export default function Intake() {
   // Mobil / Motor: four make names are BOTH brands; this picks the model list
   // and Turboly's vehicle type for a new vehicle.
   const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
+  // Freehand red-ink annotation over the diagram (the 'annotate like a
+  // signature' ask): tap-mode and draw-mode are explicit so a scroll swipe
+  // can never paint, and a stray tap in draw-mode never marks a zone.
+  const [dmgInked, setDmgInked] = useState(false);
+  const dmgInk = useRef<InkHandle>(null);
   // Pengecekan awal (paper section, required): every item answered; OK default,
   // tap to mark the exception.
   const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
   const [estimasi, setEstimasi] = useState('');
   const [optOpen, setOptOpen] = useState(false); // optional fields collapsed = neat form
-  const toggleDmg = (z: string) => setDmg((prev) => { const n = new Set(prev); n.has(z) ? n.delete(z) : n.add(z); return n; });
   const [outbox, setOutbox] = useState(0);
   const [showSetup, setShowSetup] = useState(false); // reopened via the topbar branch badge
   const [jadwalOn, setJadwalOn] = useState(false);
@@ -225,7 +230,7 @@ export default function Intake() {
         km,
         kind,
       },
-      complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
+      complaint: keluhan || null,
       // Price is deliberately NOT captured at intake anymore: Turboly's own
       // pricebook prices the SO line, and the real figure is confirmed by a
       // human at Buat Invoice — which is also where the payment amount is set.
@@ -237,8 +242,8 @@ export default function Intake() {
       // The handwriting rows ride as UNMAPPED job lines: the typed text IS the
       // serviceCode, so it lands verbatim in the SO's Notes ("Pekerjaan lain").
       ...[extra1, extra2].map((t) => t.trim()).filter(Boolean).map((t) => ({ serviceCode: t, ordered: true, qty: 1, quotedPrice: null, chosenSku: null }))],
+      attachments: (() => { const ink = dmgInk.current?.get(); return ink ? [{ kind: 'damage', ref: ink }] : []; })(),
       raw: {
-        kerusakan_zones: [...dmg],
         service_lain: [extra1, extra2].map((t) => t.trim()).filter(Boolean).join(', '),
         bahan_bakar_mode: fuelMode,
         bahan_bakar_pct: fuelMode === 'fuel' ? fuelPct : Number(evPct),
@@ -303,12 +308,12 @@ export default function Intake() {
     setAlamat('');
     setKeluhan('');
     setJobs({});
-    setDmg(new Set());
     setCondQ(Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
     setEstimasi('');
     setFuelMode('fuel'); setFuelPct(null); setEvPct('');
     setExtra1(''); setExtra2('');
     setKind('car');
+    dmgInk.current?.clear();
     // Advisor must be a deliberate choice per SPK — never carried over from the
     // previous customer (wrong person would get the sales credit).
     setAdvisor('');
@@ -639,36 +644,18 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         </div>
         )}
 
-        {/* The body diagram is MANDATORY-VISIBLE: always on screen, annotated
-            by tapping — a pristine car simply has no marks. */}
+        {/* The body diagram, redrawn to match the printed SPK line for line.
+            Annotation is PEN-ONLY — draw on it exactly like on the paper; the
+            ink ships as a transparent PNG and prints back over this same art. */}
         <div className="card">
-          <div className="label">Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
-          <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
-            {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
-              <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
-            ))}
-            <rect x="80" y="8" width="200" height="500" rx="34" fill="#EAF0FF" stroke="var(--nawilis)" strokeWidth="1.5" />
-            {DAMAGE_ZONES.map((z) => {
-              const cx = z.shape === 'circle' ? z.cx : z.x + z.w / 2;
-              const cy = z.shape === 'circle' ? z.cy : z.y + z.h / 2;
-              const on = dmg.has(z.code);
-              return (
-                <g key={z.code} onClick={() => toggleDmg(z.code)} style={{ cursor: 'pointer' }}>
-                  {z.shape === 'circle' ? (
-                    <circle className={`zone ${on ? 'on' : ''}`} cx={z.cx} cy={z.cy} r={z.r}><title>{z.label}</title></circle>
-                  ) : (
-                    <rect className={`zone ${on ? 'on' : ''}`} x={z.x} y={z.y} width={z.w} height={z.h} rx="2"><title>{z.label}</title></rect>
-                  )}
-                  <text x={cx} y={cy + (z.labelDy ?? 3)} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 7 : 8} fill={z.shape === 'circle' ? '#fff' : '#555'} pointerEvents="none">{z.abbr}</text>
-                  {on && <text x={cx} y={cy + (z.labelDy ?? 3) + 3} textAnchor="middle" fontSize={z.abbr === 'VELG' ? 13 : 17} fill="#e11" fontWeight="900" pointerEvents="none">✕</text>}
-                </g>
-              );
-            })}
-            <text x="180" y="518" textAnchor="middle" fontSize="10" fill="#888" pointerEvents="none">↑ DEPAN</text>
-          </svg>
-          {dmg.size > 0 && (
-            <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
-          )}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="label" style={{ marginBottom: 0 }}>Pengecekan bodi — ✏ gambar kerusakan langsung</span>
+            {dmgInked && <button type="button" className="chk-chip" onClick={() => { dmgInk.current?.clear(); }}>✕ Hapus gambar</button>}
+          </div>
+          <div style={{ position: 'relative', margin: '0 auto', maxWidth: 300 }}>
+            <CarDiagram />
+            <DiagramInk ref={dmgInk} active onInk={setDmgInked} />
+          </div>
         </div>
 
         <div className="card">
