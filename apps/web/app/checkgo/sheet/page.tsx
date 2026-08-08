@@ -52,6 +52,7 @@ export default function CheckGoSheet() {
   const [makes, setMakes] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [makeKnownInModels, setMakeKnownInModels] = useState(false);
+  const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
 
   useEffect(() => {
     fetch('/api/vehicle-makes').then((r) => r.json()).then((d) => setMakes(d.makes ?? [])).catch(() => {});
@@ -65,12 +66,12 @@ export default function CheckGoSheet() {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnownInModels(false); return; }
     let live = true;
-    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`)
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}&kind=${kind}`)
       .then((r) => r.json())
       .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnownInModels(!!d.known); } })
       .catch(() => { if (live) { setModels([]); setMakeKnownInModels(false); } });
     return () => { live = false; };
-  }, [merk]);
+  }, [merk, kind]);
   useEffect(() => {
     if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); return; }
     let live = true;
@@ -217,6 +218,7 @@ export default function CheckGoSheet() {
       customer: { nama, wa: wa || null, alamat: alamat || null },
       vehicle: {
         noPolisi: noPol,
+        kind,
         merk: merk || null,
         tipe: tipe || null,
         tahun: tahun ? Number(tahun) : null,
@@ -331,6 +333,15 @@ export default function CheckGoSheet() {
                 {plateBad && <div className="warn-inline">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
                 {ownerMismatch && plateOwner && <div className="warn-inline">⚠ Plat milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — order tetap atas nama pemilik asli; orang di form dicatat sebagai pembawa.</div>}
                 {returning && <div className="ok-inline">↩ Pelanggan lama: {returning} — data terisi otomatis.</div>}
+              </div>
+            </div>
+            <div className="fld"><label>Jenis</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['car', 'motorcycle'] as const).map((k) => (
+                  <button key={k} type="button" className={`chk-chip${kind === k ? ' ok' : ''}`} onClick={() => setKind(k)}>
+                    {k === 'car' ? '🚗 Mobil' : '🏍 Motor'}
+                  </button>
+                ))}
               </div>
             </div>
             <div className="fld"><label>Merk Mobil</label>

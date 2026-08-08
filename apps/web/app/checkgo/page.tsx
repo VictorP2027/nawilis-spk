@@ -216,14 +216,17 @@ export default function CheckGoIntake() {
       return changed ? next : prev;
     });
   }, [recommended]);
+  const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
   useEffect(() => {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnown(false); return; }
     let live = true;
-    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`).then((r) => r.json())
+    // kind narrows the datalist for the four twin-name makes (HONDA the carmaker
+    // vs HONDA the bikemaker) — same split the SPK forms already send.
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}&kind=${kind}`).then((r) => r.json())
       .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnown(!!d.known); } }).catch(() => {});
     return () => { live = false; };
-  }, [merk]);
+  }, [merk, kind]);
   useEffect(() => {
     if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); setMekanikList([]); return; }
     let live = true;
@@ -440,6 +443,7 @@ export default function CheckGoIntake() {
       },
       vehicle: {
         noPolisi: plate,
+        kind,
         merk: merk || null,
         tipe: tipe || null,
         tahun: tahun ? Number(tahun) : null,
@@ -531,7 +535,7 @@ export default function CheckGoIntake() {
 
   function resetForm() {
     setWa(''); setNama(''); setAlamat('');
-    setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm('');
+    setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm(''); setKind('car');
     setHist(null); setPlateOwner(null); setCustVehicles([]); setCustHint(null); setRegName(null);
     setEstimasi(String(DEFAULT_ESTIMASI));
     setSecVerdict({}); setItemVerdict({}); setReading({});
@@ -627,6 +631,13 @@ export default function CheckGoIntake() {
           </div>
           <div className="row" style={{ marginTop: 10 }}>
             <div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                {(['car', 'motorcycle'] as const).map((k) => (
+                  <button key={k} type="button" className={`chk-chip${kind === k ? ' ok' : ''}`} onClick={() => setKind(k)}>
+                    {k === 'car' ? '🚗 Mobil' : '🏍 Motor'}
+                  </button>
+                ))}
+              </div>
               <div className="label">Merk</div>
               <input list="make-list-cg" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
               {!merkOk && <div className="req-note">⚠ wajib diisi</div>}
