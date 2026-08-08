@@ -117,7 +117,8 @@ export default function PrintSpk() {
 
         <div className="box" style={{ marginTop: 8, minHeight: 40 }}>
           <span className="sec-h">KELUHAN</span>
-          <div style={{ fontSize: 12 }}>{doc.complaint?.keluhan ?? ''}</div>
+          {/* min-height = handwriting room when the box printed empty */}
+          <div style={{ fontSize: 12, minHeight: 34 }}>{doc.complaint?.keluhan ?? ''}</div>
         </div>
 
         <table className="pk" style={{ marginTop: 8 }}>
@@ -148,6 +149,15 @@ export default function PrintSpk() {
                 <td style={{ textAlign: 'center', fontWeight: 700 }}>{l.qty > 1 ? l.qty : '✓'}</td>
                 <td>{l.keterangan ?? ''}</td>
                 <td /><td />
+              </tr>
+            ))}
+            {/* Two ALWAYS-blank rows: the printout is a working paper now, and
+                work agreed at the car gets handwritten here — numbered on from
+                whatever the digital order already contains. */}
+            {[0, 1].map((i) => (
+              <tr key={`blank-${i}`} style={{ height: 22 }}>
+                <td style={{ textAlign: 'center' }}>{SERVICES.length + extraLines.length + i + 1}</td>
+                <td /><td /><td /><td /><td />
               </tr>
             ))}
           </tbody>
