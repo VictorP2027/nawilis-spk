@@ -1,4 +1,5 @@
-import { SERVICES, CONDITION_ITEMS, BRANCHES } from './refdata.client';
+import { SERVICES, CONDITION_ITEMS, BRANCHES, DAMAGE_ZONES } from './refdata.client';
+import { carDiagramSvg } from './carDiagramSvg';
 
 /**
  * The printable rendition of one document inside the pre-purge backup zip.
@@ -6,14 +7,14 @@ import { SERVICES, CONDITION_ITEMS, BRANCHES } from './refdata.client';
  * The live /print pages cannot serve this purpose: they are client-rendered
  * against /api/spk/[id], and the whole reason this backup exists is that those
  * documents are about to be DELETED — a link would point at nothing. So each
- * record gets a fully self-contained HTML file: inline CSS, signature images
- * embedded as the data URLs they already are, no fetches. Open → Cetak → the
- * paper is back.
+ * record gets a fully self-contained HTML file: inline CSS, signature and ink
+ * images embedded as the data URLs they already are, no fetches. Open → Cetak →
+ * the paper is back.
  *
- * Deliberately an ARCHIVAL layout, not a replica of the pixel-faithful sheet:
- * duplicating those two React layouts server-side would drift from them the
- * first time either changes. This prints what was recorded, in reading order,
- * and says which document it came from.
+ * The SECTIONS mirror the live printout (full numbered job table, fuel bar,
+ * body diagram with the operator's ink laid back over it) so the archive copy
+ * is the same document the customer signed — the diagram itself is the shared
+ * CarDiagram component rendered to static markup, not a duplicate drawing.
  */
 
 interface AnyDoc {
@@ -32,6 +33,8 @@ interface AnyDoc {
   complaint?: { keluhan?: string | null };
   jobLines?: Array<{ serviceCode?: string; qty?: number; keterangan?: string | null; quotedPrice?: number | null; turbolySku?: string | null }>;
   conditionChecks?: Array<{ item?: string; marks?: string[] }>;
+  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[] };
+  damageDiagram?: { imageRef?: string | null };
   estimasi?: { minutes?: number | null };
   turboly?: { serviceOrderNo?: string | null };
   checkGo?: {
@@ -66,11 +69,32 @@ ${doc.checkGo.inspectionItems.map((it) => `<tr${/^Rekomendasi/.test(it.item ?? '
 </tbody></table>`);
   }
 
+  if (!isCG && doc.complaint?.keluhan) rows.push(`<h2>Keluhan</h2><p>${esc(doc.complaint.keluhan)}</p>`);
+
   if (doc.jobLines?.length) {
-    rows.push(`<h2>Pekerjaan</h2>
+    if (isCG) {
+      rows.push(`<h2>Pekerjaan</h2>
 <table><thead><tr><th>Jasa</th><th>Qty</th><th>Keterangan</th><th>SKU</th><th>Harga</th></tr></thead><tbody>
 ${doc.jobLines.map((l) => `<tr><td>${esc(svcLabel(l.serviceCode ?? ''))}</td><td>${esc(l.qty)}</td><td>${esc(l.keterangan)}</td><td>${esc(l.turbolySku)}</td><td>${esc(rupiah(l.quotedPrice))}</td></tr>`).join('\n')}
 </tbody></table>`);
+    } else {
+      // The SPK printout's shape: every catalog row numbered with an ORDER
+      // tick, the handwriting lines after them, then two blank rows — the
+      // archive copy is the same sheet the customer signed, not a digest.
+      type JobLine = NonNullable<AnyDoc['jobLines']>[number];
+      const byCode = new Map((doc.jobLines ?? []).map((l) => [l.serviceCode ?? '', l]));
+      const extras = (doc.jobLines ?? []).filter((l) => !SERVICES.some((s) => s.code === l.serviceCode));
+      let n = 0;
+      const tr = (label: string, l?: JobLine): string =>
+        `<tr><td class="num">${++n}</td><td>${esc(label)}</td><td class="ord">${l ? '✓' : ''}</td><td>${esc(l?.qty ?? '')}</td><td>${esc(l?.keterangan)}</td><td>${esc(l?.turbolySku)}</td><td>${esc(rupiah(l?.quotedPrice))}</td></tr>`;
+      rows.push(`<h2>Pekerjaan</h2>
+<table><thead><tr><th>#</th><th>Jasa</th><th>Order</th><th>Qty</th><th>Keterangan</th><th>SKU</th><th>Harga</th></tr></thead><tbody>
+${SERVICES.map((s) => tr(s.label, byCode.get(s.code))).join('\n')}
+${extras.map((l) => tr(l.serviceCode ?? '', l)).join('\n')}
+<tr><td class="num">${++n}</td><td class="blank"></td><td></td><td></td><td></td><td></td><td></td></tr>
+<tr><td class="num">${++n}</td><td class="blank"></td><td></td><td></td><td></td><td></td><td></td></tr>
+</tbody></table>`);
+    }
   }
 
   const marked = (doc.conditionChecks ?? []).filter((c) => c.marks?.length);
@@ -80,7 +104,27 @@ ${doc.jobLines.map((l) => `<tr><td>${esc(svcLabel(l.serviceCode ?? ''))}</td><td
 ${marked.length ? `<table><tbody>${marked.map((c) => `<tr><td>${esc(condLabel(c.item ?? ''))}</td><td>${esc((c.marks ?? []).join(', '))}</td></tr>`).join('')}</tbody></table>` : ''}`);
   }
 
-  if (!isCG && doc.complaint?.keluhan) rows.push(`<h2>Keluhan</h2><p>${esc(doc.complaint.keluhan)}</p>`);
+  if (!isCG && doc.rawForm?.bahan_bakar_pct != null) {
+    const pct = doc.rawForm.bahan_bakar_pct;
+    if (doc.rawForm.bahan_bakar_mode === 'ev') {
+      rows.push(`<h2>Baterai EV</h2><p><b>Sisa baterai: ${esc(pct)}%</b></p>`);
+    } else {
+      rows.push(`<h2>Bahan Bakar</h2>
+<div class="fuel-scale"><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div>
+<div class="fuel">${[25, 50, 75, 100].map((v) => `<span${(pct ?? 0) >= v ? ' class="fill"' : ''}></span>`).join('')}</div>
+<p><b>${esc(pct)}%</b></p>`);
+    }
+  }
+
+  if (!isCG) {
+    // The body diagram, exactly as printed: the shared CarDiagram art with the
+    // operator's ink data-URL laid over it; tapped zones from old docs as text.
+    const ink = doc.damageDiagram?.imageRef;
+    const oldZones = doc.rawForm?.kerusakan_zones ?? [];
+    rows.push(`<h2>Kerusakan Bodi</h2>
+<div class="dia">${carDiagramSvg()}${ink?.startsWith('data:image') ? `<img src="${ink}" alt="">` : ''}</div>
+${oldZones.length ? `<p style="font-size:11px">Ditandai: ${esc(oldZones.map((c) => DAMAGE_ZONES.find((z) => z.code === c)?.label ?? c).join(', '))}</p>` : ''}`);
+  }
 
   const sig = (who: string, label: string): string => {
     const s = doc.signatures?.[who];
@@ -115,6 +159,19 @@ ${marked.length ? `<table><tbody>${marked.map((c) => `<tr><td>${esc(condLabel(c.
   .sig-label { font-size: 11px; color: #667; }
   .sig-name { border-top: 1px solid #9fb2d4; margin-top: 4px; padding-top: 3px; font-size: 12px; }
   .sig-empty { height: 60px; display: grid; place-items: center; color: #aab; font-size: 11px; }
+  td.num { width: 24px; text-align: right; color: #667; }
+  td.ord { width: 44px; text-align: center; }
+  tr td.blank { height: 20px; }
+  .fuel-scale { display: flex; max-width: 260px; font-size: 10px; color: #667; }
+  .fuel-scale span { flex: 1; }
+  .fuel-scale span:last-child { flex: 0 0 auto; }
+  .fuel { display: flex; max-width: 260px; height: 22px; border: 1.5px solid var(--blue); border-radius: 4px; overflow: hidden; }
+  .fuel span { flex: 1; border-left: 1px solid var(--blue); }
+  .fuel span:first-child { border-left: none; }
+  .fuel span.fill { background: var(--blue); }
+  .dia { position: relative; width: 200px; margin: 4px auto; }
+  .dia img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .auth { font-size: 10.5px; margin-top: 10px; }
   footer { margin-top: 14px; border-top: 1px solid #b9c6de; padding-top: 4px; font-size: 10px; color: #667; }
   @media print { body { padding: 0; } @page { size: A4; margin: 12mm; } }
 </style>
@@ -130,7 +187,9 @@ ${marked.length ? `<table><tbody>${marked.map((c) => `<tr><td>${esc(condLabel(c.
   ${isCG && doc.checkGo?.harga != null ? `<div><b>General Check</b> ${esc(rupiah(doc.checkGo.harga))}</div>` : ''}
 </div>
 ${rows.join('\n')}
+${isCG ? '' : `<div class="auth">Saya yang bertanda tangan dibawah ini memberi wewenang penuh kepada bengkel NAWILIS untuk melakukan pekerjaan sesuai dengan permintaan order di atas dan test jalan apabila diperlukan.</div>`}
 <div class="sigs">${sig('menyerahkan', 'Yang menyerahkan (customer)')}${sig('menerima', 'Yang menerima (Service Advisor)')}</div>
+${!isCG && doc.estimasi?.minutes != null ? `<p><b>Estimasi waktu</b> ${esc(doc.estimasi.minutes)} menit</p>` : ''}
 <footer>Dokumen digital ${esc(doc._id)} · diarsipkan dari backup pra-hapus · dicetak ulang dari data tersimpan</footer>
 `;
 }
