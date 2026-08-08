@@ -63,6 +63,13 @@ const CARD_RULES = [
   { code: 'BUBUT_REM', prefixes: ['BUB-'] },
   { code: 'BAN', prefixes: ['BPB-', 'TAM-', 'PRE-'] },
   { code: 'NITROGEN', prefixes: ['NIT-'] },
+  // The three fields added from the paper form, 8 Aug. Power Tune-Up and Oil
+  // Filter are service SKUs like every rule above; Pentil Karet is sold as a
+  // PRODUCT (AKS-…), so its options come from the scraped products CSV instead
+  // of service_products_by_type.csv — first listed is the default.
+  { code: 'POWER_TUNE_UP', skus: ['TUN-NAW-PTU', 'TUN-NAW-PTUP'] },
+  { code: 'OIL_FILTER', skus: ['JAS-NAW-JGOF', 'JAS-DAI-JGOF', 'JAS-NAWJAS-JDFM', 'JAS-NAW-LFF', 'TPI-NAWJAS-LFF', 'GSM-NAW-LGFA'] },
+  { code: 'PENTIL_KARET', productFile: 'pentil_products.csv', skuPrefix: 'AKS-', firstSku: 'AKS-NAW-PEKA' },
 ];
 
 // ── product files → tb_products categories ───────────────────────────────
@@ -74,6 +81,8 @@ const PRODUCT_FILES = [
   ['coolant_products.csv', 'COOLANT'],
   ['kanvas_rem_products.csv', 'KANVAS_REM'],
   ['minyak_rem_products.csv', 'MINYAK_REM'],
+  ['ofl_products.csv', 'OFL'],
+  ['pentil_products.csv', 'PENTIL'],
 ];
 
 await connect(process.env.MONGODB_URI, process.env.MONGODB_DB || 'spk');
@@ -85,6 +94,22 @@ const existing = new Map((await db.collection('service_options').find({}).toArra
 let optTotal = 0;
 for (const rule of CARD_RULES) {
   const bySku = new Map();
+  if (rule.productFile) {
+    // Product-backed card: options are product SKUs from the scraped CSV.
+    for (const r of csv(rule.productFile)) {
+      const sku = r.SKU ?? '';
+      if (rule.skuPrefix && !sku.startsWith(rule.skuPrefix)) continue;
+      bySku.set(sku, r);
+    }
+    if (rule.firstSku && bySku.has(rule.firstSku)) {
+      const first = bySku.get(rule.firstSku);
+      bySku.delete(rule.firstSku);
+      const rest = [...bySku.entries()];
+      bySku.clear();
+      bySku.set(rule.firstSku, first);
+      for (const [k, v] of rest) bySku.set(k, v);
+    }
+  }
   for (const r of serviceSkus) {
     const sku = r.SKU ?? '';
     if (rule.prefixes?.some((p) => sku.startsWith(p))) bySku.set(sku, r);
