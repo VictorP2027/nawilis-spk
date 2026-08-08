@@ -42,8 +42,8 @@ interface CustVehicle { plate: string; merk: string | null; tipe: string | null;
 
 /** One wheel of section 8. `tekanan` is the Lebih/Cukup/Kurang CODE (or ''),
  *  `flags` holds the ticked damage-mark codes. */
-interface TireAnswer { merkUkuran: string; tekanan: string; flags: string[] }
-const EMPTY_TIRE: TireAnswer = { merkUkuran: '', tekanan: '', flags: [] };
+interface TireAnswer { merkUkuran: string; tekanan: string; psi: string; flags: string[] }
+const EMPTY_TIRE: TireAnswer = { merkUkuran: '', tekanan: '', psi: '', flags: [] };
 
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -103,6 +103,7 @@ export default function CheckGoIntake() {
   const [rekomLain, setRekomLain] = useState<Record<string, string>>({}); // section code → freeText detail
   const [extraParts, setExtraParts] = useState<string[]>([]); // LAIN "Part suspensi" lines, by index
   const [tire, setTire] = useState<Record<string, TireAnswer>>({}); // position code → answers
+  const [tireStd, setTireStd] = useState(''); // door-placard standard psi, one per vehicle
   const [tireRekom, setTireRekom] = useState<string[]>([]); // tire rekomendasi picks
   const [tireLain, setTireLain] = useState<string[]>([]); // the 3 blank tire lines, by index
   const router = useRouter();
@@ -329,7 +330,15 @@ export default function CheckGoIntake() {
       return { ...p, [pos]: { ...t, flags: toggleIn(t.flags, flag) } };
     });
   const toggleSecRekom = (sec: string, code: string) =>
-    setSecRekom((p) => ({ ...p, [sec]: toggleIn(p[sec] ?? [], code) }));
+    setSecRekom((p) => {
+      const cur = p[sec] ?? [];
+      if (cur.includes(code)) return { ...p, [sec]: cur.filter((c) => c !== code) };
+      // Turning a pick ON drops the ones it contradicts ("dibersihkan" vs
+      // "ganti" for the same filter) — both on one WhatsApp is a question,
+      // not a recommendation.
+      const excludes = CHECKGO_SECTIONS.find((x) => x.code === sec)?.rekomendasi.find((o) => o.code === code)?.excludes ?? [];
+      return { ...p, [sec]: [...cur.filter((c) => !excludes.includes(c)), code] };
+    });
   const setLine = (set: typeof setExtraParts, i: number, v: string) =>
     set((p) => { const n = [...p]; n[i] = v; return n; });
 
@@ -488,12 +497,13 @@ export default function CheckGoIntake() {
         })),
         tires: CHECKGO_TIRE.positions.map((p) => {
           const t = tireOf(p.code);
-          return { position: p.code, merkUkuran: t.merkUkuran || null, tekanan: t.tekanan || null, flags: t.flags };
+          return { position: p.code, merkUkuran: t.merkUkuran || null, tekanan: t.tekanan || null, psi: t.psi.trim() || null, flags: t.flags };
         }),
         tireRekomendasi: {
           picks: tireRekom,
           lain: Array.from({ length: CHECKGO_TIRE.freeLines }, (_, i) => tireLain[i] ?? ''),
         },
+        tekananStandar: tireStd.trim() || null,
       },
       signatures: {
         menyerahkanPresent: true,
@@ -540,7 +550,7 @@ export default function CheckGoIntake() {
     setEstimasi(String(DEFAULT_ESTIMASI));
     setSecVerdict({}); setItemVerdict({}); setReading({});
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
-    setTire({}); setTireRekom([]); setTireLain([]);
+    setTire({}); setTireRekom([]); setTireLain([]); setTireStd('');
     setJobs({});
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
@@ -738,7 +748,15 @@ export default function CheckGoIntake() {
               {/* ONE row per item: label · readings · verdict. The reading's
                   label lives in its placeholder — a separate caption per input
                   doubled every row's height for words the box already says. */}
-              {s.items.map((it) => (
+              {s.items.map((it) => {
+                // A bad verdict with no measurement is the finding the customer
+                // cannot verify — "outside range" without the range's reading.
+                // Amber, not a submit gate: some rows genuinely have nothing
+                // measurable left (a dead battery reads nothing).
+                const bad = !!it.verdicts && !!itemVerdict[it.code] && itemVerdict[it.code] !== it.verdicts[0]!.code;
+                const unread = bad && !!it.readings?.length
+                  && it.readings.every((r) => !(reading[`${it.code}.${r.code}`] ?? '').trim());
+                return (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
                   <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}</span>
                   {it.readings?.map((r) => {
@@ -762,13 +780,14 @@ export default function CheckGoIntake() {
                             // Coolant is read as a NEGATIVE number and the iOS numeric
                             // pad has no minus key, so suffixed readings stay free-text.
                             placeholder={r.label}
-                            style={{ ...SMALL_INPUT, width: r.code === 'TGL' ? 110 : 90 }}
+                            style={{ ...SMALL_INPUT, width: r.code === 'TGL' ? 110 : 90, ...(unread ? { borderColor: '#d97706' } : {}) }}
                           />
                         )}
                         {r.suffix && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{r.suffix}</span>}
                       </span>
                     );
                   })}
+                  {unread && <span style={{ fontSize: 11, color: '#d97706' }}>⚠ tulis hasil ukur — dikirim ke customer</span>}
                   {it.verdicts && (
                     <span style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
                       {verdictButtons(it.verdicts, itemVerdict[it.code] ?? '', (code) =>
@@ -777,7 +796,8 @@ export default function CheckGoIntake() {
                     </span>
                   )}
                 </div>
-              ))}
+                );
+              })}
               <div className="chk-row" style={{ marginTop: 4 }}>
                 <span style={{ flex: '0 0 auto', fontSize: 11, color: 'var(--muted)' }}>Rekomendasi:</span>
                 {s.rekomendasi.map((o) => {
@@ -817,6 +837,11 @@ export default function CheckGoIntake() {
           {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
           <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
             <div style={{ ...SEC_TITLE, marginBottom: 6, ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? { color: '#dc2626' } : {}) }}>{CHECKGO_TIRE.title}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Standar tekanan (placard pintu)</span>
+              <input value={tireStd} onChange={(e) => setTireStd(e.target.value)} placeholder="cth: 33/36" style={{ ...SMALL_INPUT, width: 90 }} />
+              <span style={{ fontSize: 12, color: 'var(--muted)' }}>psi</span>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(250px, 100%), 1fr))', gap: 8 }}>
             {CHECKGO_TIRE.positions.map((pos) => {
               const t = tireOf(pos.code);
@@ -844,6 +869,19 @@ export default function CheckGoIntake() {
                         {o.label}
                       </button>
                     ))}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                      <input
+                        value={t.psi}
+                        onChange={(e) => setTireOf(pos.code, { psi: e.target.value })}
+                        inputMode="numeric"
+                        placeholder="ukur"
+                        // Amber on an abnormal verdict without the number: the
+                        // WhatsApp says "terlalu tinggi (terukur … psi)" only
+                        // when the checker wrote the psi down.
+                        style={{ ...SMALL_INPUT, width: 52, ...(t.tekanan && t.tekanan !== 'CUKUP' && !t.psi.trim() ? { borderColor: '#d97706' } : {}) }}
+                      />
+                      <span style={{ fontSize: 12, color: 'var(--muted)' }}>psi</span>
+                    </span>
                   </div>
                   <div className="chk-row" style={{ marginTop: 4 }}>
                     {CHECKGO_TIRE.flags.map((f) => {

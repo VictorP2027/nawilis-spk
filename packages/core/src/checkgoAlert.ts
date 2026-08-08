@@ -149,8 +149,16 @@ function attentionList(checkGo: CheckGo): Finding[] {
     if (isRecommendationRow(row)) continue;
     const verdict = attentionVerdict(row);
     if (!verdict) continue;
-    findings.push({ label: row.item, detail: [verdict, ...noteParts(row)].join(' ') });
+    // The stored label is the printed sheet's row ("2. Sistem Pendingin Air");
+    // its row number means nothing on a customer's phone.
+    findings.push({ label: row.item.replace(/^\d+[.)]\s*/, ''), detail: [verdict, ...noteParts(row)].join(' ') });
   }
+
+  // The placard standard turns a measured psi into a comparison the customer
+  // can verify on their own door jamb (Chynthia's review, 8 Aug).
+  const standar = checkGo.report?.tekananStandar ?? null;
+  const measured = (psi: string | null | undefined): string =>
+    psi ? ` (terukur ${psi} psi${standar ? `, standar placard ${standar}` : ''})` : '';
 
   for (const tire of checkGo.report?.tires ?? []) {
     // Stored documents span TWO sheet revisions: final-3 flags are code
@@ -162,9 +170,12 @@ function attentionList(checkGo: CheckGo): Finding[] {
       .map(tireFlagLabel)
       .filter((m): m is string => m !== null);
     // Pressure is a three-way choice on the final-3 sheet; CUKUP is healthy,
-    // the other two are findings the customer should hear about.
-    if (tire.tekanan === 'LEBIH') marks.unshift('tekanan angin lebih');
-    if (tire.tekanan === 'KURANG') marks.unshift('tekanan angin kurang');
+    // the other two are findings the customer should hear about. "terlalu
+    // tinggi"/"kurang dari standar" over the sheet's Lebih/Kurang shorthand,
+    // with the measured psi and the placard standard when the checker wrote
+    // them down — a bare "lebih" tells the customer nothing they can act on.
+    if (tire.tekanan === 'LEBIH') marks.unshift(`tekanan angin terlalu tinggi${measured(tire.psi)}`);
+    if (tire.tekanan === 'KURANG') marks.unshift(`tekanan angin kurang dari standar${measured(tire.psi)}`);
     if (!marks.length) continue;
     findings.push({ label: TIRE_POSITION[tire.position] ?? humanise(tire.position), detail: marks.join(', ') });
   }
@@ -215,9 +226,13 @@ function noteParts(row: CheckGoInspectionItem): string[] {
 function tireFlagLabel(flag: string | { code?: string; choice?: string | null }): string | null {
   const code = typeof flag === 'string' ? flag : flag?.code ?? '';
   if (!code) return null;
-  // Legacy air mark carried its Kurang/Lebih as a sub-choice on the object.
+  // Legacy air mark carried its Kurang/Lebih as a sub-choice on the object —
+  // rendered in the same customer wording as the current sheet's three-way.
   if (code === 'ANGIN_TIDAK_NORMAL' && typeof flag === 'object' && flag?.choice) {
-    return `tekanan angin ${String(flag.choice).toLowerCase()}`;
+    const choice = String(flag.choice).toLowerCase();
+    if (choice === 'lebih') return 'tekanan angin terlalu tinggi';
+    if (choice === 'kurang') return 'tekanan angin kurang dari standar';
+    return `tekanan angin ${choice}`;
   }
   return TIRE_FLAG[code] ?? humanise(code);
 }

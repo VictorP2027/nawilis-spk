@@ -299,11 +299,18 @@ export interface CheckGoReport {
     merkUkuran: string | null;
     /** LEBIH | CUKUP | KURANG — CUKUP is the healthy one. */
     tekanan: string | null;
+    /** Measured pressure as written ("26"), psi. Absent on older documents. */
+    psi?: string | null;
     /** Ticked damage marks (AUS_TIDAK_RATA, RETAK). */
     flags: string[];
   }>;
   /** The tire recommendation checklist + its blank "□ ___" lines. */
   tireRekomendasi: { picks: string[]; lain: string[] };
+  /**
+   * The door-placard standard pressure ("33/36"), one per vehicle — the value
+   * a measured psi is compared against. Absent on older documents.
+   */
+  tekananStandar?: string | null;
 }
 
 export interface CheckGo {

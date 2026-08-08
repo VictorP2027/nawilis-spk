@@ -44,6 +44,7 @@ export const CheckReportInput = z.object({
         position: z.string(),
         merkUkuran: z.string().nullish(),
         tekanan: z.string().nullish(),
+        psi: z.string().nullish(),
         flags: z.array(z.string()).default([]),
       }),
     )
@@ -51,6 +52,7 @@ export const CheckReportInput = z.object({
   tireRekomendasi: z
     .object({ picks: z.array(z.string()).default([]), lain: z.array(z.string()).default([]) })
     .default({ picks: [], lain: [] }),
+  tekananStandar: z.string().nullish(),
 });
 
 /**
@@ -120,10 +122,11 @@ export function normalizeReport(raw: z.infer<typeof CheckReportInput>): CheckGoR
         position: pos.code,
         merkUkuran: trimmed(got?.merkUkuran) || null,
         tekanan: CHECKGO_TIRE.tekanan.some((o) => o.code === tekananRaw) ? tekananRaw : null,
+        psi: trimmed(got?.psi) || null,
         flags: CHECKGO_TIRE.flags.filter((f) => got?.flags.includes(f.code)).map((f) => f.code),
       };
     })
-    .filter((t) => t.merkUkuran !== null || t.tekanan !== null || t.flags.length > 0);
+    .filter((t) => t.merkUkuran !== null || t.tekanan !== null || t.psi !== null || t.flags.length > 0);
 
   const tireRekomendasi = {
     picks: CHECKGO_TIRE.rekomendasi.filter((o) => raw.tireRekomendasi.picks.includes(o.code)).map((o) => o.code),
@@ -131,7 +134,7 @@ export function normalizeReport(raw: z.infer<typeof CheckReportInput>): CheckGoR
   };
 
   if (!sections.length && !tires.length && !tireRekomendasi.picks.length && !tireRekomendasi.lain.length) return null;
-  return { sections, tires, tireRekomendasi };
+  return { sections, tires, tireRekomendasi, tekananStandar: trimmed(raw.tekananStandar) || null };
 }
 
 /**
@@ -201,10 +204,13 @@ export function rowsFromReport(rep: CheckGoReport): CheckGoInspectionItem[] {
     if (!t) continue;
     const tekananLabel = CHECKGO_TIRE.tekanan.find((o) => o.code === t.tekanan)?.label ?? null;
     const marks = t.flags.map((f) => CHECKGO_TIRE.flags.find((x) => x.code === f)?.label ?? f);
+    // The measured psi rides with the verdict, against the placard standard —
+    // "Tekanan Ban Lebih (26 psi, standar 33)" is a finding a customer can check.
+    const psi = t.psi ? `${t.psi} psi${rep.tekananStandar ? `, standar ${rep.tekananStandar}` : ''}` : null;
     // One row per wheel: a single "Ban" row would hide WHICH tyre is cracked.
     push(`${CHECKGO_TIRE.no}. ${CHECKGO_TIRE.title} — ${pos.label}`, null, [
       t.merkUkuran,
-      tekananLabel ? `Tekanan Ban ${tekananLabel}` : null,
+      tekananLabel ? `Tekanan Ban ${tekananLabel}${psi ? ` (${psi})` : ''}` : psi ? `Tekanan ${psi}` : null,
       ...marks,
     ]);
   }

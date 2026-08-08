@@ -187,7 +187,14 @@ export interface CheckgoItem {
   readings?: ReadonlyArray<CheckgoReading>;
 }
 
-export interface CheckgoRekOpt { code: string; label: string; freeText?: boolean }
+export interface CheckgoRekOpt {
+  code: string;
+  label: string;
+  freeText?: boolean;
+  /** Codes this pick switches OFF — "dibersihkan" and "ganti" for the same
+      filter contradict each other on the customer's phone. */
+  excludes?: string[];
+}
 
 export interface CheckgoSection {
   /** The number printed on the sheet — part of the name a checker reads out. */
@@ -322,10 +329,10 @@ export const CHECKGO_SECTIONS: ReadonlyArray<CheckgoSection> = [
       { code: 'LL_SUSPENSI', label: 'Suspensi /Kaki-kaki', verdicts: OK_TIDAK },
     ],
     rekomendasi: [
-      { code: 'FILTER_UDARA_BERSIHKAN', label: 'Filter udara: dibersihkan' },
-      { code: 'FILTER_UDARA_GANTI', label: 'Filter udara: ganti' },
-      { code: 'FILTER_CABIN_BERSIHKAN', label: 'Filter cabin/AC: dibersihkan' },
-      { code: 'FILTER_CABIN_GANTI', label: 'Filter cabin/AC: ganti' },
+      { code: 'FILTER_UDARA_BERSIHKAN', label: 'Filter udara: dibersihkan', excludes: ['FILTER_UDARA_GANTI'] },
+      { code: 'FILTER_UDARA_GANTI', label: 'Filter udara: ganti', excludes: ['FILTER_UDARA_BERSIHKAN'] },
+      { code: 'FILTER_CABIN_BERSIHKAN', label: 'Filter cabin/AC: dibersihkan', excludes: ['FILTER_CABIN_GANTI'] },
+      { code: 'FILTER_CABIN_GANTI', label: 'Filter cabin/AC: ganti', excludes: ['FILTER_CABIN_BERSIHKAN'] },
       { code: 'GANTI_WYPER', label: 'Ganti wyper' },
     ],
     extraList: { label: 'Part suspensi yang harus diganti', count: 5 },

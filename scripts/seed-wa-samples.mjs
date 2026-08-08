@@ -37,21 +37,24 @@ const SAMPLES = [
     note: 'ban retak + spooring',
     sections: [sec('OLI_MESIN','BAGUS')],
     tires: [
-      {position:'DEPAN_KIRI',merkUkuran:'GT Radial 205/55',tekanan:'KURANG',flags:['RETAK','AUS_TIDAK_RATA']},
-      {position:'DEPAN_KANAN',merkUkuran:'GT Radial 205/55',tekanan:'KURANG',flags:['RETAK']},
+      {position:'DEPAN_KIRI',merkUkuran:'GT Radial 205/55',tekanan:'KURANG',psi:'24',flags:['RETAK','AUS_TIDAK_RATA']},
+      {position:'DEPAN_KANAN',merkUkuran:'GT Radial 205/55',tekanan:'KURANG',psi:'25',flags:['RETAK']},
       {position:'BELAKANG_KIRI',merkUkuran:'GT Radial 205/55',tekanan:'CUKUP',flags:[]},
       {position:'BELAKANG_KANAN',merkUkuran:'GT Radial 205/55',tekanan:'CUKUP',flags:['AUS_TIDAK_RATA']}],
-    picks: ['SPOORING','BALANCING','GANTI_BAN'] },
+    std: '33', picks: ['SPOORING','BALANCING','GANTI_BAN'] },
   { nama: 'DEWI LESTARI', plate: 'B1404WAS', merk: 'Suzuki', tipe: 'Ertiga', tahun: 2018, warna: 'Putih', km: '92300',
     note: 'aki + filter',
     sections: [sec('KELISTRIKAN',null,[{code:'KL_AIR_AKI',verdict:'KURANG',readings:[]},{code:'KL_AKI',verdict:'TIDAK',readings:[]}],['GANTI_AKI','TAMBAH_AIR_AKI']),
+               // Chynthia's review case: coolant outside the printed range,
+               // WITH the measured value the message must now show.
+               sec('PENDINGIN',null,[{code:'PD_COOLANT',verdict:'TIDAK',readings:[{code:'TEMP',value:'-10'}]}],['GANTI_COOLANT']),
                sec('LAIN',null,[{code:'LL_FILTER_UDARA',verdict:'KOTOR',readings:[]}],['FILTER_UDARA_GANTI'])],
     tires: [{position:'BELAKANG_KIRI',merkUkuran:'Achilles 185/65',tekanan:'CUKUP',flags:[]}], picks: [] },
   { nama: 'RUDI HARTONO', plate: 'B1505WAS', merk: 'Daihatsu', tipe: 'Xenia', tahun: 2017, warna: 'Abu-abu', km: '134800',
     note: 'oli kotor + ATF',
     sections: [sec('OLI_MESIN','KOTOR',[{code:'OM_OLI',verdict:null,readings:[{code:'MERK_SAE',value:'Castrol 10W-40'}]}],['GANTI_OLI','ENGINE_FLUSH']),
                sec('ATF','KOTOR',[],['KURAS_ATF'])],
-    tires: [{position:'DEPAN_KIRI',merkUkuran:'Accelera 185/70',tekanan:'LEBIH',flags:[]}], picks: [] },
+    tires: [{position:'DEPAN_KIRI',merkUkuran:'Accelera 185/70',tekanan:'LEBIH',psi:'41',flags:[]}], std: '33/36', picks: [] },
 ];
 
 let ok = 0;
@@ -66,7 +69,7 @@ for (const [i, s] of SAMPLES.entries()) {
     complaint: null, estimasiMinutes: 30,
     serviceAdvisorName: 'DEVI FITRIANI', salespersonName: 'DEVI FITRIANI',
     mechanicName: 'AHMAD JAYNUDIN',
-    checkReport: { sections: s.sections, tires: s.tires, tireRekomendasi: { picks: s.picks, lain: [] } },
+    checkReport: { sections: s.sections, tires: s.tires, tireRekomendasi: { picks: s.picks, lain: [] }, tekananStandar: s.std ?? null },
     signatures: { menyerahkanPresent: true, menyerahkanNamaJelas: s.nama, menerimaPresent: true, menerimaNamaJelas: 'DEVI FITRIANI' },
   };
   const r = await fetch(`${BASE}/api/checkgo`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: COOKIE }, body: JSON.stringify(body) });
