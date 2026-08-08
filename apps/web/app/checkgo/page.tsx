@@ -147,7 +147,7 @@ export default function CheckGoIntake() {
    * form made, so un-ticking one Rekomendasi retracts only its own job and
    * never a job a human chose.
    */
-  const [jobs, setJobs] = useState<Record<string, { qty: number; sku?: string; brandType?: string; auto?: boolean }>>({});
+  const [jobs, setJobs] = useState<Record<string, { qty: number | ''; sku?: string; brandType?: string; auto?: boolean }>>({});
   const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
   const [makes, setMakes] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
@@ -463,7 +463,7 @@ export default function CheckGoIntake() {
       jobLines: SERVICES.filter((s) => jobs[s.code]).map((s) => ({
         serviceCode: s.code,
         ordered: true,
-        qty: jobs[s.code]!.qty,
+        qty: Number(jobs[s.code]!.qty) || 1,
         quotedPrice: null,
         chosenSku: jobs[s.code]!.sku || svcOpts[s.code]?.defaultSku || null,
         keterangan: jobs[s.code]!.brandType?.trim() || null,
@@ -694,30 +694,11 @@ export default function CheckGoIntake() {
           {!reportOk && (
             <div className="req-note" style={{ marginBottom: 8 }}>
               ⚠ belum lengkap: {[
-                ...CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) < sectionSlots(s2)).map((s2) => `${s2.no}. ${s2.title}`),
-                ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? [`${CHECKGO_TIRE.no}. Tekanan ban (semua roda)`] : []),
+                ...CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) < sectionSlots(s2)).map((s2) => s2.title),
+                ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? ['Tekanan ban (semua roda)'] : []),
               ].join(' · ')}
             </div>
           )}
-
-          {/* Sticky one-tap navigation across the 8 printed sections. A chip
-              turns green when its section is fully answered. */}
-          <div style={{ position: 'sticky', top: 0, zIndex: 5, background: '#fff', display: 'flex', gap: 4, padding: '6px 0', marginBottom: 4, flexWrap: 'wrap' }}>
-            {[
-              ...CHECKGO_SECTIONS.map((s) => ({ no: s.no, full: sectionSlots(s) > 0 && sectionDone(s) === sectionSlots(s) })),
-              { no: CHECKGO_TIRE.no, full: CHECKGO_TIRE.positions.every((p) => (tire[p.code]?.tekanan ?? '') !== '') },
-            ].map((c) => (
-              <button
-                key={c.no}
-                type="button"
-                className="chk-chip"
-                style={{ minWidth: 34, justifyContent: 'center', ...(c.full ? { background: '#dcfce7', borderColor: '#15803d', color: '#15803d', fontWeight: 700 } : {}) }}
-                onClick={() => document.getElementById(`cg-sec-${c.no}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              >
-                {c.full ? '✓' : ''}{c.no}
-              </button>
-            ))}
-          </div>
 
           {/* Sections 1-7: per-row verdict pairs + readings, each section with
               its own recommendation checklist right under it (the printed
@@ -725,10 +706,12 @@ export default function CheckGoIntake() {
           {CHECKGO_SECTIONS.map((s) => (
             <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ ...SEC_TITLE, flex: '1 1 auto' }}>
-                  {s.no}. {s.title}{' '}
-                  {sectionDone(s) > 0 && (
-                    <span style={{ fontSize: 11, fontWeight: 600, color: sectionDone(s) === sectionSlots(s) ? '#15803d' : 'var(--muted)' }}>
+                {/* No printed numbers — incompleteness is shown where it is,
+                    in red, instead of as a chip rail to a numbered section. */}
+                <span style={{ ...SEC_TITLE, flex: '1 1 auto', ...(sectionSlots(s) > 0 && sectionDone(s) < sectionSlots(s) ? { color: '#dc2626' } : {}) }}>
+                  {s.title}{' '}
+                  {sectionSlots(s) > 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 600, color: sectionDone(s) === sectionSlots(s) ? '#15803d' : '#dc2626' }}>
                       {sectionDone(s)}/{sectionSlots(s)}
                     </span>
                   )}
@@ -751,7 +734,7 @@ export default function CheckGoIntake() {
                   doubled every row's height for words the box already says. */}
               {s.items.map((it) => (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5 }}>{it.label}</span>
+                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (
@@ -827,7 +810,7 @@ export default function CheckGoIntake() {
 
           {/* Section 8 — four wheels, 2-up on anything wider than a phone. */}
           <div id={`cg-sec-${CHECKGO_TIRE.no}`} style={SEC_SEP}>
-            <div style={{ ...SEC_TITLE, marginBottom: 6 }}>{CHECKGO_TIRE.no}. {CHECKGO_TIRE.title}</div>
+            <div style={{ ...SEC_TITLE, marginBottom: 6, ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? { color: '#dc2626' } : {}) }}>{CHECKGO_TIRE.title}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(250px, 100%), 1fr))', gap: 8 }}>
             {CHECKGO_TIRE.positions.map((pos) => {
               const t = tireOf(pos.code);
@@ -843,7 +826,7 @@ export default function CheckGoIntake() {
                     style={SMALL_INPUT}
                   />
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
-                    <span style={{ flex: '1 1 90px', fontSize: 12.5, color: 'var(--muted)' }}>Tekanan angin</span>
+                    <span style={{ flex: '1 1 90px', fontSize: 12.5, color: t.tekanan ? 'var(--muted)' : '#dc2626' }}>Tekanan angin</span>
                     {CHECKGO_TIRE.tekanan.map((o) => (
                       <button
                         key={o.code}
@@ -929,7 +912,10 @@ export default function CheckGoIntake() {
                         type="number"
                         min={1}
                         value={sel.qty}
-                        onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: Math.max(1, Number(e.target.value) || 1) } }))}
+                        // '' is a legal mid-edit state: snapping straight back to 1
+                        // made the box impossible to clear-and-retype ("1 liter bug").
+                        onChange={(e) => { const v = e.target.value; setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } })); }}
+                        onBlur={() => setJobs((p) => (p[s.code]?.qty === '' ? { ...p, [s.code]: { ...p[s.code]!, qty: 1 } } : p))}
                         style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
                       />
                       <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>

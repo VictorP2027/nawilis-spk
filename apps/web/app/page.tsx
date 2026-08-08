@@ -22,7 +22,8 @@ interface VehicleHist {
 interface JobSel {
   code: string;
   label: string;
-  qty: number;
+  /** '' only while the operator is mid-edit; coerced to ≥1 at blur/submit. */
+  qty: number | '';
   sku?: string;
   /** merk / tipe, for the rows the paper wants it on (Oli, Balancing on the Car). */
   brandType?: string;
@@ -217,7 +218,7 @@ export default function Intake() {
       // Price is deliberately NOT captured at intake anymore: Turboly's own
       // pricebook prices the SO line, and the real figure is confirmed by a
       // human at Buat Invoice — which is also where the payment amount is set.
-      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: j.qty, quotedPrice: null,
+      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null,
       chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null,
       // Merk/tipe rides in keterangan, the free-text the paper form itself
       // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
@@ -478,7 +479,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                         type="number"
                         min={1}
                         value={jobs[s.code]!.qty}
-                        onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: Math.max(1, Number(e.target.value) || 1) } }))}
+                        onChange={(e) => { const v = e.target.value; setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } })); }}
+                        onBlur={() => setJobs((p) => (p[s.code]?.qty === '' ? { ...p, [s.code]: { ...p[s.code]!, qty: 1 } } : p))}
                         style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
                       />
                       <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>

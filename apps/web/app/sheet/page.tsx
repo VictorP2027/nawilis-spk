@@ -14,7 +14,7 @@ function uuid(): string {
 /** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
 const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
 
-interface PkRow { order: boolean; qty: number; keterangan: string; mk: string; waktu: string; sku?: string }
+interface PkRow { order: boolean; qty: number | ''; keterangan: string; mk: string; waktu: string; sku?: string }
 interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }
 
 export default function Sheet() {
@@ -237,7 +237,7 @@ export default function Sheet() {
       const notes = [r.keterangan, r.mk && `MK:${r.mk}`, r.waktu && `Waktu:${r.waktu}`].filter(Boolean).join(' ');
       // Price is not captured at intake: Turboly's pricebook prices the line,
       // and the human-confirmed figure enters at Buat Invoice on the board.
-      return { serviceCode: s.code, ordered: true, qty: r.qty || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
+      return { serviceCode: s.code, ordered: true, qty: Number(r.qty) || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
     });
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
     const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
@@ -495,7 +495,7 @@ export default function Sheet() {
                             the number box ("# PCS", "# liter" on paper). */}
                         {r.order && s.unit !== 'check' && (
                           <>
-                            <input type="number" min={1} value={r.qty} onChange={(e) => setRow(s.code, { qty: Math.max(1, Number(e.target.value) || 1) })} className="qty" style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />
+                            <input type="number" min={1} value={r.qty} onChange={(e) => { const v = e.target.value; setRow(s.code, { qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) }); }} onBlur={() => { if (pk[s.code]!.qty === '') setRow(s.code, { qty: 1 }); }} className="qty" style={{ width: 26, padding: 0, textAlign: 'center', display: 'inline-block' }} />
                             <span style={{ fontSize: 8 }}>{s.unit === 'pcs' ? 'pcs' : 'ltr'}</span>
                           </>
                         )}
