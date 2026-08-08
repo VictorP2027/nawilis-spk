@@ -93,6 +93,7 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     },
     vehicleRegistration: doc.vehicle.noPolisi.display,
     vehiclePlateFull: doc.vehicle.noPolisi.full,
+    vehicleKind: doc.vehicle.kind ?? 'car',
     // trim: a stray trailing space hangs Turboly's remote make/model search
     vehicleMake: (doc.vehicle.merkNormalized ?? doc.vehicle.merkRaw ?? '').trim(),
     vehicleModel: (doc.vehicle.tipeNormalized ?? '').trim(),

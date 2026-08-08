@@ -15,6 +15,8 @@ export interface TurbolyServiceOrderPayload {
   vehicleRegistration: string; // display plate, matching Turboly spacing
   /** No-space plate for the create-vehicle form + search, e.g. "B1234SZA". */
   vehiclePlateFull?: string;
+  /** 'car' | 'motorcycle' — drives Turboly's #vehicle-type-select for NEW vehicles. */
+  vehicleKind?: 'car' | 'motorcycle';
   /** Details for creating a brand-new vehicle when it isn't already in Turboly. */
   vehicleMake?: string;
   vehicleModel?: string;

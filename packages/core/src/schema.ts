@@ -55,6 +55,9 @@ export const SpkIntakeInput = z.object({
     km: z.string(), // raw as written; parsed server-side
     /** Operator clicked the on-form confirm: create this NEW make in Turboly at push. */
     createMakeConfirmed: z.boolean().default(false),
+    /** Mobil / Motor — four make names exist as BOTH; this picks the roster and
+     *  Turboly's vehicle type for a brand-new vehicle. */
+    kind: z.enum(['car', 'motorcycle']).default('car'),
   }),
 
   complaint: z.string().nullable().default(null),

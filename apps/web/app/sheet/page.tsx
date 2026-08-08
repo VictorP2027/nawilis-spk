@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SignaturePad, type SigHandle } from '../components/SignaturePad';
+import { useRouter } from 'next/navigation';
+import { FuelGauge } from '../components/FuelGauge';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../lib/refdata.client';
 import { submitOrQueue } from '../../lib/outbox';
 
@@ -39,10 +40,11 @@ export default function Sheet() {
   const [kontakLain, setKontakLain] = useState('');
   const [menyerahkan, setMenyerahkan] = useState('');
   const [menerima, setMenerima] = useState('');
-  const sigMenyerahkan = useRef<SigHandle>(null);
-  const sigMenerima = useRef<SigHandle>(null);
-  const [custSigned, setCustSigned] = useState(false);
-  const [advSigned, setAdvSigned] = useState(false);
+  const router = useRouter();
+  const [fuelMode, setFuelMode] = useState<'fuel' | 'ev'>('fuel');
+  const [fuelPct, setFuelPct] = useState<number | null>(null);
+  const [evPct, setEvPct] = useState('');
+  const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
   const [branch, setBranch] = useState('');
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
@@ -69,12 +71,12 @@ export default function Sheet() {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnownInModels(false); return; }
     let live = true;
-    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`)
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}&kind=${kind}`)
       .then((r) => r.json())
       .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnownInModels(!!d.known); } })
       .catch(() => { if (live) { setModels([]); setMakeKnownInModels(false); } });
     return () => { live = false; };
-  }, [merk]);
+  }, [merk, kind]);
 
   /** Operator confirmation: this is a genuinely NEW make — create it in Turboly at push. */
   const [createMakeOk, setCreateMakeOk] = useState(false);
@@ -207,15 +209,6 @@ export default function Sheet() {
     Object.fromEntries(SERVICES.map((s) => [s.code, { order: false, qty: 1, keterangan: '', mk: '', waktu: '' }])),
   );
   // Raw detail fields that map 1:1 to the Nawilis export columns.
-  const [merekOli, setMerekOli] = useState('');
-  const [tipeOli, setTipeOli] = useState('');
-  const [merekBan, setMerekBan] = useState('');
-  const [tipeBan, setTipeBan] = useState('');
-  const [namaCs, setNamaCs] = useState('');
-  const [prevMerekOli, setPrevMerekOli] = useState('');
-  const [prevTipeOli, setPrevTipeOli] = useState('');
-  const [prevBengkel, setPrevBengkel] = useState('');
-  const [prevKmOli, setPrevKmOli] = useState('');
   const [cond, setCond] = useState<Record<string, string>>(() =>
     Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])),
   );
@@ -239,6 +232,11 @@ export default function Sheet() {
       // and the human-confirmed figure enters at Buat Invoice on the board.
       return { serviceCode: s.code, ordered: true, qty: Number(r.qty) || 1, keterangan: notes || null, quotedPrice: null, chosenSku: r.sku || svcOpts[s.code]?.defaultSku || null };
     });
+    for (const t of [extra1, extra2].map((x) => x.trim()).filter(Boolean)) {
+      // Handwriting rows: the text IS the serviceCode — unmapped, so it lands
+      // verbatim in the SO's Notes ("Pekerjaan lain").
+      jobLines.push({ serviceCode: t, ordered: true, qty: 1, keterangan: null, quotedPrice: null, chosenSku: null });
+    }
     const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
     const dmgSummary = [...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ');
     const complaint = [keluhan, dmgSummary && `Kerusakan bodi: ${dmgSummary}`].filter(Boolean).join(' | ') || null;
@@ -257,7 +255,7 @@ export default function Sheet() {
       // Opt-in appointment → Turboly Plan Service Date/Time; else push uses now+30m.
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       customer: { nama, wa: wa || null, alamat: alamat || null, kontakLain: kontakLain || null },
-      vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km, createMakeConfirmed: makeUnknown && createMakeOk },
+      vehicle: { noPolisi: noPol, merk: merk || null, tipe: tipe || null, tahun: tahun ? Number(tahun) : null, warna: warna || null, km, createMakeConfirmed: makeUnknown && createMakeOk, kind },
       complaint,
       jobLines,
       conditionChecks,
@@ -266,19 +264,22 @@ export default function Sheet() {
       serviceAdvisorName: menerima || null,
       salespersonName: effSalesperson || null,
       signatures: {
-        menyerahkanPresent: !!menyerahkan || !!sigMenyerahkan.current?.get(),
+        // Signing happens on the PRINTED form now — presence without an image
+        // records the wet_signature basis; names still print under the boxes.
+        menyerahkanPresent: true,
         menyerahkanNamaJelas: menyerahkan || null,
-        menerimaPresent: !!menerima || !!sigMenerima.current?.get(),
+        menerimaPresent: !!menerima,
         menerimaNamaJelas: menerima || null,
-        menyerahkanImage: sigMenyerahkan.current?.get() ?? null,
-        menerimaImage: sigMenerima.current?.get() ?? null,
+        menyerahkanImage: null,
+        menerimaImage: null,
       },
       // Verbatim raw fields → reproduce the Nawilis export columns exactly.
+      // (DETAIL TAMBAHAN removed 2026-08-08 — its export columns stay empty.)
       raw: {
-        merek_oli: merekOli, tipe_oli: tipeOli, merek_ban: merekBan, tipe_ban: tipeBan,
-        nama_cs: namaCs || menerima, kontak_lainnya: kontakLain, nama_customer_menyerahkan: menyerahkan,
-        merek_oli_sebelumnya: prevMerekOli, tipe_oli_sebelumnya: prevTipeOli, bengkel_sebelumnya: prevBengkel, km_ganti_oli_sebelumnya: prevKmOli,
+        nama_cs: menerima, kontak_lainnya: kontakLain, nama_customer_menyerahkan: menyerahkan,
         service_lain: [extra1, extra2].filter(Boolean).join(', '),
+        bahan_bakar_mode: fuelMode,
+        bahan_bakar_pct: fuelMode === 'fuel' ? fuelPct : Number(evPct),
       },
     };
 
@@ -294,8 +295,8 @@ export default function Sheet() {
     const requiredSheet: Array<[string, string]> = [[tanggal, 'Tanggal'], [noPol, 'Nomor Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [tipe, 'Tipe'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun'], [estimasi, 'Estimasi waktu pekerjaan'], [menyerahkan, 'Yang menyerahkan (nama customer)']];
     const missing = requiredSheet.filter(([v]) => !String(v).trim()).map(([, label]) => label);
     if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }
-    if (!sigMenyerahkan.current?.get()) { setResult({ ok: false, text: 'Tanda tangan customer (Yang menyerahkan) wajib — persetujuan pengerjaan.' }); setSubmitting(false); return; }
-    if (!sigMenerima.current?.get()) { setResult({ ok: false, text: 'Tanda tangan penerima (Yang menerima) wajib.' }); setSubmitting(false); return; }
+    const fuelOkS = fuelMode === 'fuel' ? fuelPct !== null : /^\d{1,3}$/.test(evPct.trim()) && Number(evPct) <= 100;
+    if (!fuelOkS) { setResult({ ok: false, text: fuelMode === 'fuel' ? 'Indikator bahan bakar wajib — ketuk balok 0–100%.' : 'Sisa baterai EV wajib — isi angka 0–100.' }); setSubmitting(false); return; }
 
     // NO submit-time gate: warnings live at the fields themselves (the person
     // filling out sees them and simply continues) — Simpan sends immediately.
@@ -313,12 +314,12 @@ export default function Sheet() {
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
-        const msg = body.needsReview
-          ? 'Tersimpan, perlu diperbaiki: '
-          : body.state === 'queued'
-            ? '✓ Tersimpan & langsung dikirim ke Turboly. '
-            : `✓ Tersimpan ke MongoDB (${body.state}). `;
-        setResult({ ok: !body.needsReview, text: msg + notes });
+        if (!body.needsReview && body.spkId) {
+          // Straight to the printout — that is where both parties sign now.
+          router.push(`/spk/${body.spkId}/print?print=1`);
+          return;
+        }
+        setResult({ ok: false, text: `Tersimpan, perlu diperbaiki: ${notes}` });
       } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
     } catch (e) {
       setResult({ ok: false, text: `Gagal menyimpan: ${(e as Error).message}` });
@@ -406,6 +407,15 @@ export default function Sheet() {
           </div>
           <div className="box">
             <span className="sec-h">INFORMASI KENDARAAN</span>
+            <div className="fld"><label>Jenis</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['car', 'motorcycle'] as const).map((k) => (
+                  <button key={k} type="button" className={`chk-chip${kind === k ? ' ok' : ''}`} onClick={() => setKind(k)}>
+                    {k === 'car' ? '🚗 Mobil' : '🏍 Motor'}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="fld"><label>Merk Mobil</label>
               <div>
                 <input list="make-list" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="cth: Toyota" style={makeUnknown ? { borderColor: '#d97706' } : undefined} />
@@ -514,8 +524,9 @@ export default function Sheet() {
                     </tr>
                   );
                 })}
-                <tr><td className="col-num" style={{ textAlign: 'center' }}>13</td><td className="svc"><input value={extra1} onChange={(e) => setExtra1(e.target.value)} placeholder="Pekerjaan lain…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
-                <tr><td className="col-num" style={{ textAlign: 'center' }}>14</td><td className="svc"><input value={extra2} onChange={(e) => setExtra2(e.target.value)} placeholder="Pekerjaan lain…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
+                <tr><td className="col-num" style={{ textAlign: 'center' }}>{SERVICES.length + 1}</td><td className="svc"><input list="jasa-all-sheet" value={extra1} onChange={(e) => setExtra1(e.target.value)} placeholder="Pekerjaan lain — tulis / pilih…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
+                <tr><td className="col-num" style={{ textAlign: 'center' }}>{SERVICES.length + 2}</td><td className="svc"><input list="jasa-all-sheet" value={extra2} onChange={(e) => setExtra2(e.target.value)} placeholder="Pekerjaan lain — tulis / pilih…" /></td><td className="tick-cell" /><td className="ket-cell" /><td className="col-mk" /><td className="col-waktu" /></tr>
+                <datalist id="jasa-all-sheet">{[...new Set(Object.values(svcOpts).flatMap((o) => o.options.map((x) => x.label)))].map((l) => <option key={l} value={l} />)}</datalist>
               </tbody>
             </table>
           </div>
@@ -560,7 +571,8 @@ export default function Sheet() {
 
         {/* Pengecekan awal */}
         <div style={{ marginTop: 8 }}>
-          <span className="sec-h">PENGECEKAN AWAL KENDARAAN</span>
+          <FuelGauge mode={fuelMode} pct={fuelPct} ev={evPct} onMode={setFuelMode} onPct={setFuelPct} onEv={setEvPct} />
+        <span className="sec-h" style={{ marginTop: 8 }}>PENGECEKAN AWAL KENDARAAN</span>
           <table className="cond">
             <tbody>
               {CONDITION_ITEMS.map((c, i) => (
@@ -579,35 +591,17 @@ export default function Sheet() {
           </table>
         </div>
 
-        {/* Detail tambahan (maps to export columns) */}
-        <div className="box" style={{ marginTop: 8 }}>
-          <span className="sec-h">DETAIL TAMBAHAN</span>
-          <div className="two">
-            <div className="fld"><label>Merek Oli</label><input value={merekOli} onChange={(e) => setMerekOli(e.target.value)} /></div>
-            <div className="fld"><label>Tipe Oli</label><input value={tipeOli} onChange={(e) => setTipeOli(e.target.value)} /></div>
-            <div className="fld"><label>Merek Ban</label><input value={merekBan} onChange={(e) => setMerekBan(e.target.value)} /></div>
-            <div className="fld"><label>Tipe Ban</label><input value={tipeBan} onChange={(e) => setTipeBan(e.target.value)} /></div>
-            <div className="fld"><label>Oli sblm (merek)</label><input value={prevMerekOli} onChange={(e) => setPrevMerekOli(e.target.value)} /></div>
-            <div className="fld"><label>Oli sblm (tipe)</label><input value={prevTipeOli} onChange={(e) => setPrevTipeOli(e.target.value)} /></div>
-            <div className="fld"><label>Bengkel sblm</label><input value={prevBengkel} onChange={(e) => setPrevBengkel(e.target.value)} /></div>
-            <div className="fld"><label>KM ganti oli sblm</label><input value={prevKmOli} onChange={(e) => setPrevKmOli(e.target.value)} inputMode="numeric" /></div>
-            <div className="fld"><label>Nama CS</label><input value={namaCs} onChange={(e) => setNamaCs(e.target.value)} /></div>
-          </div>
-        </div>
-
         {/* Authorization + signatures */}
         <div className="auth">
           Saya yang bertanda tangan dibawah ini memberi wewenang penuh kepada bengkel NAWILIS untuk melakukan pekerjaan sesuai dengan permintaan order di atas dan test jalan apabila diperlukan.
         </div>
         <div className="sign">
           <div className="b">Yang menyerahkan,
-            <SignaturePad ref={sigMenyerahkan} onInk={setCustSigned} />
-            {!custSigned && <div className="err-inline">⚠ Tanda tangan customer wajib.</div>}
+            <div style={{ height: 56, border: '1px dashed #9fb2d4', borderRadius: 6, display: 'grid', placeItems: 'center', color: '#8a99b8', fontSize: 11, margin: '4px 0' }}>tanda tangan di formulir cetak</div>
             <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas — WAJIB" style={!menyerahkan.trim() ? { borderColor: '#dc2626' } : undefined} />
           </div>
           <div className="b">Yang menerima,
-            <SignaturePad ref={sigMenerima} onInk={setAdvSigned} />
-            {!advSigned && <div className="err-inline">⚠ Tanda tangan penerima wajib.</div>}
+            <div style={{ height: 56, border: '1px dashed #9fb2d4', borderRadius: 6, display: 'grid', placeItems: 'center', color: '#8a99b8', fontSize: 11, margin: '4px 0' }}>tanda tangan di formulir cetak</div>
             <input
               list="advisor-list"
               value={menerima}

@@ -188,6 +188,7 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
       tipeNormalized: input.vehicle.tipe,
       tahun: input.vehicle.tahun,
       warna: input.vehicle.warna,
+      kind: input.vehicle.kind ?? 'car',
       createMakeConfirmed: input.vehicle.createMakeConfirmed ?? false,
       km: { raw: km.raw, value: km.value ?? 0 },
       vehicleRef: plate.ok ? vehicleRef(plate.full) : null,

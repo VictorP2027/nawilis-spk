@@ -33,6 +33,7 @@ interface Doc {
     mk?: { mechanicCode?: string | null }; waktu?: { minutes?: number | null };
   }>;
   conditionChecks?: Array<{ item: string; marks: string[]; status?: string }>;
+  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null };
   signatures?: {
     menyerahkan?: { present?: boolean; namaJelas?: string | null; imageDataUrl?: string | null };
     menerima?: { present?: boolean; namaJelas?: string | null; imageDataUrl?: string | null };
@@ -59,6 +60,16 @@ export default function PrintSpk() {
       })
       .catch(() => setErr('Jaringan bermasalah — muat ulang halaman.'));
   }, [params?.id]);
+
+  // ?print=1 — the intake forms land here straight after Simpan, and the whole
+  // point of the redirect is the paper: open the dialog as soon as the document
+  // has rendered. Small delay so the logo and layout settle first.
+  useEffect(() => {
+    if (!doc) return;
+    if (!/[?&]print=1/.test(window.location.search)) return;
+    const t = setTimeout(() => window.print(), 700);
+    return () => clearTimeout(t);
+  }, [doc]);
 
   if (err) return <div style={{ padding: 40, textAlign: 'center' }}>{err}</div>;
   if (!doc) return <div style={{ padding: 40, textAlign: 'center' }}>Memuat SPK…</div>;
@@ -141,6 +152,27 @@ export default function PrintSpk() {
             ))}
           </tbody>
         </table>
+
+        {doc.rawForm?.bahan_bakar_pct != null && (
+          <div className="box" style={{ marginTop: 8 }}>
+            <span className="sec-h">{doc.rawForm.bahan_bakar_mode === 'ev' ? 'BATERAI EV' : 'BAHAN BAKAR'}</span>
+            {doc.rawForm.bahan_bakar_mode === 'ev' ? (
+              <div style={{ fontSize: 13, fontWeight: 700 }}>Sisa baterai: {doc.rawForm.bahan_bakar_pct}%</div>
+            ) : (
+              <div style={{ maxWidth: 260 }}>
+                <div style={{ display: 'flex', fontSize: 9, color: '#667' }}>
+                  {[0, 25, 50, 75].map((mk) => <span key={mk} style={{ flex: 1 }}>{mk}</span>)}<span>100%</span>
+                </div>
+                <div style={{ display: 'flex', border: '1.5px solid var(--nawilis)', borderRadius: 3, overflow: 'hidden', height: 18 }}>
+                  {[25, 50, 75, 100].map((v) => (
+                    <span key={v} style={{ flex: 1, borderLeft: v > 25 ? '1px solid var(--nawilis)' : 'none', background: (doc.rawForm?.bahan_bakar_pct ?? 0) >= v ? 'var(--nawilis)' : '#fff' }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 700 }}>{doc.rawForm.bahan_bakar_pct}%</div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="box" style={{ marginTop: 8 }}>
           <span className="sec-h">PENGECEKAN AWAL KENDARAAN</span>

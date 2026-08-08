@@ -2,7 +2,7 @@
 
 import BrandMark from './../components/BrandMark';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { SignaturePad, type SigHandle } from '../components/SignaturePad';
+import { useRouter } from 'next/navigation';
 import { ProductInput } from '../../lib/productSuggest';
 import { submitOrQueue, flush } from '../../lib/outbox';
 import {
@@ -105,13 +105,9 @@ export default function CheckGoIntake() {
   const [tire, setTire] = useState<Record<string, TireAnswer>>({}); // position code → answers
   const [tireRekom, setTireRekom] = useState<string[]>([]); // tire rekomendasi picks
   const [tireLain, setTireLain] = useState<string[]>([]); // the 3 blank tire lines, by index
-  const sigCust = useRef<SigHandle>(null);
-  const [custSigned, setCustSigned] = useState(false);
-  // The receiving advisor's signature. Optional: the customer's is the consent
-  // that matters, and making this required would block intake whenever the
-  // advisor is away from the tablet.
-  const sigAdv = useRef<SigHandle>(null);
-  const [advSigned, setAdvSigned] = useState(false);
+  const router = useRouter();
+  // Signatures moved to PAPER: submit opens the printout and both parties sign
+  // there — the printed form is the consent document now.
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -423,7 +419,7 @@ export default function CheckGoIntake() {
   const reportOk =
     CHECKGO_SECTIONS.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
     CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '');
-  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && salespersonOk && estimasiOk && reportOk && custSigned && advSigned && !submitting;
+  const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && salespersonOk && estimasiOk && reportOk && !submitting;
 
   async function submit() {
     setSubmitting(true);
@@ -496,12 +492,12 @@ export default function CheckGoIntake() {
         },
       },
       signatures: {
-        menyerahkanPresent: !!sigCust.current?.get(),
+        menyerahkanPresent: true,
         menyerahkanNamaJelas: nama || null,
         menerimaPresent: !!advisor,
         menerimaNamaJelas: advisor || null,
-        menyerahkanImage: sigCust.current?.get() ?? null,
-        menerimaImage: sigAdv.current?.get() ?? null,
+        menyerahkanImage: null,
+        menerimaImage: null,
       },
     };
     try {
@@ -519,8 +515,10 @@ export default function CheckGoIntake() {
         if (body.needsReview) {
           setResult({ ok: false, text: `Tersimpan, perlu diperbaiki: ${notes}`, token: body.correlationToken });
         } else {
-          setResult({ ok: true, text: `✓ Check & Go tersimpan & dikirim ke Turboly.${notes ? ` (Catatan: ${notes})` : ''}`, token: body.correlationToken });
+          // Straight to the printout — that is where the customer signs now.
           resetForm();
+          router.push(`/checkgo/${body.spkId}/print?print=1`);
+          return;
         }
       } else {
         setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
@@ -540,9 +538,6 @@ export default function CheckGoIntake() {
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
     setTire({}); setTireRekom([]); setTireLain([]);
     setJobs({});
-    sigCust.current?.clear();
-    sigAdv.current?.clear();
-    setAdvSigned(false);
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
     setSalesperson('');
@@ -993,19 +988,10 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0 16px' }}>
-            <div>
-              <div className="label">Tanda tangan customer — WAJIB (persetujuan pengecekan)</div>
-              <SignaturePad ref={sigCust} onInk={setCustSigned} />
-              {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib</div>}
-            </div>
-            <div>
-              <div className="label">
-                Tanda tangan yang menerima{advisor ? ` — ${advisor}` : ' (Service Advisor)'} — WAJIB
-              </div>
-              <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
-              {!advSigned && <div className="req-note">⚠ wajib — advisor menandatangani hasil pemeriksaan</div>}
-            </div>
+          <div className="label">Tanda tangan</div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+            Setelah Simpan, laporan cetak terbuka otomatis — customer dan advisor
+            tanda tangan di kertas.
           </div>
         </div>
 

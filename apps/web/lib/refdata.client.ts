@@ -36,6 +36,13 @@ export const SERVICES: ReadonlyArray<{
   { code: 'BUBUT_REM', label: 'Bubut Rem', unit: 'check' },
   { code: 'BAN', label: 'Ban', unit: 'pcs', tag: 'BAN', catalog: ['BAN'] },
   { code: 'NITROGEN', label: 'Nitrogen', unit: 'pcs' },
+  // Added on branch request 2026-08-08. POWER_TUNE_UP maps to the tenant's
+  // TUN-NAW-PTU (seeded in service_sku_map); the other two have no service SKU
+  // yet, so an ordered line rides the SO's Notes ("Pekerjaan lain") until one
+  // is mapped — same path the handwriting rows use.
+  { code: 'PENTIL_KARET', label: 'Pentil Karet', unit: 'pcs' },
+  { code: 'POWER_TUNE_UP', label: 'Power Tune-Up', unit: 'check' },
+  { code: 'OIL_FILTER', label: 'Oil Filter', unit: 'check' },
 ];
 
 /** 8 PENGECEKAN AWAL rows: label + the non-OK marks available on that row. */

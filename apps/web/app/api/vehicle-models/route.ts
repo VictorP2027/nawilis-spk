@@ -12,9 +12,19 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: Request): Promise<Response> {
   await db();
-  const make = (new URL(req.url).searchParams.get('make') ?? '').trim().toUpperCase();
-  const doc = await getDb().collection<{ _id: string; byMake: Record<string, string[]> }>('vehicle_models_map').findOne({ _id: 'byMake' });
+  const url = new URL(req.url);
+  const make = (url.searchParams.get('make') ?? '').trim().toUpperCase();
+  // 'car' | 'motorcycle' narrows to that type's models — four make names exist
+  // as BOTH brands (HONDA/BMW/SUZUKI/BAJAJ), so the untyped list mixes Civics
+  // with Vario scooters. No kind (or no typed map yet) = the mixed list.
+  const kind = url.searchParams.get('kind');
+  const doc = await getDb().collection<{ _id: string; byMake: Record<string, string[]>; byMakeCar?: Record<string, string[]>; byMakeMotor?: Record<string, string[]> }>('vehicle_models_map').findOne({ _id: 'byMake' });
   if (!doc) return NextResponse.json({ models: [], known: false });
-  const key = Object.keys(doc.byMake).find((k) => k.toUpperCase() === make);
-  return NextResponse.json({ models: key ? doc.byMake[key] : [], known: !!key });
+  const typed = kind === 'car' ? doc.byMakeCar : kind === 'motorcycle' ? doc.byMakeMotor : undefined;
+  const map = typed ?? doc.byMake;
+  const key = Object.keys(map).find((k) => k.toUpperCase() === make);
+  // `known` answers "does this MAKE exist" — from the union map, so an empty
+  // typed list (a bike-only make asked for cars) does not read as a typo.
+  const unionKey = Object.keys(doc.byMake).find((k) => k.toUpperCase() === make);
+  return NextResponse.json({ models: key ? map[key] : [], known: !!unionKey });
 }

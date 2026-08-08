@@ -427,7 +427,7 @@ export class RpaSink implements ServiceOrderSink {
     await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
-    await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    await page.selectOption('#vehicle-type-select', { label: payload.vehicleKind === 'motorcycle' ? 'Motorcycle' : 'Car' }).catch(() => {});
     await page.waitForTimeout(600);
     if (payload.vehicleMake) {
       try {
@@ -781,7 +781,7 @@ export class RpaSink implements ServiceOrderSink {
     // Vehicle
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
-    await page.selectOption('#vehicle-type-select', { label: 'Car' }).catch(() => {});
+    await page.selectOption('#vehicle-type-select', { label: payload.vehicleKind === 'motorcycle' ? 'Motorcycle' : 'Car' }).catch(() => {});
     await page.waitForTimeout(700);
     if (payload.vehicleMake) {
       try {

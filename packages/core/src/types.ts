@@ -143,6 +143,8 @@ export interface VehicleInfo {
   tipeNormalized: string | null;
   tahun: number | null;
   warna: string | null;
+  /** 'car' | 'motorcycle' (absent on docs captured before 2026-08-08 = car). */
+  kind?: 'car' | 'motorcycle';
   km: Odometer;
   /** Operator confirmed on the form: create this NEW make in Turboly at push. */
   createMakeConfirmed?: boolean;

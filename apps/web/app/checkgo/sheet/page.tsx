@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { SignaturePad, type SigHandle } from '../../components/SignaturePad';
+import { useRouter } from 'next/navigation';
 import { BRANCHES } from '../../../lib/refdata.client';
 import { submitOrQueue, flush } from '../../../lib/outbox';
 
@@ -39,9 +39,7 @@ export default function CheckGoSheet() {
   const [insp, setInsp] = useState<InspRow[]>([]);
   const [menyerahkan, setMenyerahkan] = useState('');
   const [menerima, setMenerima] = useState('');
-  const sigMenyerahkan = useRef<SigHandle>(null);
-  const sigMenerima = useRef<SigHandle>(null);
-  const [custSigned, setCustSigned] = useState(false);
+  const router = useRouter();
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -204,7 +202,6 @@ export default function CheckGoSheet() {
     const missing = required.filter(([v]) => !String(v).trim()).map(([, label]) => label);
     if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }
     if (!hargaOk) { setResult({ ok: false, text: 'Harga General Check wajib — angka Rupiah, contoh 100000.' }); setSubmitting(false); return; }
-    if (!sigMenyerahkan.current?.get()) { setResult({ ok: false, text: 'Tanda tangan customer (Yang menyerahkan) wajib — persetujuan pengecekan.' }); setSubmitting(false); return; }
 
     const estVal = estimasi.trim() === '' ? DEFAULT_ESTIMASI : Number(estimasi.trim());
     const payload = {
@@ -235,12 +232,12 @@ export default function CheckGoSheet() {
         .filter((r) => r.item.trim() !== '')
         .map((r) => ({ item: r.item.trim(), catatan: r.catatan.trim() })),
       signatures: {
-        menyerahkanPresent: !!sigMenyerahkan.current?.get(),
+        menyerahkanPresent: true,
         menyerahkanNamaJelas: menyerahkan || nama || null,
-        menerimaPresent: !!menerima || !!sigMenerima.current?.get(),
+        menerimaPresent: !!menerima,
         menerimaNamaJelas: menerima || null,
-        menyerahkanImage: sigMenyerahkan.current?.get() ?? null,
-        menerimaImage: sigMenerima.current?.get() ?? null,
+        menyerahkanImage: null,
+        menerimaImage: null,
       },
     };
 
@@ -253,10 +250,13 @@ export default function CheckGoSheet() {
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const notes = (body.findings ?? []).map((f: { message: string }) => f.message).join('; ');
-        const msg = body.needsReview
-          ? 'Tersimpan, perlu diperbaiki: '
-          : '✓ Check & Go tersimpan & dikirim ke Turboly. ';
-        setResult({ ok: !body.needsReview, text: msg + notes });
+        if (body.needsReview) {
+          setResult({ ok: false, text: `Tersimpan, perlu diperbaiki: ${notes}` });
+        } else {
+          // Straight to the printout — signing happens on paper now.
+          router.push(`/checkgo/${body.spkId}/print?print=1`);
+          return;
+        }
       } else setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
     } catch (e) {
       setResult({ ok: false, text: `Gagal menyimpan: ${(e as Error).message}` });
@@ -402,12 +402,11 @@ export default function CheckGoSheet() {
         </div>
         <div className="sign">
           <div className="b">Yang menyerahkan (customer),
-            <SignaturePad ref={sigMenyerahkan} onInk={setCustSigned} />
-            {!custSigned && <div className="err-inline">⚠ Tanda tangan customer wajib.</div>}
+            <div style={{ height: 56, border: '1px dashed #9fb2d4', borderRadius: 6, display: 'grid', placeItems: 'center', color: '#8a99b8', fontSize: 11, margin: '4px 0' }}>tanda tangan di formulir cetak</div>
             <input value={menyerahkan} onChange={(e) => setMenyerahkan(e.target.value)} placeholder="Nama jelas" />
           </div>
           <div className="b">Yang menerima (Service Advisor),
-            <SignaturePad ref={sigMenerima} />
+            <div style={{ height: 56, border: '1px dashed #9fb2d4', borderRadius: 6, display: 'grid', placeItems: 'center', color: '#8a99b8', fontSize: 11, margin: '4px 0' }}>tanda tangan di formulir cetak</div>
             <input
               list="advisor-list-cgs"
               value={menerima}

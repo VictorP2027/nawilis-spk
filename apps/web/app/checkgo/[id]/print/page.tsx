@@ -90,6 +90,16 @@ export default function PrintCheckGo() {
       .catch(() => setErr('Jaringan bermasalah — muat ulang halaman.'));
   }, [params?.id]);
 
+  // ?print=1 — the intake forms land here straight after Simpan, and the whole
+  // point of the redirect is the paper: open the dialog as soon as the document
+  // has rendered. Small delay so the logo and layout settle first.
+  useEffect(() => {
+    if (!doc) return;
+    if (!/[?&]print=1/.test(window.location.search)) return;
+    const t = setTimeout(() => window.print(), 700);
+    return () => clearTimeout(t);
+  }, [doc]);
+
   if (err) return <div style={{ padding: 40, textAlign: 'center' }}>{err}</div>;
   if (!doc) return <div style={{ padding: 40, textAlign: 'center' }}>Memuat Check &amp; Go…</div>;
 

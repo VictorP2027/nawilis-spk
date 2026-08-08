@@ -2,7 +2,8 @@
 
 import BrandMark from './components/BrandMark';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SignaturePad, type SigHandle } from './components/SignaturePad';
+import { useRouter } from 'next/navigation';
+import { FuelGauge } from './components/FuelGauge';
 import { SERVICES, BRANCHES, DAMAGE_ZONES, CONDITION_ITEMS } from '../lib/refdata.client';
 import { ProductInput } from '../lib/productSuggest';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
@@ -56,10 +57,19 @@ export default function Intake() {
   const [keluhan, setKeluhan] = useState('');
   const [jobs, setJobs] = useState<Record<string, JobSel>>({});
   const [dmg, setDmg] = useState<Set<string>>(new Set());
-  const sigCust = useRef<SigHandle>(null);
-  const sigAdv = useRef<SigHandle>(null);
-  const [custSigned, setCustSigned] = useState(false);
-  const [advSigned, setAdvSigned] = useState(false);
+  const router = useRouter();
+  // Signatures moved to PAPER: submit redirects to the print page and both
+  // parties sign the printout. No pads, no on-glass images.
+  // Fuel indicator (required): blocked 0–100 bar, or EV battery % as a number.
+  const [fuelMode, setFuelMode] = useState<'fuel' | 'ev'>('fuel');
+  const [fuelPct, setFuelPct] = useState<number | null>(null);
+  const [evPct, setEvPct] = useState('');
+  // Two handwriting rows — free text or a pick from the jasa catalog.
+  const [extra1, setExtra1] = useState('');
+  const [extra2, setExtra2] = useState('');
+  // Mobil / Motor: four make names are BOTH brands; this picks the model list
+  // and Turboly's vehicle type for a new vehicle.
+  const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
   // Pengecekan awal (paper section, required): every item answered; OK default,
   // tap to mark the exception.
   const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
@@ -102,10 +112,10 @@ export default function Intake() {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnown(false); return; }
     let live = true;
-    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}`).then((r) => r.json())
+    fetch(`/api/vehicle-models?make=${encodeURIComponent(m)}&kind=${kind}`).then((r) => r.json())
       .then((d) => { if (live) { setModels(d.models ?? []); setMakeKnown(!!d.known); } }).catch(() => {});
     return () => { live = false; };
-  }, [merk]);
+  }, [merk, kind]);
   useEffect(() => {
     if (!branch) { setAdvisors([]); setSalespeople([]); setSalesperson(''); return; }
     let live = true;
@@ -213,28 +223,39 @@ export default function Intake() {
         tahun: tahun ? Number(tahun) : null,
         warna: warna || null,
         km,
+        kind,
       },
       complaint: [keluhan, [...dmg].length ? `Kerusakan bodi: ${[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}` : ''].filter(Boolean).join(' | ') || null,
       // Price is deliberately NOT captured at intake anymore: Turboly's own
       // pricebook prices the SO line, and the real figure is confirmed by a
       // human at Buat Invoice — which is also where the payment amount is set.
-      jobLines: Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null,
+      jobLines: [...Object.values(jobs).map((j) => ({ serviceCode: j.code, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null,
       chosenSku: j.sku || svcOpts[j.code]?.defaultSku || null,
       // Merk/tipe rides in keterangan, the free-text the paper form itself
       // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
       keterangan: j.brandType?.trim() || undefined })),
+      // The handwriting rows ride as UNMAPPED job lines: the typed text IS the
+      // serviceCode, so it lands verbatim in the SO's Notes ("Pekerjaan lain").
+      ...[extra1, extra2].map((t) => t.trim()).filter(Boolean).map((t) => ({ serviceCode: t, ordered: true, qty: 1, quotedPrice: null, chosenSku: null }))],
+      raw: {
+        service_lain: [extra1, extra2].map((t) => t.trim()).filter(Boolean).join(', '),
+        bahan_bakar_mode: fuelMode,
+        bahan_bakar_pct: fuelMode === 'fuel' ? fuelPct : Number(evPct),
+      },
       conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] === 'OK' ? [] : [condQ[c.code]!] })),
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
       salespersonName: effSalesperson || null,
       signatures: {
-        menyerahkanPresent: !!sigCust.current?.get(),
+        // Consent is given on the PRINTED form now — presence true with no
+        // image = wet_signature basis; the names still print under the boxes.
+        menyerahkanPresent: true,
         menyerahkanNamaJelas: nama || null,
-        menerimaPresent: !!advisor || !!sigAdv.current?.get(),
+        menerimaPresent: !!advisor,
         menerimaNamaJelas: advisor || null,
-        menyerahkanImage: sigCust.current?.get() ?? null,
-        menerimaImage: sigAdv.current?.get() ?? null,
+        menyerahkanImage: null,
+        menerimaImage: null,
       },
     };
 
@@ -257,8 +278,10 @@ export default function Intake() {
         // Still SAVED in Mongo — just needs a fix/verify before it can proceed.
         setResult({ ok: false, text: `Tersimpan, perlu diperbaiki: ${notes}`, token: body.correlationToken });
       } else {
-        setResult({ ok: true, text: `✓ Tersimpan & dikirim ke Turboly.${notes ? ` (Catatan: ${notes})` : ''}`, token: body.correlationToken });
+        // Straight to the printout — that is where the customer signs now.
         resetForm();
+        router.push(`/spk/${body.spkId}/print?print=1`);
+        return;
       }
     } else {
       setResult({ ok: false, text: body.error ?? 'Gagal menyimpan.' });
@@ -282,8 +305,9 @@ export default function Intake() {
     setDmg(new Set());
     setCondQ(Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
     setEstimasi('');
-    sigCust.current?.clear();
-    sigAdv.current?.clear();
+    setFuelMode('fuel'); setFuelPct(null); setEvPct('');
+    setExtra1(''); setExtra2('');
+    setKind('car');
     // Advisor must be a deliberate choice per SPK — never carried over from the
     // previous customer (wrong person would get the sales credit).
     setAdvisor('');
@@ -323,7 +347,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const tipeOk = tipe.trim() !== '';
   const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
-  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && custSigned && advSigned && !submitting;
+  const fuelOk = fuelMode === 'fuel' ? fuelPct !== null : /^\d{1,3}$/.test(evPct.trim()) && Number(evPct) <= 100;
+  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && fuelOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -444,7 +469,14 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {!hist && (
             <div className="row" style={{ marginTop: 10 }}>
               <div>
-                <div className="label">Merk</div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            {(['car', 'motorcycle'] as const).map((k) => (
+              <button key={k} type="button" className={`chk-chip${kind === k ? ' ok' : ''}`} onClick={() => setKind(k)}>
+                {k === 'car' ? '🚗 Mobil' : '🏍 Motor'}
+              </button>
+            ))}
+          </div>
+          <div className="label">Merk</div>
                 <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
                 {!merkOk && <div className="req-note">⚠ wajib diisi</div>}
                 <datalist id="make-list-q">{makes.map((m) => <option key={m} value={m} />)}</datalist>
@@ -459,6 +491,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               </div>
             </div>
           )}
+        </div>
+
+        <div className="card">
+          <FuelGauge mode={fuelMode} pct={fuelPct} ev={evPct} onMode={setFuelMode} onPct={setFuelPct} onEv={setEvPct} />
         </div>
 
         <div className="card">
@@ -545,6 +581,14 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               );
             })}
           </div>
+          {/* Two blank rows, exactly like the paper's 13/14: pick from the jasa
+              list or handwrite anything — either way it reaches the order. */}
+          <div className="label" style={{ marginTop: 10 }}>Pekerjaan lain (tulis / pilih)</div>
+          <input list="jasa-all" value={extra1} onChange={(e) => setExtra1(e.target.value)} placeholder="Pekerjaan lain 1…" />
+          <input list="jasa-all" value={extra2} onChange={(e) => setExtra2(e.target.value)} placeholder="Pekerjaan lain 2…" style={{ marginTop: 4 }} />
+          <datalist id="jasa-all">
+            {[...new Set(Object.values(svcOpts).flatMap((o) => o.options.map((x) => x.label)))].map((l) => <option key={l} value={l} />)}
+          </datalist>
         </div>
 
         <div className="card">
@@ -583,15 +627,21 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         {/* Optional fields collapsed behind one toggle — keeps the form neat. */}
         <button type="button" className="btn ghost" style={{ width: '100%', marginBottom: 14 }} onClick={() => setOptOpen((o) => !o)}>
-          {optOpen ? '▾' : '▸'} Opsional: keluhan, kerusakan bodi
-          {!optOpen && (keluhan.trim() || dmg.size > 0) ? ` — terisi: ${[keluhan.trim() && 'keluhan', dmg.size > 0 && `${dmg.size} kerusakan`].filter(Boolean).join(', ')}` : ''}
+          {optOpen ? '▾' : '▸'} Opsional: keluhan
+          {!optOpen && keluhan.trim() ? ' — terisi' : ''}
         </button>
 
         {optOpen && (
         <div className="card">
           <div className="label">Keluhan</div>
           <textarea value={keluhan} onChange={(e) => setKeluhan(e.target.value)} rows={2} placeholder="Keluhan customer" />
-          <div className="label" style={{ marginTop: 12 }}>Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
+        </div>
+        )}
+
+        {/* The body diagram is MANDATORY-VISIBLE: always on screen, annotated
+            by tapping — a pristine car simply has no marks. */}
+        <div className="card">
+          <div className="label">Pengecekan bodi — ketuk bagian yang rusak {dmg.size > 0 ? `(${dmg.size} ditandai)` : ''}</div>
           <svg className="car" viewBox="0 0 360 520" style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 300 }}>
             {[[40, 70], [320, 70], [40, 450], [320, 450]].map(([wx, wy], i) => (
               <circle key={i} cx={wx} cy={wy} r="27" fill="#3a3a3a" />
@@ -619,7 +669,6 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             <div className="warn-note">Ditandai: {[...dmg].map((z) => DAMAGE_ZONES.find((d) => d.code === z)?.label ?? z).join(', ')}</div>
           )}
         </div>
-        )}
 
         <div className="card">
           <div className="label">Pengecekan awal — ketuk jika ada temuan</div>
@@ -639,12 +688,11 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         </div>
 
         <div className="card">
-          <div className="label">Tanda tangan customer (Yang menyerahkan) — WAJIB</div>
-          <SignaturePad ref={sigCust} onInk={setCustSigned} />
-          {!custSigned && <div className="req-note">⚠ tanda tangan customer wajib (persetujuan pengerjaan)</div>}
-          <div className="label" style={{ marginTop: 10 }}>Tanda tangan penerima (Service Advisor / mekanik) — WAJIB</div>
-          <SignaturePad ref={sigAdv} onInk={setAdvSigned} />
-          {!advSigned && <div className="req-note">⚠ tanda tangan penerima wajib</div>}
+          <div className="label">Tanda tangan</div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+            Setelah Simpan, formulir cetak terbuka otomatis — customer dan penerima
+            tanda tangan di kertas.
+          </div>
         </div>
 
         {!jadwalOn ? (
