@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createDecipheriv } from 'node:crypto';
 import { SELECTOR_MAP } from './selmap.js';
 import { collections, getDb } from '../mongo.js';
+import { TransientError } from '../failure.js';
 
 /**
  * Per-branch Turboly sessions. One BrowserContext per worker, page concurrency
@@ -89,8 +90,11 @@ export class AuthChallengeError extends Error {
  * login storm that trips the rate limiter and kicks other holders), and the
  * caller should classify it transient so the order waits out the outage
  * instead of burning retry attempts toward a permanent strand.
+ *
+ * Extends TransientError so flow-once's existing retry branch handles it
+ * without knowing the new name.
  */
-export class TenantOutageError extends Error {
+export class TenantOutageError extends TransientError {
   constructor(msg: string) {
     super(msg);
     this.name = 'TenantOutageError';
