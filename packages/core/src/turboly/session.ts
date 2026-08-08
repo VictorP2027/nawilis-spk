@@ -432,7 +432,29 @@ export class TurbolySession {
 
     if (!(await this.verifyLoggedIn())) {
       await this.throwIfRateLimited();
-      throw new AuthChallengeError(`Login did not complete for ${this.cfg.branchCode} (2FA/OTP or wrong credentials). Run \`npm run login:turboly\`.`);
+      // A login that lands but cannot verify was, in the one case seen live
+      // (8 Aug), the context still carrying cookies/localStorage replayed from
+      // a stored session that a tenant deploy had poisoned — state saved
+      // during the outage kept logins broken for HOURS after the vendor
+      // recovered, while a clean context logged in on the first try. Scrub
+      // everything the replay left behind and log in once more before calling
+      // it an auth failure.
+      await this.context?.clearCookies().catch(() => {});
+      await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch { /* opaque origin */ } }).catch(() => {});
+      await page.goto(this.cfg.baseUrl + SELECTOR_MAP.routes.login, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      const pw2 = page.locator('input[type="password"]').first();
+      if ((await pw2.count()) > 0) {
+        await page.locator('input[type="email"], input[name*="email" i], input[name*="user" i], input[type="text"]').first().fill(cred.username);
+        await pw2.fill(cred.password);
+        const btn2 = page.getByRole('button', { name: /log\s?in|sign\s?in|masuk|submit|continue/i }).first();
+        if ((await btn2.count()) > 0) await btn2.click();
+        else await pw2.press('Enter');
+        await page.waitForLoadState('networkidle').catch(() => {});
+      }
+      if (!(await this.verifyLoggedIn())) {
+        await this.throwIfRateLimited();
+        throw new AuthChallengeError(`Login did not complete for ${this.cfg.branchCode} (2FA/OTP or wrong credentials). Run \`npm run login:turboly\`.`);
+      }
     }
     // This login just kicked every other holder of the account — publish before
     // anything else notices, so they replay this session instead of logging in
