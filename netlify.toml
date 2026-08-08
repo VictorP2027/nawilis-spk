@@ -5,10 +5,13 @@
 # site, not a separate system. Both can run at once; Mongo is the arbiter, and
 # the pusher (GitHub Actions) does not care which one captured a document.
 #
-# Deliberately NOT a mirror of the Vercel flow: Netlify builds from a GitHub
-# push, so the standby follows `main` on its own instead of waiting for someone
-# to remember `vercel --prod` during an outage. That also means it only ever has
-# what has been PUSHED — commits sitting locally are not on the standby.
+# The live site (nawilis-spk-backup.netlify.app) is NOT linked to GitHub —
+# `git push` deploys nothing here, same as Vercel. Ship it explicitly:
+#   npx netlify deploy --build --prod --filter @spk/web
+# (site is linked on this Mac; --filter answers the monorepo prompt, and every
+# interactive prompt crashes the CLI in a non-TTY shell). Linking the repo in
+# app.netlify.com would make it follow `main`, but that OAuth click has not
+# happened, so until it does BOTH hosts are CLI-only deploys.
 #
 # Setup (once, no credit card):
 #   1. netlify.com → Add new site → Import from GitHub → VictorP2027/nawilis-spk
