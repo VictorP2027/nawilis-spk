@@ -101,9 +101,14 @@ async function login(): Promise<string> {
   });
   const cookie = cookiesFrom(r2) || pre;
   if (!cookie || r2.status !== 302) throw new Error(`Turboly login failed (${r2.status})`);
+  // `username` is load-bearing: the worker's session adopter takes this doc
+  // only when the label matches ITS user. Now that lookups run as a dedicated
+  // account, an unlabelled write would leave the lookup account's cookie under
+  // the pusher's old label — and the robot would drive Turboly as the wrong
+  // user, resurrecting the very session fight the second account exists to end.
   await getDb().collection('turboly_http_session').updateOne(
     { _id: 'cookie' } as never,
-    { $set: { cookie, at: new Date().toISOString() } },
+    { $set: { cookie, username: USER, at: new Date().toISOString() } },
     { upsert: true },
   );
   return cookie;
