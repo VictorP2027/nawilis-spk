@@ -1,14 +1,14 @@
-# STAGED — NOT ACTIVE. Second parallel Turboly pusher (worker 2).
+# Second Turboly push worker — IMPLEMENTED BUT DORMANT.
 #
-# GitHub only runs workflows that live in .github/workflows/; this file sits in
-# ops/staged/ precisely so that committing and even pushing it changes nothing.
-# It is push.yml with exactly four differences: the workflow name, its own
-# concurrency lane (turboly-push-2 — parallel to, not serialised with, worker
-# 1/sync/flow), worker 2's own credentials (TURBOLY_USERNAME_2/PASSWORD_2), and
-# a cron offset by 2 minutes so the two safety nets interleave.
+# Identical to push.yml except: its own name, its own concurrency lane
+# (turboly-push-2 — parallel to worker 1/flow/sync, serialised with nothing),
+# worker 2's TURBOLY_USERNAME_2/PASSWORD_2, a cron offset by two minutes so the
+# two safety nets interleave, and the gate job below that keeps it a no-op
+# until those secrets exist. The claim layer (CAS queued→pushing + unique claim
+# + lease + orphan reclaim) already arbitrates two workers racing one document.
 #
-# Activation, PRECONDITIONS FIRST, is written out in ACTIVATE-PUSH2.md next to
-# this file. Do not activate before the kick test passes.
+# Do not set the _2 secrets before scripts/kick-test.mjs passes — the order of
+# operations is written in ops/staged/ACTIVATE-PUSH2.md.
 #
 name: push-to-turboly-w2
 
@@ -41,7 +41,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # INERT UNTIL CONFIGURED — same pattern as alerts.yml. Worker 2 only exists
+  # once its own Turboly account does: until TURBOLY_USERNAME_2 is set as a
+  # secret (which per ops/staged/ACTIVATE-PUSH2.md happens only after the kick
+  # test passes), every run stops here in a few seconds, green, having touched
+  # nothing. Setting the two secrets IS the activation; no file moves.
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      configured: ${{ steps.cfg.outputs.configured }}
+    steps:
+      - name: Check worker 2 configuration
+        id: cfg
+        env:
+          U2: ${{ secrets.TURBOLY_USERNAME_2 }}
+        run: |
+          if [ -z "$U2" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "TURBOLY_USERNAME_2 not set — worker 2 inert, skipping."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
   push:
+    needs: gate
+    if: needs.gate.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

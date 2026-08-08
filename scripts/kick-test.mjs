@@ -74,6 +74,15 @@ for (let waited = 0; waited < HOLD; waited += 30_000) {
   await new Promise((r) => setTimeout(r, Math.min(30_000, HOLD - waited)));
   const [a, b] = [await alive(cookieA), await alive(cookieB)];
   console.log(stamp(), `A ${a ? 'alive' : 'DEAD'} · B ${b ? 'alive' : 'DEAD'}`);
+  if (!a && b) {
+    // A alone dying is the signature of ANOTHER user-1 login, not tenant
+    // scoping — most likely the web app's prefill lookup, which logs in as
+    // account 1 whenever no worker has touched Turboly recently.
+    console.log('\n❌ FAIL — but A died while B survived: almost certainly the web app\'s');
+    console.log('   lookup login as account 1, NOT tenant-scoped sessions. Re-run during');
+    console.log('   quiet hours (or right after an SPK submission, which mutes lookups).');
+    process.exit(1);
+  }
   if (!a || !b) { console.log('\n❌ FAIL: a session died during concurrent hold.'); process.exit(1); }
 }
 
