@@ -148,6 +148,12 @@ export interface VehicleInfo {
   km: Odometer;
   /** Operator confirmed on the form: create this NEW make in Turboly at push. */
   createMakeConfirmed?: boolean;
+  /**
+   * Nomor rangka / VIN — asked for on ELECTRIC vehicles only. An EV has no engine
+   * number, so this is the one field that separates two identical cars. Optional:
+   * every petrol SPK ever captured has none.
+   */
+  vin?: string | null;
   /** Stable per-vehicle ref (cross-branch), e.g. "veh_B1234SZA". */
   vehicleRef: string | null;
   /** Why we bound to an existing vehicle doc — requires two independent signals. */

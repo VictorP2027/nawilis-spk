@@ -187,6 +187,7 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
       merkMatchScore: brand.score,
       tipeNormalized: input.vehicle.tipe,
       tahun: input.vehicle.tahun,
+      vin: input.vehicle.vin ?? null,
       warna: input.vehicle.warna,
       kind: input.vehicle.kind ?? 'car',
       createMakeConfirmed: input.vehicle.createMakeConfirmed ?? false,

@@ -22,6 +22,8 @@ export interface TurbolyServiceOrderPayload {
   vehicleModel?: string;
   vehicleYear?: string;
   vehicleColor?: string;
+  /** Nomor rangka / VIN — electric vehicles only; absent everywhere else. */
+  vehicleVin?: string;
   /** Operator confirmed on the form: create the NEW make (+ a first model) in Turboly if missing. */
   createMakeConfirmed?: boolean;
   odometer: string;

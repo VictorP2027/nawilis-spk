@@ -58,6 +58,13 @@ export const SpkIntakeInput = z.object({
     /** Mobil / Motor — four make names exist as BOTH; this picks the roster and
      *  Turboly's vehicle type for a brand-new vehicle. */
     kind: z.enum(['car', 'motorcycle']).default('car'),
+    /**
+     * Nomor rangka / VIN. Asked for on ELECTRIC vehicles only, where it is the
+     * one identifier that reliably tells two otherwise identical cars apart —
+     * an EV has no engine number to fall back on. Optional in the schema because
+     * every petrol SPK ever captured has none; the FORM is what requires it.
+     */
+    vin: z.string().nullable().default(null),
   }),
 
   complaint: z.string().nullable().default(null),

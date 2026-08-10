@@ -448,6 +448,10 @@ export class RpaSink implements ServiceOrderSink {
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
     await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
     if (payload.vehicleColor) await page.fill('#vehicle_color', payload.vehicleColor).catch(() => {});
+    // VERIFIED 2026-08-10: the field is #vehicle_vin on /vehicles/new, and
+    // #customer_vehicles_attributes_0_vin in the new-customer modal. Written only
+    // when the SPK carries one, which today means electric vehicles only.
+    if (payload.vehicleVin) await page.fill('#vehicle_vin', payload.vehicleVin).catch(() => {});
     await page.fill('#vehicle_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
     await page.fill('#vehicle_next_service_date_default', '3').catch(() => {});
     const clicked = await page.evaluate(() => {
@@ -801,6 +805,7 @@ export class RpaSink implements ServiceOrderSink {
     if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
     await page.fill('#customer_vehicles_attributes_0_odometer', payload.odometer).catch(() => {});
     if (payload.vehicleColor) await page.fill('#customer_vehicles_attributes_0_color', payload.vehicleColor).catch(() => {});
+    if (payload.vehicleVin) await page.fill('#customer_vehicles_attributes_0_vin', payload.vehicleVin).catch(() => {});
     await page.fill('#customer_vehicles_attributes_0_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
     // "Month next service default" is a NUMBER of months, not a date.
     await page.fill('#customer_vehicles_attributes_0_next_service_date_default', '3').catch(() => {});

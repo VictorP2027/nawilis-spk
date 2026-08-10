@@ -99,6 +99,7 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     vehicleModel: (doc.vehicle.tipeNormalized ?? '').trim(),
     vehicleYear: doc.vehicle.tahun != null ? String(doc.vehicle.tahun) : '',
     vehicleColor: (doc.vehicle.warna ?? '').trim(),
+    vehicleVin: (doc.vehicle.vin ?? '').trim(),
     createMakeConfirmed: doc.vehicle.createMakeConfirmed ?? false,
     odometer: Number.isFinite(doc.vehicle.km.value as number) ? String(doc.vehicle.km.value) : '0', // unreadable KM → 0 (warned at intake)
     planServiceDate: planDate,
