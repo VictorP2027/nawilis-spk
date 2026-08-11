@@ -4,7 +4,7 @@ import { resolve, exists } from './locators.js';
 import { TurbolySession } from './session.js';
 import { DataError, TransientError } from './rpaSink.js';
 import { registerRetailHttp, registerWholesaleHttp, type HttpRegisterConfig, type HttpRegisterResult } from './httpRegister.js';
-import { canonPhoneKey, localPhone } from '../indonesia.js';
+import { canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
 
 /**
  * FLOW v2 — browser automation for the Turboly lifecycle AFTER the Service
@@ -1090,11 +1090,12 @@ export class TurbolyFlowRpa {
   }
 
   async registerRetailCustomer(args: RegisterRetailArgs): Promise<RegisterCustomerResult> {
-    // Store the LOCAL 0… spelling like the rest of Turboly does: its customer
-    // search is a prefix match on the stored string, so a "+62…" record and a
-    // "0…" record never find each other — the web form's E.164 made the SO push
-    // miss this customer and create a second, company-less duplicate.
-    const phone = localPhone(args.phone);
+    // E.164 "+62812…" — one spelling across the SPK, Mongo, WhatsApp and
+    // Turboly. Turboly's customer search is a prefix match on the stored
+    // string, so the two spellings never find each other; findExistingCustomer
+    // ByPhone below asks under all four (0…, 62…, +62…, bare) and matches on
+    // the canonical key, which is what keeps a legacy 0… record reachable.
+    const phone = e164Phone(args.phone);
     // Dedupe by phone BEFORE registering: a retried job may have already saved
     // this customer (save click landed, then the session died before read-back).
     const dup = await this.findExistingCustomerByPhone(phone);

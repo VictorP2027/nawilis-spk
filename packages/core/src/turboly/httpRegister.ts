@@ -1,5 +1,5 @@
 import { getDb } from '../mongo.js';
-import { localPhone } from '../indonesia.js';
+import { e164Phone } from '../indonesia.js';
 import { DataError, TransientError } from './rpaSink.js';
 
 /**
@@ -739,17 +739,21 @@ async function registerViaForm(
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
- * Retail customer. The phone is stored in the LOCAL 0… spelling because
- * Turboly's customer search is a prefix match on the stored string: a "+62…"
- * record and a "0…" record never find each other, and that split already
- * created a duplicate customer once.
+ * Retail customer. The phone is written in E.164, "+62812…" — one spelling
+ * everywhere, matching the SPK, Mongo and WhatsApp.
+ *
+ * This used to store the local "0812…" because Turboly's customer search is a
+ * prefix match on the stored string, so the two spellings never find each
+ * other — and that split did create a duplicate customer once. What makes the
+ * change safe is that every dedupe search now sends BOTH spellings and matches
+ * on canonPhoneKey, so a customer registered either way is still found.
  *
  * No duplicate guard lives here — dedupe by phone BEFORE calling, the way
  * flowSink.registerRetailCustomer does.
  */
 export async function registerRetailHttp(cfg: HttpRegisterConfig, args: HttpRetailArgs): Promise<HttpRegisterResult> {
   const what = 'Customer Retail';
-  const phone = localPhone(args.phone);
+  const phone = e164Phone(args.phone);
   return registerViaForm(cfg, '/customers/new', what, (form) => {
     setField(form.body, 'customer[name]', args.nama);
     setField(form.body, 'customer[group_name]', args.nama); // Turboly wants the group mirroring the name

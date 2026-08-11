@@ -4,7 +4,7 @@ import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControl
 import { TurbolySession, AuthChallengeError, TenantOutageError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload } from './sink.js';
 import type { SpkDoc } from '../types.js';
-import { jaroWinkler, canonPhoneKey, localPhone } from '../indonesia.js';
+import { jaroWinkler, canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
 
 /**
  * W2 — browser automation against the real Turboly Service Order UI.
@@ -124,7 +124,7 @@ export class RpaSink implements ServiceOrderSink {
         ? typedKey !== '' && typedKey !== ownerKey
         : effNama.trim().toUpperCase() !== owner.name.trim().toUpperCase();
       if (differs) {
-        this.notesExtra.push(`Dibawa oleh: ${effNama || '-'} (${effPhone ? localPhone(effPhone) : '-'}) — kendaraan tetap atas nama ${owner.name}`);
+        this.notesExtra.push(`Dibawa oleh: ${effNama || '-'} (${effPhone ? e164Phone(effPhone) : '-'}) — kendaraan tetap atas nama ${owner.name}`);
       }
       effNama = owner.name;
       /**
@@ -503,7 +503,9 @@ export class RpaSink implements ServiceOrderSink {
     // else 0-form phone, else name.
     const cr = payload.customer.create;
     const phoneKey = cr?.phone && canonPhoneKey(cr.phone).length >= 8 ? canonPhoneKey(cr.phone) : '';
-    let q = (phoneKey && cr?.phone ? localPhone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    // Fallback spelling only: if resolveOriginalCustomer answers, its exact
+    // stored form replaces this. E.164 first — that is what we write now.
+    let q = (phoneKey && cr?.phone ? e164Phone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
@@ -759,19 +761,41 @@ export class RpaSink implements ServiceOrderSink {
     await input.type(query, { delay: 25 });
   }
 
+  /**
+   * Find this person in the customer picker. PHONE IS THE IDENTITY KEY (unique
+   * per person; one person, many cars) — 0223456789 / 223456789 / +62223456789
+   * are all the SAME person.
+   *
+   * Normally resolveOriginalCustomer names the exact stored spelling and we
+   * search for that. When the lookup endpoint hiccups it returns undefined, and
+   * then the SPELLING WE TYPE MATTERS: Turboly's search is a prefix match, so
+   * "0812…" cannot find a record stored as "+62812…", nor the reverse. Records
+   * created before 2026-08-11 are "0…" and everything after is "+62…", so the
+   * fallback tries BOTH before it dares conclude "not here" — that conclusion
+   * means create, and creating means a duplicate person.
+   */
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
-    const page = this.session.page_();
-    // PHONE IS THE IDENTITY KEY (unique per person; one person, many cars).
-    // Canonical key: 0223456789 / 223456789 / +62223456789 are all the SAME person.
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
-    let query = (phoneKey ? localPhone(phone) : nama || '').trim();
+    const queries: string[] = [];
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
-      if (orig === null) return false; // phone not in Turboly → create new (stored 0-form)
-      if (orig) query = orig.phone.trim(); // exact stored form — prefix search will find it
+      if (orig === null) return false; // phone genuinely not in Turboly → create new
+      if (orig) queries.push(orig.phone.trim()); // exact stored form — prefix search will find it
+      else queries.push(e164Phone(phone), localPhone(phone)); // endpoint hiccup: both spellings
+    } else if (nama) {
+      queries.push(nama.trim());
     }
-    if (query.length < 3) return false; // Select2 remote search needs ≥3 chars
+    for (const q of queries) {
+      if (q.length < 3) continue; // Select2 remote search needs ≥3 chars
+      if (await this.pickCustomerInSelect2(q, phoneKey, nama)) return true;
+    }
+    return false;
+  }
+
+  /** One attempt: type `query` into the customer select2 and pick the row that matches. */
+  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string): Promise<boolean> {
+    const page = this.session.page_();
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
       await page.waitForTimeout(400);
@@ -865,7 +889,7 @@ export class RpaSink implements ServiceOrderSink {
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
-    if (c?.phone) await page.fill('#customer_phone', localPhone(c.phone)).catch(() => {});
+    if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone)).catch(() => {});
     if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
 
     // Vehicle

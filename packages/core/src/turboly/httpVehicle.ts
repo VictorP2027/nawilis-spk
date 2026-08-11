@@ -565,6 +565,12 @@ function plateSearchTerms(plate: string): string[] {
   if (raw) terms.add(raw);
   const parsed = parsePlate(raw || compact);
   if (parsed.ok && parsed.display) terms.add(parsed.display);
+  // The SPACED spelling, built from the blocks rather than taken from
+  // `display` — which is compact now, so reading it here would silently drop
+  // the very variant this function exists to cover.
+  if (parsed.ok && parsed.area && parsed.number) {
+    terms.add([parsed.area, parsed.number, parsed.suffix].filter(Boolean).join(' '));
+  }
   return [...terms].filter((t) => t.length >= 3);
 }
 

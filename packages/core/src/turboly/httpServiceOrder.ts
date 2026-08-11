@@ -1,5 +1,5 @@
 import { getDb } from '../mongo.js';
-import { canonPhoneKey, localPhone } from '../indonesia.js';
+import { canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
 import { DataError, TransientError, NeedAddVehicleError } from './rpaSink.js';
 import type { TurbolyServiceOrderPayload } from './sink.js';
 
@@ -605,7 +605,7 @@ async function resolveParties(
       ownerName,
       ownerPhone,
       carrierNote: differs
-        ? `Dibawa oleh: ${typedName || '-'} (${typedPhone ? localPhone(typedPhone) : '-'}) — kendaraan tetap atas nama ${ownerName}`
+        ? `Dibawa oleh: ${typedName || '-'} (${typedPhone ? e164Phone(typedPhone) : '-'}) — kendaraan tetap atas nama ${ownerName}`
         : null,
     };
   }

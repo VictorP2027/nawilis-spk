@@ -134,7 +134,16 @@ export function parsePlate(raw: string): PlateParse {
     return { ok: false, full: cleaned, display: cleaned, area: '', number: '', suffix: '', areaKnown: false, correctionsApplied: [] };
   }
   const full = `${best.area}${best.number}${best.suffix}`;
-  const display = [best.area, best.number, best.suffix].filter(Boolean).join(' ');
+  /**
+   * Shown WITHOUT spaces — "BO123SZA", not "BO 123 SZA". The blocks are still
+   * parsed out into area/number/suffix for anything that needs them; the
+   * spacing was only ever presentation, and the counter wants the plate to
+   * read back exactly as it was typed.
+   *
+   * Anything that must query the spaced spelling builds it from the parts —
+   * see plateSearchTerms, where Turboly's prefix search genuinely needs both.
+   */
+  const display = full;
   return {
     ok: PLATE_RE.test(display),
     full,
@@ -334,10 +343,39 @@ export function canonPhoneKey(raw: string): string {
   return d;
 }
 
-/** Display/storage form: canonical key with the leading 0 (Indonesian local). */
+/**
+ * The Indonesian local spelling, "0812…".
+ *
+ * NOT what we write any more — see e164Phone. This stays because it is how a
+ * customer REGISTERED under the old 0… spelling is still found: Turboly's
+ * customer search is a prefix match on the stored string, so finding those
+ * records means asking for them in their own spelling. Every dedupe search
+ * sends both, which is exactly why the stored format was free to change.
+ */
 export function localPhone(raw: string): string {
   const k = canonPhoneKey(raw);
   return k ? '0' + k : '';
+}
+
+/**
+ * The spelling Nawilis stores a phone number in: "+62812…".
+ *
+ * One format everywhere — the SPK, Mongo, WhatsApp and now the Turboly
+ * customer record too, which was the last place still writing "0812…". Two
+ * spellings of one number is how a person becomes two customers.
+ *
+ * Foreign numbers keep their own country code: parseWa accepts an explicit
+ * "+" from an expat or a fleet contact abroad, and forcing +62 onto that
+ * would corrupt it. Only bare/local Indonesian input gets +62.
+ */
+export function e164Phone(raw: string): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.replace(/\D/g, '');
+    if (digits && !digits.startsWith('62') && !digits.startsWith('0')) return `+${digits}`;
+  }
+  const k = canonPhoneKey(trimmed);
+  return k ? `+62${k}` : '';
 }
 
 /** Asia/Jakarta calendar day (YYYY-MM-DD) for a given instant. */
