@@ -1095,7 +1095,7 @@ export class TurbolyFlowRpa {
     // string, so the two spellings never find each other; findExistingCustomer
     // ByPhone below asks under all four (0…, 62…, +62…, bare) and matches on
     // the canonical key, which is what keeps a legacy 0… record reachable.
-    const phone = e164Phone(args.phone);
+    const phone = localPhone(args.phone);
     // Dedupe by phone BEFORE registering: a retried job may have already saved
     // this customer (save click landed, then the session died before read-back).
     const dup = await this.findExistingCustomerByPhone(phone);

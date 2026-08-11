@@ -889,7 +889,7 @@ export class RpaSink implements ServiceOrderSink {
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
-    if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone)).catch(() => {});
+    if (c?.phone) await page.fill('#customer_phone', localPhone(c.phone)).catch(() => {});
     if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
 
     // Vehicle

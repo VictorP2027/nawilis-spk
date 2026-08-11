@@ -1,5 +1,5 @@
 import { getDb } from '../mongo.js';
-import { e164Phone } from '../indonesia.js';
+import { e164Phone, localPhone } from '../indonesia.js';
 import { DataError, TransientError } from './rpaSink.js';
 
 /**
@@ -739,21 +739,26 @@ async function registerViaForm(
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
- * Retail customer. The phone is written in E.164, "+62812…" — one spelling
- * everywhere, matching the SPK, Mongo and WhatsApp.
+ * Retail customer. The phone is stored in the LOCAL "0812…" spelling.
  *
- * This used to store the local "0812…" because Turboly's customer search is a
- * prefix match on the stored string, so the two spellings never find each
- * other — and that split did create a duplicate customer once. What makes the
- * change safe is that every dedupe search now sends BOTH spellings and matches
- * on canonPhoneKey, so a customer registered either way is still found.
+ * NOT a style choice, and NOT negotiable: TURBOLY'S CUSTOMER SEARCH CANNOT
+ * MATCH A PHONE THAT BEGINS WITH "+". Measured against the live tenant on
+ * 2026-08-11 — search "08" returns 100 customers, "081" returns 5, "62"
+ * returns one, and "+62" returns NOTHING, while a customer stored as
+ * "+6281188009568" sits there findable by name alone.
+ *
+ * That matters because the phone is the identity key. A customer written with
+ * a leading "+" cannot be found by any later lookup, so the next visit creates
+ * them again — B126JLU and S1234SUP both did exactly that, hours after this
+ * was briefly changed to E.164 for consistency with the SPK and WhatsApp.
+ * Everything WE own displays +62; what Turboly stores is what Turboly can find.
  *
  * No duplicate guard lives here — dedupe by phone BEFORE calling, the way
  * flowSink.registerRetailCustomer does.
  */
 export async function registerRetailHttp(cfg: HttpRegisterConfig, args: HttpRetailArgs): Promise<HttpRegisterResult> {
   const what = 'Customer Retail';
-  const phone = e164Phone(args.phone);
+  const phone = localPhone(args.phone);
   return registerViaForm(cfg, '/customers/new', what, (form) => {
     setField(form.body, 'customer[name]', args.nama);
     setField(form.body, 'customer[group_name]', args.nama); // Turboly wants the group mirroring the name
