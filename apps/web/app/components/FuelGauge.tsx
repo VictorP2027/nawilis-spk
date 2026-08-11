@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
+import { fuelWord, FRACTIONS, STEPS } from '../../lib/fuel';
 
 /**
  * Fuel / EV-battery indicator for the SPK intake — a blocked bar read the way a
@@ -14,22 +15,13 @@ import { useRef } from 'react';
  * — the far left of the bar is E, and it is a real answer. EV keeps a real
  * percentage, because a battery genuinely is one.
  */
-const FRACTIONS: Record<number, string> = { 0: 'E', 25: '¼', 50: '½', 75: '¾', 100: 'F' };
 /**
- * A needle does not stop only on the quarters, so neither does this. Tap or drag
- * anywhere on the bar; the value snaps to the nearest EIGHTH, which is as fine as
- * a gauge is ever read and as fine as a thumb can aim on a phone. The quarters are
- * still the printed marks, and the old 0/25/50/75/100 values are all eighths, so
- * every SPK already captured still means exactly what it meant.
+ * The words and marks live in lib/fuel.ts, NOT here: the print renderers need
+ * them too, and one of those runs on the server — a client module cannot be
+ * called from there. Re-exported so existing client imports keep working.
  */
-const STEPS = [0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100] as const;
-const STEP_WORDS: Record<number, string> = {
-  0: 'Kosong (E)', 12.5: '⅛ tangki', 25: '¼ tangki', 37.5: '⅜ tangki', 50: '½ tangki',
-  62.5: '⅝ tangki', 75: '¾ tangki', 87.5: '⅞ tangki', 100: 'Penuh (F)',
-};
-export function fuelWord(pct: number): string {
-  return STEP_WORDS[pct] ?? `${Math.round(pct)}/100 tangki`;
-}
+export { fuelWord, FRACTIONS, STEPS, STEP_WORDS } from '../../lib/fuel';
+
 export function FuelGauge(props: {
   mode: 'fuel' | 'ev';
   pct: number | null;

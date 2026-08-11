@@ -1,5 +1,5 @@
 import { SERVICES, CONDITION_ITEMS, BRANCHES, DAMAGE_ZONES } from './refdata.client';
-import { fuelWord } from '../app/components/FuelGauge';
+import { fuelWord } from './fuel';
 import { carDiagramSvg } from './carDiagramSvg';
 
 /**

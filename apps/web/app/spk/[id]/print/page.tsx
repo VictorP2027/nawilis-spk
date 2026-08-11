@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { fuelWord } from '../../../components/FuelGauge';
+import { fuelWord } from '../../../../lib/fuel';
 import { useParams } from 'next/navigation';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../../../lib/refdata.client';
 import { CarDiagram } from '../../../components/CarDiagram';

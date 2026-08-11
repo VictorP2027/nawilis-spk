@@ -90,20 +90,45 @@ export default function Admin() {
     setPurging(true);
     try {
       // 1. Backup lands locally first, always.
-      const blob = await fetch('/api/admin/purge').then((r) => r.blob());
+      //
+      // And it is CHECKED before we go anywhere near the deletion. On
+      // 2026-08-11 this route threw and Vercel answered 500 with an empty
+      // body; the console saved a 0-byte file, announced "Backup sudah
+      // terunduh", and offered to wipe every SPK. Typing HAPUS at that prompt
+      // would have destroyed the lot with nothing to restore from. A backup
+      // that did not arrive must stop the purge dead — the whole point of
+      // downloading first is that the data survives the delete.
+      const res = await fetch('/api/admin/purge');
+      const blob = res.ok ? await res.blob() : null;
+      // A real archive starts "PK\x03\x04". Checking the magic bytes catches
+      // the empty body AND an error page served with a 200.
+      const magic = blob && blob.size > 0 ? new Uint8Array(await blob.slice(0, 4).arrayBuffer()) : null;
+      const looksLikeZip = !!magic && magic[0] === 0x50 && magic[1] === 0x4b && magic[2] === 0x03 && magic[3] === 0x04;
+      if (!res.ok || !blob || !looksLikeZip) {
+        alert(
+          `Backup GAGAL — tidak ada yang dihapus.\n\n` +
+            `Server menjawab ${res.status}${blob ? `, ${blob.size} byte` : ''}.\n` +
+            `Coba lagi nanti; kalau tetap gagal, laporkan status ${res.status} ini.`,
+        );
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       // .zip since 2026-08-07: backup.json + signatures/ as real PNGs.
       a.download = `spk-backup-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.zip`;
+      // In the document and revoked LATER: a detached anchor plus an immediate
+      // revoke races the browser to the bytes, and the loser writes 0 of them.
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      setTimeout(() => { URL.revokeObjectURL(url); }, 60_000);
       // 2. The deletion needs the word typed, not a reflex OK.
       const typed = prompt('Backup sudah terunduh.\n\nKetik HAPUS untuk menghapus data operasional (SPK, events, antrean).\nRiwayat customer/kendaraan dan data referensi TIDAK ikut terhapus.');
       if (typed !== 'HAPUS') return;
-      const res = await fetch('/api/admin/purge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: 'HAPUS' }) });
-      const out = await res.json();
-      alert(res.ok ? `Terhapus: ${Object.entries(out.deleted).map(([k, v]) => `${k} ${v}`).join(', ')}` : out.message ?? 'Gagal.');
+      const del = await fetch('/api/admin/purge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: 'HAPUS' }) });
+      const out = await del.json();
+      alert(del.ok ? `Terhapus: ${Object.entries(out.deleted).map(([k, v]) => `${k} ${v}`).join(', ')}` : out.message ?? 'Gagal.');
       await Promise.all([load(), loadUsage()]);
     } finally {
       setPurging(false);
