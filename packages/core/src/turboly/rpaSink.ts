@@ -127,7 +127,25 @@ export class RpaSink implements ServiceOrderSink {
         this.notesExtra.push(`Dibawa oleh: ${effNama || '-'} (${effPhone ? localPhone(effPhone) : '-'}) — kendaraan tetap atas nama ${owner.name}`);
       }
       effNama = owner.name;
-      if (owner.phone) effPhone = owner.phone;
+      /**
+       * The plate has already named the owner, so the CARRIER's phone must not be
+       * used to look them up.
+       *
+       * Turboly records created before phones were captured have none, and
+       * tryPickCustomerExact treats a phone it cannot find as a verdict — "not in
+       * Turboly, therefore new" — so it took the create path for a customer it had
+       * just identified by registration. Turboly then refused the create, because
+       * that plate is already registered to that very person, and the SPK sat in
+       * `failed` for good: no retry can fix a mismatch. ROMYADI (B9046BAX) and
+       * NUGROHO (B618NS) both died exactly here, and both had a phone-less record.
+       *
+       * So the owner's phone is used when Turboly HAS one, and otherwise the phone
+       * is cleared, which sends the matcher down its exact-NAME branch against the
+       * name the plate itself gave us. Clearing is also the more correct reading:
+       * the typed phone belongs to whoever brought the car in, who may not be the
+       * owner at all — the line above already records them as "Dibawa oleh".
+       */
+      effPhone = owner.phone || '';
     }
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
@@ -195,8 +213,76 @@ export class RpaSink implements ServiceOrderSink {
     }
     const rowCount = await page.locator(rowSel).count();
     if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
-    // Spareparts aren't driven yet — fail LOUD rather than silently drop the line.
-    if (payload.sparepartLines.length) throw new DataError(`${payload.sparepartLines.length} sparepart line(s) not supported by RPA yet: ${payload.sparepartLines.map((s) => s.expectedSku).join(', ')}`);
+    /**
+     * 5b. Sparepart lines — a DIFFERENT row shape from a service item, on the same tab.
+     *
+     * A Service Order carries goods as well as work, and some SPK rows are goods:
+     * "Pentil Karet" is AKS-NAW-PEKA, which the service catalogue has never heard of
+     * (VERIFIED: service search → 0 results, product search → "Pentil Karet"). Sent as
+     * a service line it failed for good with `no Turboly match`, so the line used to
+     * throw here instead — loud, but the SPK still never reached Turboly.
+     *
+     * VERIFIED 2026-08-11 by driving the live form: the pane offers "Add Package
+     * Service", "Add Sparepart" and "Add Service Item". A sparepart row is
+     * service_order_lines_attributes (product_id / quantity / original_price /
+     * product_notes) where a service row is service_order_additional_lines_attributes
+     * (input-service-product / input-quantity / description). Same add-link class,
+     * different table — hence a separate row selector and a separate setter.
+     *
+     * Unlike a service line, the sparepart PRICE is editable, so the quoted price is
+     * written when the SPK carries one and Turboly's own pricelist stands when it does
+     * not — the same rule setLastServiceRow already follows.
+     */
+    if (payload.sparepartLines.length) {
+      for (const line of payload.sparepartLines) {
+        const want = line.expectedSku || line.productName;
+        const before = await page.locator('tr:has(input[name*="[product_id]"])').count();
+        await page.locator('a.btn-add-item', { hasText: /add sparepart/i }).first().click();
+        for (let i = 0; i < 25 && (await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before; i++) {
+          await page.waitForTimeout(200);
+        }
+        if ((await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before) {
+          throw new DataError(`sparepart row did not appear for "${want}"`);
+        }
+        await page.waitForTimeout(400);
+        /**
+         * Open the PRODUCT picker specifically.
+         *
+         * A sparepart row holds several select2 widgets — product, tax, other tax —
+         * and taking the last one picked a TAX instead: the row saved with "PPN" set,
+         * the product blank, and Turboly silently discarded the line while the push
+         * reported success (SRO/PMLNP/26080101). So the container is resolved from the
+         * hidden input that actually carries product_id, and stamped with an id so the
+         * click cannot land anywhere else.
+         */
+        const pickerId = (await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
+          const row = rows[rows.length - 1];
+          const hidden = row?.querySelector('input[name*="[product_id]"]') as HTMLElement | null;
+          if (!hidden) return '';
+          const container = (hidden.previousElementSibling?.classList?.contains('select2-container')
+            ? hidden.previousElementSibling
+            : hidden.nextElementSibling?.classList?.contains('select2-container')
+              ? hidden.nextElementSibling
+              : row?.querySelector('.select2-container')) as HTMLElement | null;
+          if (!container) return '';
+          if (!container.id) container.id = 'spk-part-picker';
+          return container.id;
+        })) as string;
+        if (!pickerId) throw new DataError(`sparepart product picker not found for "${want}"`);
+        await this.pickSelect2Locator(page.locator(`#${pickerId}`), want);
+        await page.waitForTimeout(600);
+        // The line only counts once Turboly holds a product id. Without this the row
+        // saves blank and vanishes — which is exactly how the first attempt "passed".
+        const chosen = (await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
+          const hidden = rows[rows.length - 1]?.querySelector('input[name*="[product_id]"]') as HTMLInputElement | null;
+          return (hidden?.value ?? '').trim();
+        })) as string;
+        if (!chosen) throw new DataError(`sparepart "${want}" was not selected — Turboly would drop the line`);
+        await this.setLastSparepartRow(page, line.qty, line.productName, line.priceIncTax);
+      }
+    }
 
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
 
@@ -448,9 +534,7 @@ export class RpaSink implements ServiceOrderSink {
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
     await page.fill('#vehicle_odometer', payload.odometer).catch(() => {});
     if (payload.vehicleColor) await page.fill('#vehicle_color', payload.vehicleColor).catch(() => {});
-    // VERIFIED 2026-08-10: the field is #vehicle_vin on /vehicles/new, and
-    // #customer_vehicles_attributes_0_vin in the new-customer modal. Written only
-    // when the SPK carries one, which today means electric vehicles only.
+    // VERIFIED 2026-08-10 on /vehicles/new: the field is #vehicle_vin.
     if (payload.vehicleVin) await page.fill('#vehicle_vin', payload.vehicleVin).catch(() => {});
     await page.fill('#vehicle_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
     await page.fill('#vehicle_next_service_date_default', '3').catch(() => {});
@@ -832,7 +916,14 @@ export class RpaSink implements ServiceOrderSink {
     );
     if (stillOpen) {
       const err = await this.readInlineError(page).catch(() => null);
-      throw new DataError(`new-customer create rejected${err ? `: ${err}` : ' (check make/model match)'}`);
+      // Turboly rarely names the offending field, and the old fallback guessed
+      // "make/model" every time — which sent people looking at a Mitsubishi Colt
+      // that was perfectly correct while the real reject was an 8-digit year. So
+      // the values actually submitted are printed instead of a guess.
+      throw new DataError(
+        `new-customer create rejected${err ? `: ${err}` : ''}`
+        + ` [merk="${payload.vehicleMake}" model="${payload.vehicleModel}" tahun="${payload.vehicleYear}" warna="${payload.vehicleColor}" nopol="${payload.vehicleRegistration}"]`,
+      );
     }
   }
 
@@ -1026,6 +1117,25 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** Set qty + description (+ quoted price when given) on the newest service row. */
+  /** The sparepart twin of setLastServiceRow — different table, different field names. */
+  private async setLastSparepartRow(page: Page, qty: number, notes: string, priceIncTax?: number | null): Promise<void> {
+    await page.evaluate(({ qty, notes, priceIncTax }) => {
+      const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
+      const row = rows[rows.length - 1];
+      if (!row) return;
+      const fire = (el: HTMLInputElement, v: string) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+      const q = row.querySelector('input[name*="[quantity]"]') as HTMLInputElement | null;
+      if (q) fire(q, String(qty || 1));
+      const n = row.querySelector('input[name*="[product_notes]"]') as HTMLInputElement | null;
+      if (n && notes) fire(n, notes);
+      // original_price is the editable one; never write a 0 over Turboly's pricelist.
+      if (priceIncTax != null && priceIncTax > 0) {
+        const price = row.querySelector('input[name*="[original_price]"]') as HTMLInputElement | null;
+        if (price) fire(price, String(priceIncTax));
+      }
+    }, { qty, notes, priceIncTax: priceIncTax ?? null });
+  }
+
   private async setLastServiceRow(page: Page, qty: number, description: string, priceIncTax?: number | null): Promise<void> {
     await page.evaluate(({ qty, description, priceIncTax }) => {
       const rows = Array.from(document.querySelectorAll('tr.additional-line-item-row'));

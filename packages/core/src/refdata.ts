@@ -79,6 +79,17 @@ export const REF_SERVICES: readonly RefService[] = [
   { code: 'BUBUT_REM', label: 'BUBUT REM', lineNo: 10, turbolySection: 'service' },
   { code: 'BAN', label: 'BAN', lineNo: 11, turbolySection: 'service' },
   { code: 'NITROGEN', label: 'NITROGEN', lineNo: 12, turbolySection: 'service' },
+  /**
+   * Rows 13+ were added to the form after this list was written, and a code missing
+   * here defaults to `service` — which is how AKS-NAW-PEKA, a PRODUCT, ended up on a
+   * service line and failed with `no Turboly match` (VERIFIED: Turboly's service
+   * catalogue has no "pentil" at all; its product catalogue has "Pentil Karet").
+   * PENTIL_KARET is goods, so it goes to the Service Order's sparepart section; the
+   * other two are genuine jasa and were only ever right by accident.
+   */
+  { code: 'PENTIL_KARET', label: 'PENTIL KARET', lineNo: 13, turbolySection: 'sparepart' },
+  { code: 'POWER_TUNE_UP', label: 'POWER TUNE-UP', lineNo: 14, turbolySection: 'service' },
+  { code: 'OIL_FILTER', label: 'OIL FILTER', lineNo: 15, turbolySection: 'service' },
 ];
 
 export interface RefConditionItem {
@@ -91,7 +102,7 @@ export interface RefConditionItem {
 
 /** The 8 PENGECEKAN AWAL KENDARAAN rows. */
 export const REF_CONDITION_ITEMS: readonly RefConditionItem[] = [
-  { code: 'PANEL_DASHBOARD', rowNo: 1, label: 'Panel Dashboard', marks: ['PANEL_MATI'] },
+  { code: 'PANEL_DASHBOARD', rowNo: 1, label: 'Panel Dashboard', marks: ['SENSOR_NYALA', 'PANEL_MATI'] },
   { code: 'BODY_KENDARAAN', rowNo: 2, label: 'Body Kendaraan', marks: ['BARET', 'PENYOK'] },
   { code: 'KACA_DAN_SPION', rowNo: 3, label: 'Kaca dan Spion', marks: ['BARET', 'PECAH'] },
   { code: 'VELG', rowNo: 4, label: 'Velg', marks: ['BARET', 'PENYOK'] },

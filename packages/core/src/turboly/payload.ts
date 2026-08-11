@@ -1,6 +1,6 @@
 import type { SpkDoc, TbStore, TbServiceProduct, TbMechanic } from '../types.js';
 import type { TurbolyServiceOrderPayload } from './sink.js';
-import { REF_SERVICES } from '../refdata.js';
+import { REF_SERVICES, REF_CONDITION_ITEMS } from '../refdata.js';
 
 export interface ResolveInput {
   doc: SpkDoc;
@@ -122,7 +122,14 @@ function buildNotes(doc: SpkDoc): string {
   if (doc.complaint.keluhan) parts.push(`Keluhan: ${doc.complaint.keluhan}`);
   const custom = doc.jobLines.filter((l) => l.ordered && !l.turbolySku).map((l) => l.serviceCode);
   if (custom.length) parts.push(`Pekerjaan lain: ${custom.join(', ')}`);
-  const issues = doc.conditionChecks.filter((c) => c.status === 'ISSUE').map((c) => `${c.item}(${c.marks.join('/')})`);
+  // Turboly is read by PEOPLE: a service advisor opening this order sees the notes,
+  // not our codes. "BODY_KENDARAAN(Baret/Penyok)" was the row identifier leaking
+  // through; the printed sheet has always said "Body Kendaraan", and so should this.
+  // An unknown code still prints itself rather than vanishing.
+  const conditionLabel = (code: string) => REF_CONDITION_ITEMS.find((r) => r.code === code)?.label ?? code;
+  const issues = doc.conditionChecks
+    .filter((c) => c.status === 'ISSUE')
+    .map((c) => `${conditionLabel(c.item)} (${c.marks.join(', ')})`);
   if (issues.length) parts.push(`Kondisi: ${issues.join('; ')}`);
   if (doc.rekomendasiService?.text) parts.push(`Rekomendasi: ${doc.rekomendasiService.text}`);
   if (doc.vehicle.tahun) parts.push(`Tahun: ${doc.vehicle.tahun}`);
