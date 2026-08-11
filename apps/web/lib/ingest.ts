@@ -1,6 +1,6 @@
 import {
   buildSpkDoc, loadMirror, resolveSkus, validateLayer1,
-  transition, emit, collections, vehicleRef,
+  transition, emit, collections, vehicleRef, REF_SERVICES, DataError,
   type SpkIntakeInputT, type Finding, type SpkDoc, type VehicleDoc,
 } from '@spk/core';
 import { db } from './db';
@@ -39,6 +39,27 @@ export async function ingestSpk(input: SpkIntakeInputT): Promise<IngestResult> {
       blocked: false,
       duplicate: true,
     };
+  }
+
+  /**
+   * An SPK of nothing but spareparts can never become a Turboly order — Turboly
+   * refuses one whose Services tab is empty ("Service Items can't be blank").
+   * The form blocks it, but the form is not the only caller: an old tab, a
+   * queued offline submission and /sheet all reach here too, and a document
+   * accepted now is one that fails in a queue an hour later.
+   *
+   * Refused at the door instead, with words the counter can act on. A free-typed
+   * row counts as work — it is the operator's own description, and we cannot
+   * know it is a part.
+   */
+  const ordered = (input.jobLines ?? []).filter((j) => j.ordered !== false);
+  const partSection = (code: string) =>
+    REF_SERVICES.find((s) => s.code === code)?.turbolySection === 'sparepart';
+  if (ordered.length > 0 && ordered.every((j) => partSection(j.serviceCode))) {
+    throw new DataError(
+      'SPK ini hanya berisi sparepart. Tambahkan minimal satu pekerjaan (jasa) — ' +
+        'Turboly menolak order tanpa item jasa.',
+    );
   }
 
   let doc = buildSpkDoc(input);

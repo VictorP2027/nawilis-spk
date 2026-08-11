@@ -401,9 +401,23 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
     && Number(tahun) <= new Date().getFullYear() + 1;
   const tipeOk = tipe.trim() !== '';
   const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
+  /**
+   * An SPK of nothing but spareparts cannot become a Turboly order: Turboly
+   * refuses one whose Services tab is empty ("Service Items can't be blank"),
+   * which is how S1234SUP failed on 2026-08-11 with only Pentil Karet on it.
+   * Caught here, at the counter, in front of the person who can add the work —
+   * not an hour later in a queue nobody is watching.
+   *
+   * A free-typed row counts as work: it is the operator's own words and we
+   * cannot know it is a part.
+   */
+  const partCodes = new Set(SERVICES.filter((s) => s.sparepart).map((s) => s.code));
+  const orderedCodes = Object.values(jobs).map((j) => j.code);
+  const freeText = [extra1, extra2].some((t) => t.trim().length > 0);
+  const partsOnly = jobsOk && !freeText && orderedCodes.every((c) => partCodes.has(c));
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
   const fuelOk = fuelMode === 'fuel' ? fuelPct !== null : /^\d{1,3}$/.test(evPct.trim()) && Number(evPct) <= 100;
-  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && fuelOk && vinOk && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && !partsOnly && fuelOk && vinOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -603,6 +617,12 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
         <div className="card">
           <div className="label">Pekerjaan</div>
           {!jobsOk && <div className="req-note">⚠ pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item</div>}
+          {partsOnly && (
+            <div className="req-note">
+              ⚠ SPK ini hanya berisi sparepart. Tambahkan minimal satu pekerjaan (jasa) —
+              Turboly menolak order tanpa item jasa.
+            </div>
+          )}
           <div className="tiles">
             {SERVICES.map((s) => {
               const on = !!jobs[s.code];

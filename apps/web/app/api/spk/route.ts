@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { NextResponse, after } from 'next/server';
-import { SpkIntakeInput, collections, assignMechanic } from '@spk/core';
+import {
+  SpkIntakeInput, collections, assignMechanic, DataError,
+} from '@spk/core';
 import { db } from '../../../lib/db';
 import { ingestSpk } from '../../../lib/ingest';
 import { triggerTurbolyPush } from '../../../lib/triggerPush';
@@ -52,6 +54,13 @@ export async function POST(req: Request): Promise<Response> {
     }
     return NextResponse.json(result, { status: result.duplicate ? 200 : 201 });
   } catch (e) {
+    // A DataError here is the intake being REFUSED, not the server falling over
+    // — e.g. an SPK carrying only spareparts, which Turboly can never accept.
+    // 400 with the reason, so the tablet shows the counter what to change
+    // instead of "ingest_failed".
+    if (e instanceof DataError) {
+      return NextResponse.json({ error: 'rejected', message: e.message }, { status: 400 });
+    }
     console.error('ingest error', e);
     return NextResponse.json({ error: 'ingest_failed', message: (e as Error).message }, { status: 500 });
   }

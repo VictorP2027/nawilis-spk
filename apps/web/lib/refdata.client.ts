@@ -23,6 +23,13 @@ export const SERVICES: ReadonlyArray<{
    * lands in keterangan — the product rides the note, the jasa stays the SKU.
    */
   catalog?: readonly string[];
+  /**
+   * This line is a PART, not work: it goes on Turboly's sparepart tab. Turboly
+   * refuses an order whose Services tab is empty, so an SPK made only of these
+   * cannot be pushed — see the guard in app/page.tsx and lib/ingest.ts. Mirrors
+   * turbolySection === 'sparepart' in packages/core/src/refdata.ts.
+   */
+  sparepart?: boolean;
 }> = [
   { code: 'SPOORING', label: 'Spooring', unit: 'check' },
   { code: 'BALANCING', label: 'Balancing', unit: 'pcs' },
@@ -41,7 +48,10 @@ export const SERVICES: ReadonlyArray<{
   // service_options row, so the dropdown pick IS the pushed SKU. OIL_FILTER
   // pushes a jasa line (JAS-NAW-JGOF default) and the OFL catalog fills the
   // keterangan with the exact filter, same shape as OLI.
-  { code: 'PENTIL_KARET', label: 'Pentil Karet', unit: 'pcs' },
+  // sparepart: true — this line goes on Turboly's SPAREPART tab, not Services.
+  // An order made of nothing but these is refused by Turboly ("Service Items
+  // can't be blank"), so the form has to know before it lets one through.
+  { code: 'PENTIL_KARET', label: 'Pentil Karet', unit: 'pcs', sparepart: true },
   { code: 'POWER_TUNE_UP', label: 'Power Tune-Up', unit: 'check' },
   { code: 'OIL_FILTER', label: 'Oil Filter', unit: 'check', brandType: true, tag: 'OFL', catalog: ['OFL'] },
 ];
