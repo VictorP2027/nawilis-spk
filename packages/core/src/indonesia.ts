@@ -72,10 +72,11 @@ interface Candidate {
  * Parse + position-aware correct a plate. Corrections are RECORDED, never hidden:
  * a non-empty `correctionsApplied` caps the review tier at CONFIRM.
  *
- * The hard case is a leading digit misread as a letter (0→O) getting absorbed
- * into the area block ("BO123SZA" for "B 0123 SZA"). We evaluate candidate
- * splits (area length 1 or 2 × number length 1–4) and pick the best-scoring one,
- * strongly preferring a KNOWN area code and fewer corrections.
+ * We evaluate every candidate split (area length 1 or 2 × number length 1–4)
+ * and pick the best-scoring one. What is typed wins: a split that reads
+ * cleanly always outranks one that rewrites a character, so "BO123SZA" is
+ * BO 123 SZA — not B 0123 SZA with an invented 0. Correcting a glyph is the
+ * last resort, for input no split reads cleanly.
  */
 export function parsePlate(raw: string): PlateParse {
   const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -85,7 +86,17 @@ export function parsePlate(raw: string): PlateParse {
     if (cleaned.length < areaLen + 1) continue;
     const rawArea = cleaned.slice(0, areaLen);
     const rest = cleaned.slice(areaLen);
-    // Largest valid number length wins for a given area length.
+    /**
+     * EVERY number length is a candidate — the score decides, not the order.
+     *
+     * This used to stop at the first (longest) block it could force into
+     * digits, which meant a letter next to the number was eaten whenever the
+     * OCR table had a digit for it. "QQ 999 QWQ" came back as "Q 0999 QWQ"
+     * (Q->0) and "AA 188 BBB" as "AA 1888 BB" (B->8): a correction-free split
+     * existed in both cases, scored higher, and was never generated to be
+     * compared. Enumerating them costs at most four extra candidates per area
+     * length, and the existing scoring already prefers fewer corrections.
+     */
     for (let k = Math.min(4, rest.length); k >= 1; k--) {
       const rawNum = rest.slice(0, k);
       const rawSuf = rest.slice(k);
@@ -98,10 +109,22 @@ export function parsePlate(raw: string): PlateParse {
       const suffix = rawSuf.length ? toLetters(rawSuf, corr, 'suf') : '';
       if (suffix === null) continue;
       const known = PLATE_AREA_CODES.has(area);
-      // Prefer known area (+3), fewer corrections, and a longer number block.
-      const score = (known ? 3 : 0) - corr.length + k * 0.1;
+      /**
+       * A reading that changes nothing ALWAYS beats one that changes a
+       * character. The -100 is not a weight to be traded against; it puts
+       * every corrected split below every clean one, whatever else they score.
+       *
+       * These plates are TYPED, not photographed. "BO123SZA" is someone typing
+       * BO 123 SZA, so that is what it must be — the old scoring bought the
+       * known area code "B" for the price of an O->0 and returned B 0123 SZA,
+       * inventing a digit nobody entered. Correction stays for the case it is
+       * genuinely needed: when NO split of the input reads cleanly.
+       *
+       * Below that line: prefer a known area (+3), then a longer number block
+       * (+0.1 each, tie-break only).
+       */
+      const score = -100 * corr.length + (known ? 3 : 0) + k * 0.1;
       candidates.push({ area, number, suffix, corrections: corr, score });
-      break;
     }
   }
 
