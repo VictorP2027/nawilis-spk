@@ -86,7 +86,7 @@ export class PushWorker {
     }
 
     // Build the fully-resolved payload from the mirror.
-    const mirror = await loadMirror(doc.branchCode);
+    const mirror = await loadMirror(doc.branchCode, { withProductSkus: true });
     if (!mirror.store) {
       await this.toManual(claimed, 'store not in mirror at push time');
       return;
@@ -104,7 +104,7 @@ export class PushWorker {
     const payload = buildTurbolyPayload({
       doc: claimed,
       store: mirror.store,
-      serviceProducts: mirror.serviceProducts,
+      serviceProducts: mirror.serviceProducts, productSkus: mirror.productSkus,
       serviceAdvisor: advisor,
       salesperson,
       planServiceDate: plan.date,
@@ -146,6 +146,35 @@ export class PushWorker {
     await collections.turbolyDocs().deleteOne({ _id: orderClaimId, committedAt: null }).catch(() => {});
 
     const commonSet = { push: { ...doc.push, failureClass: cls, lastError: error } };
+
+    /**
+     * A session kicked by ANOTHER login costs this document nothing.
+     *
+     * Turboly allows one session per account, so any other holder logging in ends
+     * ours mid-write — and the document that happened to be in flight took the
+     * blame. It burned an attempt each time, and after maxAttempts a perfectly
+     * good SPK landed in manual_intervention waiting for someone to press "Coba
+     * lagi", for a fault that was never about the document and always clears by
+     * itself. So the attempt is handed back and it retries on the normal requeue
+     * sweep, exactly as an auth failure already does.
+     *
+     * Safe against a retry loop: this only rolls back a failure that names a kick,
+     * every other transient still spends its budget and still reaches the DLQ, and
+     * the requeue sweep is the only thing that resurrects it — so it retries on the
+     * queue's own clock, not in a tight loop.
+     */
+    if (cls === 'transient' && /ter-kick|kicked/i.test(error)) {
+      await transition(doc._id, 'pushing', 'failed', {
+        push: {
+          ...doc.push,
+          attempt: Math.max(0, doc.push.attempt - 1),
+          failureClass: cls,
+          lastError: error,
+          nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      });
+      return;
+    }
 
     switch (cls) {
       case 'auth': {

@@ -195,6 +195,23 @@ export class TurbolySession {
   private verifiedMarker: string | null = null;
   /** Last cookie header written to the shared doc — so re-persisting is a no-op. */
   private publishedCookie: string | null = null;
+  /**
+   * What the LAST verification saw. The auth error used to name "2FA/OTP or wrong
+   * credentials" for every way a session can fail to verify — including the common
+   * one, a session kicked by another login, which looks nothing like bad
+   * credentials and is fixed by neither. Recording the probe status and the URL the
+   * protected page landed on turns that guess into a fact, and costs two strings.
+   */
+  private lastProbeSaw = '';
+  private lastPageSaw = '';
+  /**
+   * Status of the last auth probe. VERIFIED 2026-08-10 against the live sandbox by
+   * driving one account past the limit: Turboly's per-account throttle answers the
+   * JSON lookups with **HTTP 503 and a text/html "Too many requests" page** — not a
+   * 429, and not JSON. That status is invisible on the page by the time the caller
+   * looks, so it is remembered here.
+   */
+  private lastProbeStatus: number | null = null;
   /** undefined = not resolved yet; null = unknown (no creds anywhere). */
   private usernameCache: string | null | undefined;
 
@@ -292,6 +309,16 @@ export class TurbolySession {
 
   /** Turboly's per-account throttle serves a full "Too many requests" PAGE. */
   private async throwIfRateLimited(): Promise<void> {
+    // The throttle arrives two ways and only one of them can be read off the page.
+    // On the JSON probe it is 503 + text/html (VERIFIED live), and the page has
+    // usually navigated on by the time we get here — so the remembered status is
+    // checked FIRST, before falling back to what is on screen. 429 is included
+    // because it is what a throttle conventionally is, should Turboly ever switch.
+    if (this.lastProbeStatus === 503 || this.lastProbeStatus === 429) {
+      throw new TenantOutageError(
+        `Turboly membatasi akun ini (HTTP ${this.lastProbeStatus} pada probe auth, halaman "Too many requests") — dicoba lagi otomatis nanti.`,
+      );
+    }
     const page = this.page_();
     const title = await page.title().catch(() => '');
     const body = (await page.evaluate(() => document.body?.innerText?.slice(0, 300) ?? '').catch(() => '')) as string;
@@ -303,6 +330,7 @@ export class TurbolySession {
   /** true/false when the answer is unambiguous, null when it isn't. */
   private async probeAuth(): Promise<boolean | null> {
     const ctx = this.context;
+    this.lastProbeStatus = null;
     if (!ctx) return null;
     try {
       // context.request shares this context's cookie jar in BOTH directions, so
@@ -313,13 +341,21 @@ export class TurbolySession {
         timeout: 15_000,
       });
       const status = res.status();
+      this.lastProbeStatus = status;
+      this.lastProbeSaw = `HTTP ${status}${res.headers()['location'] ? ` → ${res.headers()['location']}` : ''} (${res.headers()['content-type']?.split(';')[0] ?? 'no content-type'})`;
       // An authenticated JSON call never redirects. Kicked sessions bounce to
       // /users/sign_in — or, on this tenant, to /dashboard (see loggedInByPage).
       if (status >= 300 && status < 400) return false;
       if (status === 401 || status === 403) return false;
       if (status === 200 && /json/i.test(res.headers()['content-type'] ?? '')) return true;
+      // 503 (the throttle) and 429 land here and used to read as "inconclusive",
+      // which is how a THROTTLE came to be reported as bad credentials: null sends
+      // verifyLoggedIn() on to loggedInByPage(), that navigates away, and
+      // throwIfRateLimited() then reads a page which no longer carries it. The
+      // status is remembered instead, and judged before anything navigates.
       return null;
-    } catch {
+    } catch (e) {
+      this.lastProbeSaw = `request failed (${(e as Error).message.slice(0, 60)})`;
       return null;
     }
   }
@@ -332,12 +368,16 @@ export class TurbolySession {
     await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {});
     await page.waitForTimeout(900);
     const url = page.url();
-    if (/sign_in|sign-in|\/login|\/signin/i.test(url)) return false;
+    this.lastPageSaw = `${target} → ${url}`;
+    if (/sign_in|sign-in|\/login|\/signin/i.test(url)) { this.lastPageSaw += ' (bounced to the login page)'; return false; }
     // A KICKED session doesn't bounce to /users/sign_in — Turboly redirects
     // protected pages to /dashboard and overlays a login modal. Treating that
     // as "logged in" made ensureLoggedIn() a no-op, so every later navigation
     // silently landed on the dashboard (found live: create_wo 3× redirect).
-    if (/\/dashboard\b/i.test(url) && !/dashboard/i.test(target)) return false;
+    if (/\/dashboard\b/i.test(url) && !/dashboard/i.test(target)) {
+      this.lastPageSaw += ' (bounced to /dashboard — the signature of a session kicked by another login)';
+      return false;
+    }
     const body = (await page.evaluate(() => document.body?.innerText?.slice(0, 400) ?? '').catch(() => '')) as string;
     if (/you have been logged out|please login again|sign in or sign up/i.test(body)) return false;
     return true;
@@ -453,7 +493,13 @@ export class TurbolySession {
       }
       if (!(await this.verifyLoggedIn())) {
         await this.throwIfRateLimited();
-        throw new AuthChallengeError(`Login did not complete for ${this.cfg.branchCode} (2FA/OTP or wrong credentials). Run \`npm run login:turboly\`.`);
+        throw new AuthChallengeError(
+          `Login did not complete for ${this.cfg.branchCode}. `
+          + `Auth probe: ${this.lastProbeSaw || 'not run'}. Protected page: ${this.lastPageSaw || 'not run'}. `
+          + `A "/dashboard" bounce or a 401 here means the session was kicked by another login on this account — `
+          + `re-runs recover on their own. Only a login page that re-appears after correct credentials is 2FA or a bad `
+          + `password, and that is what \`npm run login:turboly\` fixes.`,
+        );
       }
     }
     // This login just kicked every other holder of the account — publish before

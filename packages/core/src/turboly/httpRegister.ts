@@ -449,15 +449,32 @@ function cookiesFrom(res: Response): string {
  * session per user means the worker and the web app must share a cookie instead
  * of logging in against each other and kicking whoever is mid-form.
  */
-async function cachedCookie(): Promise<string | null> {
-  const doc = await getDb().collection(SESSION_COLLECTION).findOne({ _id: 'cookie' } as never);
-  return (doc as { cookie?: string } | null)?.cookie ?? null;
+/**
+ * The shared HTTP cookie, but ONLY when it belongs to the account we are about to
+ * act as.
+ *
+ * `turboly_http_session` is a single `_id: 'cookie'` row shared by every worker,
+ * and the moment a SECOND Turboly account is in play (worker 2) an unguarded read
+ * hands one worker the other's session. The step then fails as "kicked", this
+ * layer re-logs in to recover — and THAT login is what kills the caller's own
+ * browser session, ~20 s after it started. session.ts guards its own adopter for
+ * exactly this reason ("ONLY a cookie we know is ours"); this one did not.
+ *
+ * A row with no username is from before the field existed: unknowable, so unused.
+ */
+async function cachedCookie(username?: string): Promise<string | null> {
+  const doc = (await getDb().collection(SESSION_COLLECTION).findOne({ _id: 'cookie' } as never)) as
+    | { cookie?: string; username?: string }
+    | null;
+  if (!doc?.cookie || !username || doc.username !== username) return null;
+  return doc.cookie;
 }
 
-async function saveCookie(cookie: string): Promise<void> {
+/** Stamped with the account, so no other worker can mistake it for its own. */
+async function saveCookie(cookie: string, username?: string): Promise<void> {
   await getDb().collection(SESSION_COLLECTION).updateOne(
     { _id: 'cookie' } as never,
-    { $set: { cookie, at: new Date().toISOString() } },
+    { $set: { cookie, username: username ?? null, at: new Date().toISOString() } },
     { upsert: true },
   );
 }
@@ -485,7 +502,7 @@ async function login(cfg: HttpRegisterConfig): Promise<string> {
   });
   const cookie = cookiesFrom(res) || pre;
   if (res.status === 302 && cookie) {
-    await saveCookie(cookie);
+    await saveCookie(cookie, cfg.username);
     return cookie;
   }
   if (res.status >= 500) {
@@ -684,7 +701,7 @@ async function registerViaForm(
   what: string,
   apply: (form: CustomerForm) => void,
 ): Promise<HttpRegisterResult> {
-  let cookie = (await cachedCookie()) ?? (await login(cfg));
+  let cookie = (await cachedCookie(cfg.username)) ?? (await login(cfg));
   for (let attempt = 1; attempt <= 2; attempt++) {
     const page = await fetchForm(cfg, formPath, cookie, what);
     if (page === KICKED) {
@@ -707,7 +724,7 @@ async function registerViaForm(
     apply(form);
     // The POST must ride the session the GET handed back, not the one we sent in.
     cookie = page.cookie;
-    await saveCookie(cookie).catch(() => {});
+    await saveCookie(cookie, cfg.username).catch(() => {});
     const out = await postCustomer(cfg, cookie, form, page.url, what);
     if (out === KICKED) {
       if (attempt === 2) break;

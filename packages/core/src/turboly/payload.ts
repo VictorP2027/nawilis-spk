@@ -6,6 +6,8 @@ export interface ResolveInput {
   doc: SpkDoc;
   store: TbStore;
   serviceProducts: Map<string, TbServiceProduct>; // sku -> product
+  /** Every SKU Turboly sells as goods; a line whose SKU is here is a sparepart. */
+  productSkus?: ReadonlySet<string>;
   serviceAdvisor: TbMechanic;
   salesperson: TbMechanic;
   /** Plan service date/time; default to arrival day/now if not scheduled. */
@@ -46,10 +48,26 @@ export function planFromNowWib(bufferMinutes = 30): { date: string; time: string
  */
 export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPayload {
   const { doc, store, serviceProducts } = input;
+  const productSkus = input.productSkus ?? new Set<string>();
+  /**
+   * A hand-typed row can still name a real SKU.
+   *
+   * Rows 13-14 of the sheet are free text, and the catalogue box fills them as
+   * "AKS-NAW-PEKA Pentil Karet". Those arrive with chosenSku null, so the builder
+   * skipped them and buildNotes filed them under "Pekerjaan lain" — the part was
+   * written on the order in prose and billed to nobody. A leading SKU token is
+   * lifted back out here so the line becomes a real line.
+   */
+  const leadingSku = (text: string): string => {
+    const first = String(text ?? '').trim().split(/\s+/)[0] ?? '';
+    return /^[A-Z]{3}-[A-Z0-9]+-[A-Z0-9]+$/i.test(first) ? first.toUpperCase() : '';
+  };
   const planDate = input.planServiceDate ?? formatDateWib(doc.capture.arrivalTime);
   const planTime = input.planServiceTime ?? formatTimeWib(doc.capture.arrivalTime);
 
-  const ordered = doc.jobLines.filter((l) => l.ordered && l.turbolySku);
+  const ordered = doc.jobLines
+    .map((l) => (l.ordered && !l.turbolySku && leadingSku(l.serviceCode) ? { ...l, turbolySku: leadingSku(l.serviceCode) } : l))
+    .filter((l) => l.ordered && l.turbolySku);
 
   const serviceLines: TurbolyServiceOrderPayload['serviceLines'] = [];
   const sparepartLines: TurbolyServiceOrderPayload['sparepartLines'] = [];
@@ -58,7 +76,11 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     const sku = line.turbolySku!;
     const product = serviceProducts.get(sku);
     const serviceName = product?.name ?? sku;
-    const section = REF_SERVICES.find((s) => s.code === line.serviceCode)?.turbolySection ?? 'service';
+    // Goods go to the sparepart section whatever row they were typed into; the
+    // catalogue is the authority, not the row or the SKU's prefix.
+    const section = productSkus.has(sku)
+      ? 'sparepart'
+      : REF_SERVICES.find((s) => s.code === line.serviceCode)?.turbolySection ?? 'service';
     if (section === 'sparepart') {
       sparepartLines.push({ productName: serviceName, qty: line.qty, priceIncTax: line.quotedPrice, expectedSku: sku });
     } else {
@@ -117,10 +139,18 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
  * The notes-field absorbs every SPK field that has no home in Turboly, in a
  * fixed priority order. Keep it deterministic so read-back can reason about it.
  */
+/** Same token test as the builder — a row that became a line is not "lain" too. */
+function leadingSkuOf(text: string): string {
+  const first = String(text ?? '').trim().split(/\s+/)[0] ?? '';
+  return /^[A-Z]{3}-[A-Z0-9]+-[A-Z0-9]+$/i.test(first) ? first.toUpperCase() : '';
+}
+
 function buildNotes(doc: SpkDoc): string {
   const parts: string[] = [];
   if (doc.complaint.keluhan) parts.push(`Keluhan: ${doc.complaint.keluhan}`);
-  const custom = doc.jobLines.filter((l) => l.ordered && !l.turbolySku).map((l) => l.serviceCode);
+  const custom = doc.jobLines
+    .filter((l) => l.ordered && !l.turbolySku && !leadingSkuOf(l.serviceCode))
+    .map((l) => l.serviceCode);
   if (custom.length) parts.push(`Pekerjaan lain: ${custom.join(', ')}`);
   // Turboly is read by PEOPLE: a service advisor opening this order sees the notes,
   // not our codes. "BODY_KENDARAAN(Baret/Penyok)" was the row identifier leaking

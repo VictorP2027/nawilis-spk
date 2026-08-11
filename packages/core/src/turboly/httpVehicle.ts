@@ -324,15 +324,32 @@ function cookiesFrom(res: Response): string {
  * into: one session per user means every process must share one cookie instead
  * of logging in against each other and kicking whoever is mid-form.
  */
-async function cachedCookie(): Promise<string | null> {
-  const doc = await getDb().collection(SESSION_COLLECTION).findOne({ _id: 'cookie' } as never);
-  return (doc as { cookie?: string } | null)?.cookie ?? null;
+/**
+ * The shared HTTP cookie, but ONLY when it belongs to the account we are about to
+ * act as.
+ *
+ * `turboly_http_session` is a single `_id: 'cookie'` row shared by every worker,
+ * and the moment a SECOND Turboly account is in play (worker 2) an unguarded read
+ * hands one worker the other's session. The step then fails as "kicked", this
+ * layer re-logs in to recover — and THAT login is what kills the caller's own
+ * browser session, ~20 s after it started. session.ts guards its own adopter for
+ * exactly this reason ("ONLY a cookie we know is ours"); this one did not.
+ *
+ * A row with no username is from before the field existed: unknowable, so unused.
+ */
+async function cachedCookie(username?: string): Promise<string | null> {
+  const doc = (await getDb().collection(SESSION_COLLECTION).findOne({ _id: 'cookie' } as never)) as
+    | { cookie?: string; username?: string }
+    | null;
+  if (!doc?.cookie || !username || doc.username !== username) return null;
+  return doc.cookie;
 }
 
-async function saveCookie(cookie: string): Promise<void> {
+/** Stamped with the account, so no other worker can mistake it for its own. */
+async function saveCookie(cookie: string, username?: string): Promise<void> {
   await getDb().collection(SESSION_COLLECTION).updateOne(
     { _id: 'cookie' } as never,
-    { $set: { cookie, at: new Date().toISOString() } },
+    { $set: { cookie, username: username ?? null, at: new Date().toISOString() } },
     { upsert: true },
   );
 }
@@ -359,7 +376,7 @@ async function login(cfg: HttpVehicleConfig): Promise<string> {
   });
   const cookie = cookiesFrom(res) || pre;
   if (res.status === 302 && cookie) {
-    await saveCookie(cookie);
+    await saveCookie(cookie, cfg.username);
     return cookie;
   }
   if (res.status >= 500) {
@@ -451,7 +468,7 @@ function kickedError(what: string): TransientError {
  * vehicle row even when the kick landed after Turboly had already written.
  */
 async function withCookie<T>(cfg: HttpVehicleConfig, what: string, step: (cookie: string) => Promise<T | Kicked>): Promise<T> {
-  let cookie = (await cachedCookie()) ?? (await login(cfg));
+  let cookie = (await cachedCookie(cfg.username)) ?? (await login(cfg));
   for (let attempt = 1; attempt <= 2; attempt++) {
     const out = await step(cookie);
     if (out !== KICKED) return out;

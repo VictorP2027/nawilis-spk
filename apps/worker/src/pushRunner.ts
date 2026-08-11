@@ -67,7 +67,7 @@ export async function pushQueued(
     if (!m) {
       // Drop a rejected load so the next doc retries instead of inheriting a
       // cached failure from one bad Atlas moment.
-      m = loadMirror(branchCode).catch((e: unknown) => {
+      m = loadMirror(branchCode, { withProductSkus: true }).catch((e: unknown) => {
         mirrors.delete(branchCode);
         throw e;
       });
@@ -191,7 +191,7 @@ export async function pushQueued(
         const salesperson =
           mirror.salespersonByName.get(norm(typedSales)) ??
           { _id: 'unmatched', mechanicCode: 'unmatched', name: typedSales, storeCode: null, role: 'salesperson', syncedAt: '' };
-        const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, serviceAdvisor: advisor, salesperson, planServiceDate: plan.date, planServiceTime: plan.time });
+        const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, productSkus: mirror.productSkus, serviceAdvisor: advisor, salesperson, planServiceDate: plan.date, planServiceTime: plan.time });
 
         // VERIFY BEFORE RECREATE. A retry means a previous attempt already ran,
         // and the one thing we cannot know is whether it died before or AFTER

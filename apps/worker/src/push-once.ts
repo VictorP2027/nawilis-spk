@@ -73,8 +73,33 @@ async function main(): Promise<void> {
 
   console.log(`push-once: ${total.candidates} candidate(s) — ${total.confirmed} confirmed, ${total.pushed - total.confirmed} pushed-unverified, ${total.failed} failed`);
 
+  /**
+   * An auth failure ends the run RED; every other outcome stays green.
+   *
+   * Transient failures are the normal weather here — a slow Turboly search, a
+   * kicked session — and they retry themselves, so failing the job on those would
+   * turn the signal into noise. An auth failure is different: it is the one class
+   * that can mean a human has to act, and until now it was invisible. The job
+   * exited 0 whatever happened, so `if: failure()` never once fired and the
+   * screenshot upload guarded by it has never run. That is why a start-of-day
+   * failure leaves no evidence to look at the next morning.
+   *
+   * Read from the documents rather than threaded up through pushRunner: the class
+   * is decided in pushWorker.handleFailure and written there, and one indexed read
+   * is cheaper than a new field on every layer in between.
+   */
+  const authFailures = await collections.spk().countDocuments({
+    state: 'failed',
+    'push.failureClass': 'auth',
+    'push.lastError': { $exists: true },
+    updatedAt: { $gte: new Date(startedAt).toISOString() },
+  });
+  if (authFailures > 0) {
+    console.error(`push-once: ${authFailures} document(s) failed on AUTH this run — re-run with debug_screenshots to capture what Turboly returned.`);
+  }
+
   await branchSinks.dispose();
   await close();
-  process.exit(0);
+  process.exit(authFailures > 0 ? 1 : 0);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

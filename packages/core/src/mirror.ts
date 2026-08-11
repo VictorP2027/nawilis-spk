@@ -1,4 +1,4 @@
-import { collections } from './mongo.js';
+import { collections, getDb } from './mongo.js';
 import type { MirrorView } from './validation.js';
 import type { SpkDoc, TbServiceProduct } from './types.js';
 
@@ -11,12 +11,24 @@ const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
  * for one branch. The mirror is refreshed by seed/turboly-import.ts from the
  * tenant export — absence here means "not known", never "does not exist".
  */
-export async function loadMirror(branchCode: string): Promise<MirrorView & { skuFor: (serviceCode: string) => string | null }> {
-  const [store, products, mechanics, skuMaps] = await Promise.all([
+export async function loadMirror(branchCode: string, opts: { withProductSkus?: boolean } = {}): Promise<MirrorView & { skuFor: (serviceCode: string) => string | null }> {
+  const [store, products, mechanics, skuMaps, productIds] = await Promise.all([
     collections.tbStores().findOne({ _id: branchCode }),
     collections.tbServiceProducts().find({ $or: [{ storeCode: branchCode }, { storeCode: null }] }).toArray(),
     collections.tbMechanics().find({ $or: [{ storeCode: branchCode }, { storeCode: null }] }).toArray(),
     collections.serviceSkuMap().find({ $or: [{ branchCode }, { branchCode: null }] }).toArray(),
+    /**
+     * Every SKU Turboly sells as GOODS, ids only (~4k strings) — and ONLY when the
+     * caller asks. The intake path runs loadMirror on every submission with an
+     * operator waiting, and it has no use for this; the pusher does.
+     *
+     * A prefix rule cannot answer this: AKS- appears in tb_products AND in
+     * service_options, and those seven "service" entries are precisely the
+     * miscategorisation that sent AKS-NAW-PEKA to a service line where Turboly
+     * has no such service. Membership in the scraped product catalogue is the
+     * only test that is actually true.
+     */
+    opts.withProductSkus ? getDb().collection('tb_products').distinct('_id') : Promise.resolve([]),
   ]);
 
   const serviceProducts = new Map<string, TbServiceProduct>();
@@ -54,6 +66,7 @@ export async function loadMirror(branchCode: string): Promise<MirrorView & { sku
     advisorByName,
     salespersonByName,
     serviceProductsStale,
+    productSkus: new Set((productIds as unknown[]).map((id) => String(id))),
     skuFor: (serviceCode: string) => skuByCode.get(serviceCode)?.sku ?? null,
   };
 }

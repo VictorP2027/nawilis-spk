@@ -146,6 +146,8 @@ export function validateLayer1(doc: SpkDoc, prior?: VehicleDoc | null): Validati
 export interface MirrorView {
   store?: TbStore | null;
   serviceProducts: Map<string, TbServiceProduct>; // keyed by sku
+  /** Every SKU Turboly sells as goods — decides service line vs sparepart line. */
+  productSkus?: ReadonlySet<string>;
   advisorByName: Map<string, TbMechanic>; // normalized name -> mechanic
   salespersonByName: Map<string, TbMechanic>;
   serviceProductsStale: boolean;
