@@ -940,6 +940,42 @@ export class RpaSink implements ServiceOrderSink {
     );
     if (stillOpen) {
       const err = await this.readInlineError(page).catch(() => null);
+
+      /**
+       * A REJECTED CREATE IS EVIDENCE THE RECORD ALREADY EXISTS.
+       *
+       * Turboly enforces a unique registration, so the commonest reason this
+       * modal refuses to close is that the customer and the plate were created
+       * moments ago — by the previous submission of the same car. We only got
+       * here because the customer search said "not found", and a customer
+       * created seconds earlier is not reliably in /lookup/customers.json yet.
+       * Observed 2026-08-11: B126JLU and S1234SUP each pushed cleanly on the
+       * first submission and then failed here on the repeats, 40 seconds later.
+       *
+       * So before reporting a data fault, look again. A second lookup after the
+       * modal is dismissed usually finds what the first one missed, and the
+       * order attaches to the record that already exists — which is what should
+       * have happened. This is a lookup that was too early, not bad data.
+       */
+      await this.dismissModals().catch(() => undefined);
+      await page.waitForTimeout(2500);
+      const nowFound = (c?.nama || c?.phone)
+        ? await this.tryPickCustomerExact(c?.nama ?? '', c?.phone ?? '').catch(() => false)
+        : false;
+      if (nowFound) {
+        await page.waitForTimeout(1200);
+        if (await this.tryPickSelect2('#s2id_select2-input-vehicle', reg)) {
+          await page.waitForTimeout(800);
+          await this.dismissModals().catch(() => undefined);
+          return; // attached to the record that already existed
+        }
+        // The person is there but this car is not yet on them — runPush already
+        // knows how to add a vehicle to an existing customer and retry.
+        throw new NeedAddVehicleError(
+          `customer "${c?.nama ?? ''}" already exists; vehicle ${reg} is not on the record yet`,
+        );
+      }
+
       // Turboly rarely names the offending field, and the old fallback guessed
       // "make/model" every time — which sent people looking at a Mitsubishi Colt
       // that was perfectly correct while the real reject was an 8-digit year. So
