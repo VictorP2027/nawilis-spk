@@ -696,6 +696,73 @@ export class RpaSink implements ServiceOrderSink {
    * (the only search term guaranteed to find it) or null when the phone is not
    * in Turboly at all. Throws nothing — a lookup hiccup returns undefined.
    */
+  /**
+   * Find a customer by phone WHATEVER SPELLING IT IS STORED IN.
+   *
+   * Turboly's select2 lookup is a prefix match on the stored string and cannot
+   * match a number beginning with "+" — measured 2026-08-11: search "08"
+   * returns 100 customers, "+62" returns none, while customer 4878546 is
+   * stored as "+6281188009568". The phone is the identity key, so that gap
+   * means a customer we just created is one we can never find again.
+   *
+   * The customers LIST does not share the flaw. q[phone_cont] filters on the
+   * digits, so ONE query on the canonical key ("81188009568") returns the
+   * record whether it is stored "0812…", "62812…" or "+62812…". Verified with
+   * a negative control: an absent number returns no rows, so an empty result
+   * is a real answer here.
+   *
+   * String-form evaluate on purpose — a named arrow inside a function-form
+   * page.evaluate is compiled to a __name(...) call that does not exist in the
+   * browser, which silently turned a whole callback into "no match" once.
+   */
+  private async findCustomerByPhoneAnyFormat(phoneKey: string): Promise<{ name: string; phone: string } | null> {
+    if (phoneKey.length < 8) return null;
+    const page = this.session.page_();
+    const rows = (await page.evaluate(
+      `(async () => {
+        var key = ${JSON.stringify(phoneKey)};
+        var res = await fetch('/customers?q%5Bphone_cont%5D=' + encodeURIComponent(key), { credentials: 'include' });
+        if (!res.ok) return null;
+        var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        var out = [];
+        var trs = Array.prototype.slice.call(doc.querySelectorAll('table tr'));
+        for (var i = 0; i < trs.length; i++) {
+          var a = trs[i].querySelector('a[href*="/customers/"]');
+          if (!a) continue;
+          // String split, not a regex: backslashes inside this template literal
+          // are escaped twice on the way to the page and quietly broke it once.
+          var href = a.getAttribute('href') || '';
+          var tail = href.split('/customers/')[1];
+          var id = tail ? parseInt(tail, 10) : NaN;
+          if (!id) continue;
+          var cells = Array.prototype.slice.call(trs[i].querySelectorAll('td'))
+            .map(function (td) { return (td.textContent || '').trim(); })
+            .filter(function (t) { return t.length > 0; });
+          // Identify the phone by CANONICAL MATCH, not by shape: the ID column
+          // is also a long number and was picked up as the phone first time.
+          var phone = '';
+          for (var j = 0; j < cells.length; j++) {
+            var d = cells[j].replace(/[^0-9]/g, '');
+            if (d.indexOf('62') === 0) d = d.slice(2);
+            if (d.indexOf('0') === 0) d = d.slice(1);
+            if (d && d === key) { phone = cells[j]; break; }
+          }
+          if (!phone) continue;   // a substring hit on some other field, not this person
+          out.push({ id: id, name: cells[1] || '', phone: phone });
+        }
+        return out;
+      })()`,
+    )) as Array<{ id: number; name: string; phone: string }> | null;
+    if (!rows) return null;
+    // The server filtered on a substring, so confirm the canonical key before
+    // trusting it — "829839838" must not adopt someone whose number merely
+    // contains those digits.
+    const mine = rows.filter((r) => canonPhoneKey(r.phone) === phoneKey).sort((a, b) => a.id - b.id);
+    const hit = mine[0];
+    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH listFilter(${phoneKey}) -> ${JSON.stringify(hit ?? null)}`);
+    return hit ? { name: hit.name, phone: hit.phone } : null;
+  }
+
   private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
     try {
       const all: Array<{ id: number; name: string; phone: string }> = [];
@@ -709,7 +776,10 @@ export class RpaSink implements ServiceOrderSink {
       const mine = all
         .filter((c) => canonPhoneKey(c.phone) === phoneKey)
         .sort((a, b) => a.id - b.id);
-      return mine[0] ?? null;
+      if (mine[0]) return mine[0];
+      // The select2 endpoint cannot see a "+62…" record at all, so its silence
+      // is not an answer about whether this person exists. Ask the list.
+      return await this.findCustomerByPhoneAnyFormat(phoneKey);
     } catch (e) {
       // "Logged out" is not "phone not in Turboly" — null here would register the
       // same person a second time.
@@ -889,7 +959,7 @@ export class RpaSink implements ServiceOrderSink {
 
     // Customer
     await page.fill('#customer_name', c?.nama || 'Customer');
-    if (c?.phone) await page.fill('#customer_phone', localPhone(c.phone)).catch(() => {});
+    if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone)).catch(() => {});
     if (c?.alamat) await page.fill('#customer_addresses_attributes_0_address', c.alamat).catch(() => {});
 
     // Vehicle

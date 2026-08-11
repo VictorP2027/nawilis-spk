@@ -739,26 +739,27 @@ async function registerViaForm(
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
- * Retail customer. The phone is stored in the LOCAL "0812…" spelling.
+ * Retail customer. The phone is written in E.164, "+62812…" — one spelling
+ * across the SPK, Mongo, WhatsApp and Turboly.
  *
- * NOT a style choice, and NOT negotiable: TURBOLY'S CUSTOMER SEARCH CANNOT
- * MATCH A PHONE THAT BEGINS WITH "+". Measured against the live tenant on
- * 2026-08-11 — search "08" returns 100 customers, "081" returns 5, "62"
- * returns one, and "+62" returns NOTHING, while a customer stored as
- * "+6281188009568" sits there findable by name alone.
+ * READ THIS BEFORE CHANGING IT EITHER WAY. Turboly's select2 lookup
+ * (/lookup/customers.json) CANNOT match a phone beginning with "+": measured
+ * 2026-08-11, "08" returns 100 customers and "+62" returns none, while a
+ * customer stored as "+6281188009568" sits in the same tenant. Writing E.164
+ * without fixing the lookup made every new customer unfindable, and the next
+ * visit created them again — B126JLU and S1234SUP both did.
  *
- * That matters because the phone is the identity key. A customer written with
- * a leading "+" cannot be found by any later lookup, so the next visit creates
- * them again — B126JLU and S1234SUP both did exactly that, hours after this
- * was briefly changed to E.164 for consistency with the SPK and WhatsApp.
- * Everything WE own displays +62; what Turboly stores is what Turboly can find.
+ * What makes E.164 safe is that identity no longer depends on that endpoint.
+ * The customers LIST filter q[phone_cont] matches on the digits alone, so one
+ * query on the canonical key finds a record stored "0812…", "62812…" or
+ * "+62812…" alike. See findCustomerByPhoneAnyFormat.
  *
  * No duplicate guard lives here — dedupe by phone BEFORE calling, the way
  * flowSink.registerRetailCustomer does.
  */
 export async function registerRetailHttp(cfg: HttpRegisterConfig, args: HttpRetailArgs): Promise<HttpRegisterResult> {
   const what = 'Customer Retail';
-  const phone = localPhone(args.phone);
+  const phone = e164Phone(args.phone);
   return registerViaForm(cfg, '/customers/new', what, (form) => {
     setField(form.body, 'customer[name]', args.nama);
     setField(form.body, 'customer[group_name]', args.nama); // Turboly wants the group mirroring the name
