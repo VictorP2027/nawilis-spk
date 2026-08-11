@@ -83,17 +83,6 @@ export default function CheckGoSheet() {
     return () => { live = false; };
   }, [branch]);
 
-  // The salesperson follows the advisor while nobody has overridden the box,
-  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
-  const salesAuto = useRef(true);
-  useEffect(() => {
-    if (!salespeople.length) return;
-    setSalesperson((prev) => {
-      if (prev && !salesAuto.current) return prev;
-      const m = salespeople.find((s) => s.name.toUpperCase() === menerima.trim().toUpperCase());
-      return m ? m.name : '';
-    });
-  }, [menerima, salespeople]);
 
   // PHONE-FIRST lookup: WA number → person + car(s); chips switch cars.
   const [custVehicles, setCustVehicles] = useState<CustVehicle[]>([]);
@@ -432,7 +421,7 @@ export default function CheckGoSheet() {
             {advisorUnknown && <div className="warn-inline">⚠ Nama tidak ada di daftar advisor cabang ini — harus sama persis dengan nama di Turboly.</div>}
             {/* Turboly requires a Salesperson too, from its own per-store list. */}
             {salespersonKnown ? (
-              <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
+              <select value={salesperson} onChange={(e) => setSalesperson(e.target.value)} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
                 <option value="">— pilih Salesperson — WAJIB</option>
                 {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
               </select>

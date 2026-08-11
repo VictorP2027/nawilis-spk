@@ -197,24 +197,14 @@ export default function Sheet() {
     return () => { live = false; };
   }, [branch]);
 
-  // The salesperson follows the advisor while nobody has overridden the box,
-  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
-  const salesAuto = useRef(true);
-  useEffect(() => {
-    if (!salespeople.length) return;
-    setSalesperson((prev) => {
-      if (prev && !salesAuto.current) return prev;
-      const m = salespeople.find((s) => s.name.toUpperCase() === menerima.trim().toUpperCase());
-      return m ? m.name : '';
-    });
-  }, [menerima, salespeople]);
 
   const [pk, setPk] = useState<Record<string, PkRow>>(() =>
     Object.fromEntries(SERVICES.map((s) => [s.code, { order: false, qty: 1, keterangan: '', mk: '', waktu: '' }])),
   );
   // Raw detail fields that map 1:1 to the Nawilis export columns.
-  const [cond, setCond] = useState<Record<string, string>>(() =>
-    Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])),
+  // A set, not one choice: a panel is often baret AND penyok. Empty = OK.
+  const [cond, setCond] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, [] as string[]])),
   );
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -239,7 +229,7 @@ export default function Sheet() {
       // verbatim in the SO's Notes ("Pekerjaan lain").
       jobLines.push({ serviceCode: t, ordered: true, qty: 1, keterangan: null, quotedPrice: null, chosenSku: null });
     }
-    const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] === 'OK' ? [] : [cond[c.code]!] }));
+    const conditionChecks = CONDITION_ITEMS.map((c) => ({ item: c.code, marks: cond[c.code] ?? [] }));
     const complaint = keluhan || null;
 
     const payload = {
@@ -558,9 +548,17 @@ export default function Sheet() {
                   <td style={{ width: 18, textAlign: 'center' }}>{i + 1}</td>
                   <td style={{ width: 130, fontWeight: 600 }}>{c.label}</td>
                   <td>
-                    <span className={`opt ${cond[c.code] === 'OK' ? 'on' : ''}`} onClick={() => setCond((s) => ({ ...s, [c.code]: 'OK' }))}>OK</span>
+                    <span className={`opt ${(cond[c.code] ?? []).length === 0 ? 'on' : ''}`} onClick={() => setCond((s) => ({ ...s, [c.code]: [] }))}>OK</span>
                     {c.marks.map((m) => (
-                      <span key={m} className={`opt ${cond[c.code] === m ? 'on' : ''}`} style={{ marginLeft: 6 }} onClick={() => setCond((s) => ({ ...s, [c.code]: m }))}>{m}</span>
+                      <span
+                        key={m}
+                        className={`opt ${(cond[c.code] ?? []).includes(m) ? 'on' : ''}`}
+                        style={{ marginLeft: 6 }}
+                        onClick={() => setCond((s) => {
+                          const cur = s[c.code] ?? [];
+                          return { ...s, [c.code]: cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m] };
+                        })}
+                      >{m}</span>
                     ))}
                   </td>
                 </tr>
@@ -591,7 +589,7 @@ export default function Sheet() {
             </datalist>
             {/* Turboly stars Salesperson too, from its own per-store roster. */}
             {salespersonKnown ? (
-              <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
+              <select value={salesperson} onChange={(e) => setSalesperson(e.target.value)} style={{ marginTop: 4, ...(salesperson.trim() ? {} : { borderColor: '#dc2626' }) }}>
                 <option value="">— pilih Salesperson — WAJIB</option>
                 {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
               </select>

@@ -48,7 +48,7 @@ export const SERVICES: ReadonlyArray<{
 
 /** 8 PENGECEKAN AWAL rows: label + the non-OK marks available on that row. */
 export const CONDITION_ITEMS: ReadonlyArray<{ code: string; label: string; marks: string[] }> = [
-  { code: 'PANEL_DASHBOARD', label: 'Panel Dashboard', marks: ['Panel Mati'] },
+  { code: 'PANEL_DASHBOARD', label: 'Panel Dashboard', marks: ['Sensor Nyala', 'Panel Mati'] },
   { code: 'BODY_KENDARAAN', label: 'Body Kendaraan', marks: ['Baret', 'Penyok'] },
   { code: 'KACA_DAN_SPION', label: 'Kaca dan Spion', marks: ['Baret', 'Pecah'] },
   { code: 'VELG', label: 'Velg', marks: ['Baret', 'Penyok'] },

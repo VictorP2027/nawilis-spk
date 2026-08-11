@@ -1,4 +1,5 @@
 import { SERVICES, CONDITION_ITEMS, BRANCHES, DAMAGE_ZONES } from './refdata.client';
+import { fuelWord } from '../app/components/FuelGauge';
 import { carDiagramSvg } from './carDiagramSvg';
 
 /**
@@ -33,7 +34,7 @@ interface AnyDoc {
   complaint?: { keluhan?: string | null };
   jobLines?: Array<{ serviceCode?: string; qty?: number; keterangan?: string | null; quotedPrice?: number | null; turbolySku?: string | null }>;
   conditionChecks?: Array<{ item?: string; marks?: string[] }>;
-  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[] };
+  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[]; ban_produksi?: string | null; ban_twi?: string | null };
   damageDiagram?: { imageRef?: string | null };
   estimasi?: { minutes?: number | null };
   turboly?: { serviceOrderNo?: string | null };
@@ -104,15 +105,22 @@ ${extras.map((l) => tr(l.serviceCode ?? '', l)).join('\n')}
 ${marked.length ? `<table><tbody>${marked.map((c) => `<tr><td>${esc(condLabel(c.item ?? ''))}</td><td>${esc((c.marks ?? []).join(', '))}</td></tr>`).join('')}</tbody></table>` : ''}`);
   }
 
+  if (!isCG && (doc.rawForm?.ban_produksi || doc.rawForm?.ban_twi)) {
+    const bits: string[] = [];
+    if (doc.rawForm?.ban_produksi) bits.push(`<p><b>Tanggal produksi (WWYY):</b> ${esc(doc.rawForm.ban_produksi)}</p>`);
+    if (doc.rawForm?.ban_twi) bits.push(`<p><b>Tread wear indicator:</b> ${esc(doc.rawForm.ban_twi)}</p>`);
+    rows.push(`<h2>Kondisi Ban</h2>${bits.join('')}`);
+  }
+
   if (!isCG && doc.rawForm?.bahan_bakar_pct != null) {
     const pct = doc.rawForm.bahan_bakar_pct;
     if (doc.rawForm.bahan_bakar_mode === 'ev') {
       rows.push(`<h2>Baterai EV</h2><p><b>Sisa baterai: ${esc(pct)}%</b></p>`);
     } else {
       rows.push(`<h2>Bahan Bakar</h2>
-<div class="fuel-scale"><span>0</span><span>25</span><span>50</span><span>75</span><span>100%</span></div>
-<div class="fuel">${[25, 50, 75, 100].map((v) => `<span${(pct ?? 0) >= v ? ' class="fill"' : ''}></span>`).join('')}</div>
-<p><b>${esc(pct)}%</b></p>`);
+<div class="fuel-scale"><span>E</span><span>&frac14;</span><span>&frac12;</span><span>&frac34;</span><span>F</span></div>
+<div class="fuel" style="position:relative"><span class="fill" style="position:absolute;left:0;top:0;bottom:0;width:${pct ?? 0}%"></span></div>
+<p><b>${esc(fuelWord(pct ?? 0))}</b></p>`);
     }
   }
 

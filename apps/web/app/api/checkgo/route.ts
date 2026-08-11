@@ -116,14 +116,18 @@ export async function POST(req: Request): Promise<Response> {
     inspectionItems.push(intakeRow('Check and Go', null, null));
   }
 
-  // The General Check is the thing being sold and is always line one. Anything
-  // the counter ticked from the Rekomendasi rides after it, deduplicated by
-  // service code — Turboly takes one line per service, and a repeated code
-  // would be a second line for the same job. A client-sent CHECKGO line is
-  // dropped: the price and SKU of the check itself are the server's to set.
-  const extraLines = orderedLines.filter(
-    (l, i, arr) => l.serviceCode !== CHECKGO_SERVICE_CODE && arr.findIndex((x) => x.serviceCode === l.serviceCode) === i,
-  );
+  // The General Check is the ONLY line. A Check & Go is a check, not work: the
+  // checker inspects everything and recommends what he finds, but the customer
+  // may take none of it, so a recommendation belongs on the inspection list and
+  // never on the order as a service line. Work is ordered on an SPK.
+  //
+  // Enforced here rather than only in the form, because the form is not the only
+  // caller: an old tab, a queued offline submission, or /checkgo/sheet can all
+  // still post jobLines, and one line per recommendation is exactly what this is
+  // meant to stop. Turboly will not take an order with no line at all — VERIFIED
+  // 2026-08-09: an empty Services tab is refused with "Service Items can't be
+  // blank" — which is why the check itself stays.
+  void orderedLines;
 
   // Reuse the proven SPK pipeline: build the intake with the General Check line
   // first; docType is corrected to CHECK_AND_GO right after the insert.
@@ -142,7 +146,6 @@ export async function POST(req: Request): Promise<Response> {
         quotedPrice: harga,
         chosenSku: CHECKGO_SKU,
       },
-      ...extraLines,
     ],
   };
 

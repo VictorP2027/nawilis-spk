@@ -63,6 +63,25 @@ export default function Intake() {
   // parties sign the printout. No pads, no on-glass images.
   // Fuel indicator (required): blocked 0–100 bar, or EV battery % as a number.
   const [fuelMode, setFuelMode] = useState<'fuel' | 'ev'>('fuel');
+  /**
+   * Nomor rangka, asked for on ELECTRIC vehicles only. A petrol car is identified
+   * by its engine number; an EV has none, so the VIN is the only thing that tells
+   * two identical cars apart. Required the moment the EV toggle is on, and simply
+   * absent otherwise — no dead field on the 99% of SPKs that are petrol.
+   */
+  const [vin, setVin] = useState('');
+  /**
+   * Tyre production week/year (WWYY) and the tread-wear reading.
+   *
+   * Both OPTIONAL and print-only: customer service writes them while filling the
+   * SPK, and they exist so the printed sheet carries them for the mechanic and the
+   * customer. Deliberately NOT mapped to Turboly — there is no field for them on a
+   * Service Order, and inventing one would put them somewhere nobody reads. Free
+   * text rather than four boxes, so a wheel-by-wheel note ("DK 2419, BK 2320") is
+   * as easy to write as a single figure.
+   */
+  const [banProduksi, setBanProduksi] = useState('');
+  const [banTwi, setBanTwi] = useState('');
   const [fuelPct, setFuelPct] = useState<number | null>(null);
   const [evPct, setEvPct] = useState('');
   // Two handwriting rows — free text or a pick from the jasa catalog.
@@ -75,10 +94,27 @@ export default function Intake() {
   // signature' ask): tap-mode and draw-mode are explicit so a scroll swipe
   // can never paint, and a stray tap in draw-mode never marks a zone.
   const [dmgInked, setDmgInked] = useState(false);
+  /**
+   * Drawing is OFF until the pencil is tapped.
+   *
+   * The ink layer sits over the whole diagram, and while it is live it must claim
+   * touches to draw — which also means it swallows a scroll that starts anywhere
+   * on the car, so the page could not be scrolled past it on a phone. Off by
+   * default, the layer takes no pointers at all (`pointerEvents: none`), the
+   * diagram scrolls like the rest of the form, and marks can only be made
+   * deliberately.
+   */
+  const [dmgDraw, setDmgDraw] = useState(false);
   const dmgInk = useRef<InkHandle>(null);
   // Pengecekan awal (paper section, required): every item answered; OK default,
   // tap to mark the exception.
-  const [condQ, setCondQ] = useState<Record<string, string>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
+  /**
+   * Findings per row, as a SET — a panel can be both baret and penyok, and it
+   * usually is. This was one string, so ticking "Penyok" silently replaced
+   * "Baret" and the second finding never reached Turboly. Empty = OK; the payload
+   * has always sent an array, so nothing downstream changes.
+   */
+  const [condQ, setCondQ] = useState<Record<string, string[]>>(() => Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, [] as string[]])));
   const [estimasi, setEstimasi] = useState('');
   const [optOpen, setOptOpen] = useState(false); // optional fields collapsed = neat form
   const [outbox, setOutbox] = useState(0);
@@ -133,17 +169,6 @@ export default function Intake() {
     return () => { live = false; };
   }, [branch]);
 
-  // The salesperson follows the advisor while nobody has overridden the box,
-  // then stops the moment a name is chosen by hand (a ref, so no effect loop).
-  const salesAuto = useRef(true);
-  useEffect(() => {
-    if (!salespeople.length) return;
-    setSalesperson((prev) => {
-      if (prev && !salesAuto.current) return prev;
-      const m = salespeople.find((s) => s.name.toUpperCase() === advisor.trim().toUpperCase());
-      return m ? m.name : '';
-    });
-  }, [advisor, salespeople]);
   const [result, setResult] = useState<{ ok: boolean; text: string; token?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -229,6 +254,9 @@ export default function Intake() {
         warna: warna || null,
         km,
         kind,
+        // Only an EV carries one; a petrol SPK sends null so nothing downstream
+        // has to guess whether an empty string meant "none" or "not asked".
+        vin: fuelMode === 'ev' ? vin.trim() || null : null,
       },
       complaint: keluhan || null,
       // Price is deliberately NOT captured at intake anymore: Turboly's own
@@ -247,8 +275,10 @@ export default function Intake() {
         service_lain: [extra1, extra2].map((t) => t.trim()).filter(Boolean).join(', '),
         bahan_bakar_mode: fuelMode,
         bahan_bakar_pct: fuelMode === 'fuel' ? fuelPct : Number(evPct),
+        ban_produksi: banProduksi.trim() || null,
+        ban_twi: banTwi.trim() || null,
       },
-      conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] === 'OK' ? [] : [condQ[c.code]!] })),
+      conditionChecks: CONDITION_ITEMS.map((c) => ({ item: c.code, marks: condQ[c.code] ?? [] })),
       estimasiMinutes: Number(estimasi),
       scheduledAt: jadwalOn && tglJadwal && jamJadwal && Date.parse(`${tglJadwal}T${jamJadwal}`) > Date.now() ? new Date(`${tglJadwal}T${jamJadwal}`).toISOString() : undefined,
       serviceAdvisorName: advisor || null,
@@ -308,7 +338,8 @@ export default function Intake() {
     setAlamat('');
     setKeluhan('');
     setJobs({});
-    setCondQ(Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, 'OK'])));
+    setCondQ(Object.fromEntries(CONDITION_ITEMS.map((c) => [c.code, [] as string[]])));
+    setBanProduksi(''); setBanTwi('');
     setEstimasi('');
     setFuelMode('fuel'); setFuelPct(null); setEvPct('');
     setExtra1(''); setExtra2('');
@@ -337,8 +368,19 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   // Salesperson is mandatory in Turboly and comes from its own per-store list;
   // an unloaded roster falls back to the advisor rather than locking the branch.
   const salespersonKnown = salespeople.length > 0;
-  const effSalesperson = salespersonKnown ? salesperson.trim() : advisor.trim();
+  // Whoever is in this box, and nobody else. The advisor used to be copied in —
+  // automatically while the box was untouched, and again as a fallback at submit —
+  // which meant an order could carry a salesperson nobody chose. The box is
+  // typeable now, so a branch with no roster can still answer it by hand and the
+  // silent substitution has nothing left to justify it.
+  const effSalesperson = salesperson.trim();
   const salespersonOk = effSalesperson !== '';
+  // Typed, not only picked — but a typo here is the failure this field was built
+  // to stop ("Pilihan sales advisor (Salesperson) 'shkhrwofh' tidak ada di
+  // Turboly"), so a name off the branch roster is flagged amber before the save
+  // rather than rejected by Turboly hours later.
+  const salespersonUnknown = salesperson.trim() !== '' && salespeople.length > 0
+    && !salespeople.some((s) => s.name.toUpperCase() === salesperson.trim().toUpperCase());
   // Alamat wajib: linked to the person (prefilled from Turboly) and required
   // so every registration carries a reachable address.
   const alamatOk = alamat.trim() !== '';
@@ -349,12 +391,19 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const merkOk = merk.trim() !== '';
   const warnaOk = warna.trim() !== '';
   const kmOk = km.trim() !== '';
-  const tahunOk = tahun.trim() !== '';
+  // A year Turboly will accept: four digits, 1950 through next year. Empty is still
+  // the only thing the operator sees flagged first, but a nonsense year is now caught
+  // at the keyboard instead of hours later in the push queue.
+  // VIN is required exactly when the vehicle is electric.
+  const vinOk = fuelMode !== 'ev' || vin.trim().length >= 5;
+  const tahunOk = /^\d{4}$/.test(tahun.trim())
+    && Number(tahun) >= 1950
+    && Number(tahun) <= new Date().getFullYear() + 1;
   const tipeOk = tipe.trim() !== '';
   const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
   const fuelOk = fuelMode === 'fuel' ? fuelPct !== null : /^\d{1,3}$/.test(evPct.trim()) && Number(evPct) <= 100;
-  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && fuelOk && !submitting;
+  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && fuelOk && vinOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -462,7 +511,18 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               <div className="label">Tahun / Warna</div>
               <div className="row">
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019 — WAJIB" style={!tahunOk ? { borderColor: '#dc2626' } : undefined} />
+                  <input
+                    value={tahun}
+                    // Digits only, four of them. "20222019" reached Turboly from this box —
+                    // two years typed into one field — and Turboly refused the vehicle, which
+                    // surfaced as "check make/model match" on a car whose make and model were
+                    // both perfect. The field cannot hold a wrong shape now.
+                    onChange={(e) => setTahun(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="2019 — WAJIB"
+                    style={!tahunOk ? { borderColor: '#dc2626' } : undefined}
+                  />
                   {!tahunOk && <div className="req-note">⚠ wajib diisi</div>}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -501,6 +561,43 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <FuelGauge mode={fuelMode} pct={fuelPct} ev={evPct} onMode={setFuelMode} onPct={setFuelPct} onEv={setEvPct} />
+          <div style={{ marginTop: 12 }}>
+            <div className="label" style={{ marginBottom: 4 }}>Kondisi ban <em style={{ fontWeight: 400 }}>(opsional)</em></div>
+            <div className="row">
+              <input
+                value={banProduksi}
+                onChange={(e) => setBanProduksi(e.target.value)}
+                placeholder="Tanggal produksi (WWYY) — mis. 2419"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <input
+                value={banTwi}
+                onChange={(e) => setBanTwi(e.target.value)}
+                placeholder="Tread wear indicator — mis. 5 mm"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+            </div>
+            <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
+              Tercetak di SPK. Boleh dikosongkan, dan boleh ditulis per ban — mis. &quot;DK 2419, BK 2320&quot;.
+            </div>
+          </div>
+          {fuelMode === 'ev' && (
+            <div style={{ marginTop: 10 }}>
+              <div className="label" style={{ marginBottom: 4 }}>Nomor Rangka / VIN — WAJIB untuk mobil listrik</div>
+              <input
+                value={vin}
+                onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 25))}
+                placeholder="mis. MHKA6GJ6JLK012345"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                style={!vinOk ? { borderColor: '#dc2626' } : undefined}
+              />
+              {!vinOk && <div className="req-note">⚠ wajib — mobil listrik tidak punya nomor mesin, rangka yang membedakannya</div>}
+            </div>
+          )}
         </div>
 
         <div className="card">
@@ -510,7 +607,27 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             {SERVICES.map((s) => {
               const on = !!jobs[s.code];
               return (
-                <button key={s.code} type="button" className={`tile ${on ? 'on' : ''}`} onClick={() => toggleJob(s.code, s.label)}>
+                // NOT a <button>: the qty box, the merk/tipe box and the SKU dropdown live inside
+                // this card, and a <button> containing a form control means the browser turns a
+                // SPACE typed in any of them into a click on the card — the job untoggled and the
+                // field unmounted mid-word, so "Castrol Edge 5W-30" and a price of "100 000" could
+                // never be typed. stopPropagation cannot fix it: the activation click is dispatched
+                // on the card itself, it does not bubble up from the input. A div with role=button
+                // has no such activation, so the card keeps its keyboard behaviour only when the
+                // card itself is focused.
+                <div
+                  key={s.code}
+                  role="button"
+                  tabIndex={0}
+                  className={`tile ${on ? 'on' : ''}`}
+                  onClick={() => toggleJob(s.code, s.label)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    toggleJob(s.code, s.label);
+                  }}
+                >
                   {s.label}
                   {/* The unit comes off the printed sheet: a tick is a tick, but
                       Balancing/Ban/Nitrogen are ordered in PCS and Oli in LITER —
@@ -583,7 +700,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       )}
                     </select>
                   ) : null}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -613,22 +730,25 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
-          {/* Turboly stars Salesperson exactly like Service Advisor, and fills
-              it from a different per-store roster — a select, because unlike the
-              advisor there is no "new salesperson" case to type. */}
+          {/* Typeable, with the branch roster offered as a datalist: the name still
+              has to match Turboly exactly, so an unknown one is warned about rather
+              than silently accepted. */}
           <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
-          {salespersonKnown ? (
-            <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={!salespersonOk ? { borderColor: '#dc2626' } : undefined}>
-              <option value="">— pilih salesperson —</option>
-              {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
-            </select>
-          ) : (
-            <div className="warn-note">⚠ {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — order memakai nama advisor.</div>
-          )}
-          {salespersonKnown && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
-            <div className="warn-note">⚠ {advisor.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
-          )}
+          <input
+            list="salesperson-list-spk"
+            value={salesperson}
+            onChange={(e) => setSalesperson(e.target.value)}
+            placeholder={salespeople.length ? 'Pilih dari daftar / ketik' : 'Nama salesperson'}
+            style={!salespersonOk ? { borderColor: '#dc2626' } : salespersonUnknown ? { borderColor: '#d97706' } : undefined}
+          />
+          <datalist id="salesperson-list-spk">{salespeople.map((s) => <option key={s.code} value={s.name} />)}</datalist>
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
+          {salespersonUnknown && <div className="warn-note">⚠ Tidak ada di daftar salesperson cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
+          {!salespeople.length && (
+            <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
+              {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — ketik namanya persis seperti di Turboly.
+            </div>
+          )}
         </div>
 
         {/* Optional fields collapsed behind one toggle — keeps the form neat. */}
@@ -649,12 +769,26 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             ink ships as a transparent PNG and prints back over this same art. */}
         <div className="card">
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span className="label" style={{ marginBottom: 0 }}>Pengecekan bodi — ✏ gambar kerusakan langsung</span>
+            <span className="label" style={{ marginBottom: 0 }}>Pengecekan bodi</span>
+            <button
+              type="button"
+              className="chk-chip"
+              aria-pressed={dmgDraw}
+              onClick={() => setDmgDraw((on) => !on)}
+              style={dmgDraw ? { background: 'var(--nawilis)', color: '#fff', borderColor: 'var(--nawilis)' } : undefined}
+            >
+              {dmgDraw ? '✏ menggambar — ketuk untuk selesai' : '✏ gambar kerusakan'}
+            </button>
             {dmgInked && <button type="button" className="chk-chip" onClick={() => { dmgInk.current?.clear(); }}>✕ Hapus gambar</button>}
           </div>
+          {dmgDraw && (
+            <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
+              Layar tidak bisa digeser di atas gambar selama mode ini menyala.
+            </div>
+          )}
           <div style={{ position: 'relative', margin: '0 auto', maxWidth: 300 }}>
             <CarDiagram />
-            <DiagramInk ref={dmgInk} active onInk={setDmgInked} />
+            <DiagramInk ref={dmgInk} active={dmgDraw} onInk={setDmgInked} />
           </div>
         </div>
 
@@ -664,9 +798,25 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             {CONDITION_ITEMS.map((c) => (
               <div key={c.code} className="chk-row">
                 <span className="chk-label">{c.label}</span>
-                {['OK', ...c.marks].map((m) => (
-                  <button key={m} type="button" className={`chk-chip ${condQ[c.code] === m ? (m === 'OK' ? 'ok' : 'bad') : ''}`} onClick={() => setCondQ((prev) => ({ ...prev, [c.code]: m }))}>{m}</button>
-                ))}
+                {['OK', ...c.marks].map((m) => {
+                  const marks = condQ[c.code] ?? [];
+                  // OK is the absence of findings, so it lights only when none are ticked
+                  // and clears the row when tapped. Every other chip toggles on its own.
+                  const on = m === 'OK' ? marks.length === 0 : marks.includes(m);
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      aria-pressed={on}
+                      className={`chk-chip ${on ? (m === 'OK' ? 'ok' : 'bad') : ''}`}
+                      onClick={() => setCondQ((prev) => {
+                        const cur = prev[c.code] ?? [];
+                        if (m === 'OK') return { ...prev, [c.code]: [] };
+                        return { ...prev, [c.code]: cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m] };
+                      })}
+                    >{m}</button>
+                  );
+                })}
               </div>
             ))}
           </div>

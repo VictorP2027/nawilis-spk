@@ -196,27 +196,6 @@ export default function CheckGoIntake() {
     return out;
   }, [secRekom, tireRekom]);
 
-  // Mirror the recommendations into the job selection, touching ONLY the ticks
-  // this effect owns: a job the operator added by hand survives un-ticking its
-  // recommendation, and one they deliberately removed is not silently restored.
-  useEffect(() => {
-    setJobs((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const code of recommended) {
-        if (next[code]) continue;
-        // A 'pcs' service on this sheet is always per wheel, and a car has
-        // four — starting at 1 would make every tyre job wrong by default.
-        const unit = SERVICES.find((s) => s.code === code)?.unit;
-        next[code] = { qty: unit === 'pcs' ? 4 : 1, auto: true };
-        changed = true;
-      }
-      for (const [code, sel] of Object.entries(next)) {
-        if (sel.auto && !recommended.has(code)) { delete next[code]; changed = true; }
-      }
-      return changed ? next : prev;
-    });
-  }, [recommended]);
   const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
   useEffect(() => {
     const m = merk.trim();
@@ -243,20 +222,6 @@ export default function CheckGoIntake() {
     return () => { live = false; };
   }, [branch]);
 
-  // The salesperson tracks the advisor for as long as nobody has overridden the
-  // box: pick an advisor who is on both rosters and the field fills itself;
-  // switch to a different advisor and it follows, instead of leaving the
-  // previous person credited. The moment someone chooses a salesperson by hand
-  // it stops following — a ref, not state, so the effect cannot loop on itself.
-  const salesAuto = useRef(true);
-  useEffect(() => {
-    if (!salespeople.length) return;
-    setSalesperson((prev) => {
-      if (prev && !salesAuto.current) return prev;
-      const m = salespeople.find((s) => s.name.toUpperCase() === advisor.trim().toUpperCase());
-      return m ? m.name : '';
-    });
-  }, [advisor, salespeople]);
 
   // PHONE-FIRST: typing the WA auto-populates the person + car(s); chips switch cars.
   const waDigits = wa.replace(/\D/g, '');
@@ -399,13 +364,17 @@ export default function CheckGoIntake() {
   const alamatOk = alamat.trim() !== '';
   const merkOk = merk.trim() !== '';
   const tipeOk = tipe.trim() !== '';
-  const tahunOk = tahun.trim() !== '';
+  // A year Turboly will accept: four digits, 1950 through next year. Empty is still
+  // the only thing the operator sees flagged first, but a nonsense year is now caught
+  // at the keyboard instead of hours later in the push queue.
+  const tahunOk = /^\d{4}$/.test(tahun.trim())
+    && Number(tahun) >= 1950
+    && Number(tahun) <= new Date().getFullYear() + 1;
   const warnaOk = warna.trim() !== '';
   const kmOk = km.trim() !== '';
   const advisorOk = advisor.trim() !== '';
 
   // Estimasi optional — blank falls back to the 30-minute default.
-  const jobCount = Object.keys(jobs).length;
   const estimasiVal = estimasi.trim() === '' ? DEFAULT_ESTIMASI : Number(estimasi.trim());
   const estimasiOk = Number.isInteger(estimasiVal) && estimasiVal > 0;
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -423,8 +392,19 @@ export default function CheckGoIntake() {
   // A roster that never loaded must not lock the branch out: with no list we
   // cannot tell who is eligible, so we send the advisor and let Turboly judge.
   const salespersonKnown = salespeople.length > 0;
-  const effSalesperson = salespersonKnown ? salesperson.trim() : advisor.trim();
+  // Whoever is in this box, and nobody else. The advisor used to be copied in —
+  // automatically while the box was untouched, and again as a fallback at submit —
+  // which meant an order could carry a salesperson nobody chose. The box is
+  // typeable now, so a branch with no roster can still answer it by hand and the
+  // silent substitution has nothing left to justify it.
+  const effSalesperson = salesperson.trim();
   const salespersonOk = effSalesperson !== '';
+  // Typed, not only picked — but a typo here is the failure this field was built
+  // to stop ("Pilihan sales advisor (Salesperson) 'shkhrwofh' tidak ada di
+  // Turboly"), so a name off the branch roster is flagged amber before the save
+  // rather than rejected by Turboly hours later.
+  const salespersonUnknown = salesperson.trim() !== '' && salespeople.length > 0
+    && !salespeople.some((s) => s.name.toUpperCase() === salesperson.trim().toUpperCase());
 
   // The report IS the product being sold: every section answered, every wheel's
   // pressure recorded. "Semua baik" makes the healthy car eight taps.
@@ -466,17 +446,13 @@ export default function CheckGoIntake() {
       // Who did the check — the paper's "Diperiksa Oleh". Name only: the Work
       // Order assignee is a Turboly id and is chosen on the flow board.
       mechanicName: inspector.trim() || null,
-      // The services the checker recommended and the counter confirmed. These
-      // join the fixed General Check line on the Turboly order; the server
-      // decides what "filled in" means, so this sends exactly what is ticked.
-      jobLines: SERVICES.filter((s) => jobs[s.code]).map((s) => ({
-        serviceCode: s.code,
-        ordered: true,
-        qty: Number(jobs[s.code]!.qty) || 1,
-        quotedPrice: null,
-        chosenSku: jobs[s.code]!.sku || svcOpts[s.code]?.defaultSku || null,
-        keterangan: jobs[s.code]!.brandType?.trim() || null,
-      })),
+      // A Check & Go orders NOTHING but the check. The checker inspects the whole
+      // car and recommends what he finds, but the customer may take none of it —
+      // "They inspect everything but maybe customers dont do all service
+      // recommended" — so a recommendation is a row on the inspection list, never
+      // a service line that reads as work agreed and to be charged. Work goes on
+      // an SPK. The server pins this too; this is the near half of the same rule.
+      jobLines: [],
       // The whole sheet goes out as CODES, blanks included: the server is the
       // one place that decides what counts as "filled", so this form and
       // /checkgo/sheet can never disagree about it.
@@ -629,7 +605,18 @@ export default function CheckGoIntake() {
               <div className="label">Tahun / Warna</div>
               <div className="row">
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <input value={tahun} onChange={(e) => setTahun(e.target.value)} inputMode="numeric" placeholder="2019 — WAJIB" style={!tahunOk ? { borderColor: '#dc2626' } : undefined} />
+                  <input
+                    value={tahun}
+                    // Digits only, four of them. "20222019" reached Turboly from this box —
+                    // two years typed into one field — and Turboly refused the vehicle, which
+                    // surfaced as "check make/model match" on a car whose make and model were
+                    // both perfect. The field cannot hold a wrong shape now.
+                    onChange={(e) => setTahun(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="2019 — WAJIB"
+                    style={!tahunOk ? { borderColor: '#dc2626' } : undefined}
+                  />
                   {!tahunOk && <div className="req-note">⚠ wajib diisi</div>}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -673,7 +660,6 @@ export default function CheckGoIntake() {
             <span className="label" style={{ marginBottom: 0 }}>Pekerjaan</span>
             <span style={{ fontWeight: 700, fontSize: 13.5 }}>
               General Check (JAS-NAWJAS-GC) · 1×
-              {jobCount > 0 && ` + ${jobCount} pekerjaan`}
             </span>
             <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 12.5, color: 'var(--muted)' }}>Estimasi</span>
@@ -922,79 +908,6 @@ export default function CheckGoIntake() {
         </div>
 
         <div className="card">
-          <div className="label">Pekerjaan yang diorder</div>
-          <div className="hint" style={{ fontSize: 12, color: 'var(--muted, #667)', marginBottom: 8 }}>
-            Otomatis tercentang dari Rekomendasi di atas — ubah kalau customer menolak atau minta tambahan.
-            General Check selalu ikut.
-          </div>
-          <div className="tiles">
-            {SERVICES.map((s) => {
-              const sel = jobs[s.code];
-              const on = !!sel;
-              const fromSheet = !!sel?.auto;
-              return (
-                <button
-                  key={s.code}
-                  type="button"
-                  className={`tile ${on ? 'on' : ''}`}
-                  // A manual tap always wins, and takes ownership: clearing
-                  // `auto` stops the Rekomendasi effect from ever reclaiming it.
-                  onClick={() =>
-                    setJobs((p) => {
-                      const next = { ...p };
-                      if (next[s.code]) delete next[s.code];
-                      else next[s.code] = { qty: s.unit === 'pcs' ? 4 : 1 };
-                      return next;
-                    })
-                  }
-                >
-                  {s.label}
-                  {fromSheet && <span style={{ display: 'block', fontSize: 10, opacity: 0.75 }}>dari rekomendasi</span>}
-                  {on && s.unit !== 'check' && (
-                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
-                      <input
-                        type="number"
-                        min={1}
-                        value={sel.qty}
-                        // '' is a legal mid-edit state: snapping straight back to 1
-                        // made the box impossible to clear-and-retype ("1 liter bug").
-                        onChange={(e) => { const v = e.target.value; setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } })); }}
-                        onBlur={() => setJobs((p) => (p[s.code]?.qty === '' ? { ...p, [s.code]: { ...p[s.code]!, qty: 1 } } : p))}
-                        style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
-                      />
-                      <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>{s.unit}</span>
-                    </span>
-                  )}
-                  {on && s.catalog?.length ? (
-                    <span onClick={(e) => e.stopPropagation()} style={{ display: 'block', marginTop: 6 }}>
-                      <ProductInput
-                        cat={s.catalog[0]!}
-                        value={sel.brandType ?? ''}
-                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v } }))}
-                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
-                        style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
-                      />
-                    </span>
-                  ) : null}
-                  {/* The variant dropdown is what separates Ganti Ban from
-                      Rotasi Ban — both recommendations tick the same card. */}
-                  {on && svcOpts[s.code]?.options?.length ? (
-                    <select
-                      value={sel.sku || svcOpts[s.code]!.defaultSku}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: e.target.value } }))}
-                      style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
-                    >
-                      {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
-                    </select>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="card">
           <div className="label">Customer</div>
           <input value={nama} onChange={(e) => setNama(e.target.value)} placeholder="Nama — WAJIB" style={!namaOk ? { borderColor: '#dc2626' } : undefined} />
           {!namaOk && <div className="req-note">⚠ wajib diisi</div>}
@@ -1018,20 +931,24 @@ export default function CheckGoIntake() {
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
 
-          {/* A select, not a datalist: a typo here is the exact failure this
-              replaces, and unlike the advisor there is no "new salesperson"
-              case — the name must already exist in Turboly. */}
+          {/* Typeable, with the branch roster offered as a datalist: the name still
+              has to match Turboly exactly, so an unknown one is warned about rather
+              than silently accepted. */}
           <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
-          {salespersonKnown ? (
-            <select value={salesperson} onChange={(e) => { salesAuto.current = false; setSalesperson(e.target.value); }} style={!salespersonOk ? { borderColor: '#dc2626' } : undefined}>
-              <option value="">— pilih salesperson —</option>
-              {salespeople.map((s) => <option key={s.code} value={s.name}>{s.name}</option>)}
-            </select>
-          ) : (
-            <div className="warn-note">⚠ {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — order memakai nama advisor.</div>
-          )}
-          {salespersonKnown && advisor.trim() !== '' && !salespeople.some((s) => s.name.toUpperCase() === advisor.trim().toUpperCase()) && (
-            <div className="warn-note">⚠ {advisor.trim()} tidak terdaftar sebagai Salesperson di cabang ini — pilih orang lain untuk kolom ini.</div>
+          <input
+            list="salesperson-list-cg"
+            value={salesperson}
+            onChange={(e) => setSalesperson(e.target.value)}
+            placeholder={salespeople.length ? 'Pilih dari daftar / ketik' : 'Nama salesperson'}
+            style={!salespersonOk ? { borderColor: '#dc2626' } : salespersonUnknown ? { borderColor: '#d97706' } : undefined}
+          />
+          <datalist id="salesperson-list-cg">{salespeople.map((s) => <option key={s.code} value={s.name} />)}</datalist>
+          {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
+          {salespersonUnknown && <div className="warn-note">⚠ Tidak ada di daftar salesperson cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
+          {!salespeople.length && (
+            <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
+              {branch ? 'Daftar salesperson cabang ini kosong' : 'Pilih cabang dulu'} — ketik namanya persis seperti di Turboly.
+            </div>
           )}
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
         </div>

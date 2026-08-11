@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { fuelWord } from '../../../components/FuelGauge';
 import { useParams } from 'next/navigation';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../../../lib/refdata.client';
 import { CarDiagram } from '../../../components/CarDiagram';
@@ -34,7 +35,7 @@ interface Doc {
     mk?: { mechanicCode?: string | null }; waktu?: { minutes?: number | null };
   }>;
   conditionChecks?: Array<{ item: string; marks: string[]; status?: string }>;
-  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[] };
+  rawForm?: { bahan_bakar_mode?: string; bahan_bakar_pct?: number | null; kerusakan_zones?: string[]; ban_produksi?: string | null; ban_twi?: string | null };
   damageDiagram?: { imageRef?: string | null };
   signatures?: {
     menyerahkan?: { present?: boolean; namaJelas?: string | null; imageDataUrl?: string | null };
@@ -185,6 +186,17 @@ export default function PrintSpk() {
               })}
             </tbody>
           </table>
+        {/* Print-only, and only when written — an empty pair prints nothing rather
+            than an empty heading on every sheet. */}
+        {(doc.rawForm?.ban_produksi || doc.rawForm?.ban_twi) && (
+          <div style={{ marginTop: 6 }}>
+            <span className="sec-h">KONDISI BAN</span>
+            <div style={{ fontSize: 12 }}>
+              {doc.rawForm?.ban_produksi ? <div><b>Tanggal produksi (WWYY):</b> {doc.rawForm.ban_produksi}</div> : null}
+              {doc.rawForm?.ban_twi ? <div><b>Tread wear indicator:</b> {doc.rawForm.ban_twi}</div> : null}
+            </div>
+          </div>
+        )}
         {doc.rawForm?.bahan_bakar_pct != null && (
           <div style={{ marginTop: 6 }}>
             <span className="sec-h">{doc.rawForm.bahan_bakar_mode === 'ev' ? 'BATERAI EV' : 'BAHAN BAKAR'}</span>
@@ -192,15 +204,17 @@ export default function PrintSpk() {
               <div style={{ fontSize: 13, fontWeight: 700 }}>Sisa baterai: {doc.rawForm.bahan_bakar_pct}%</div>
             ) : (
               <div style={{ maxWidth: 260 }}>
-                <div style={{ display: 'flex', fontSize: 9, color: '#667' }}>
-                  {[0, 25, 50, 75].map((mk) => <span key={mk} style={{ flex: 1 }}>{mk}</span>)}<span>100%</span>
+                <div style={{ display: 'flex', fontSize: 9, fontWeight: 700, color: '#667' }}>
+                  {['E', '¼', '½', '¾'].map((mk) => <span key={mk} style={{ flex: 1 }}>{mk}</span>)}<span>F</span>
                 </div>
-                <div style={{ display: 'flex', border: '1.5px solid var(--nawilis)', borderRadius: 3, overflow: 'hidden', height: 18 }}>
-                  {[25, 50, 75, 100].map((v) => (
-                    <span key={v} style={{ flex: 1, borderLeft: v > 25 ? '1px solid var(--nawilis)' : 'none', background: (doc.rawForm?.bahan_bakar_pct ?? 0) >= v ? 'var(--nawilis)' : '#fff' }} />
+                {/* One continuous fill, because the tank is not read in quarters. */}
+                <div style={{ position: 'relative', border: '1.5px solid var(--nawilis)', borderRadius: 3, overflow: 'hidden', height: 18, background: '#fff' }}>
+                  <div style={{ position: 'absolute', inset: 0, width: `${doc.rawForm.bahan_bakar_pct}%`, background: 'var(--nawilis)' }} />
+                  {[25, 50, 75].map((mk) => (
+                    <span key={mk} style={{ position: 'absolute', top: 0, bottom: 0, left: `${mk}%`, width: 1, background: 'var(--nawilis)', opacity: 0.55 }} />
                   ))}
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 700 }}>{doc.rawForm.bahan_bakar_pct}%</div>
+                <div style={{ fontSize: 11, fontWeight: 700 }}>{fuelWord(doc.rawForm.bahan_bakar_pct)}</div>
               </div>
             )}
           </div>
