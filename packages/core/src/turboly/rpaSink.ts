@@ -509,7 +509,9 @@ export class RpaSink implements ServiceOrderSink {
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
-      if (orig) q = orig.phone.trim();
+      // Same reason as tryPickCustomerExact: a stored "+62…" cannot be searched
+      // in the picker, so ask by name and let the row's digits prove identity.
+      if (orig) q = orig.phone.trim().startsWith('+') ? (orig.name.trim() || q) : orig.phone.trim();
     }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
@@ -851,13 +853,29 @@ export class RpaSink implements ServiceOrderSink {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
       if (orig === null) return false; // phone genuinely not in Turboly → create new
-      if (orig) queries.push(orig.phone.trim()); // exact stored form — prefix search will find it
-      else queries.push(e164Phone(phone), localPhone(phone)); // endpoint hiccup: both spellings
+      if (orig) {
+        /**
+         * The PICKER is the same select2 endpoint that cannot search a "+"
+         * number, so the stored form is worthless as a query when it starts
+         * with one — which is every customer created since we began writing
+         * E.164. Knowing who the customer is does not help if the only way we
+         * ask for them is the way that cannot find them.
+         *
+         * The NAME finds the row instead, and identity is still proved on the
+         * phone: the matcher below accepts a row only when its digits contain
+         * the canonical key, so a common first name cannot adopt the wrong
+         * person.
+         */
+        const stored = orig.phone.trim();
+        if (stored.startsWith('+')) queries.push(orig.name.trim(), localPhone(phone), stored);
+        else queries.push(stored, orig.name.trim());
+      } else {
+        queries.push(e164Phone(phone), localPhone(phone), nama.trim()); // endpoint hiccup
+      }
     } else if (nama) {
       queries.push(nama.trim());
     }
-    for (const q of queries) {
-      if (q.length < 3) continue; // Select2 remote search needs ≥3 chars
+    for (const q of [...new Set(queries.filter((x) => x && x.length >= 3))]) {
       if (await this.pickCustomerInSelect2(q, phoneKey, nama)) return true;
     }
     return false;
