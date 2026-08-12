@@ -253,16 +253,28 @@ export function parseWa(raw: string): WaParse {
   else if (digits.startsWith('0')) national = digits.slice(1);
   else national = digits;
   // Indonesian mobiles start with 8, total national length 9–12.
-  if (!national.startsWith('8') || national.length < 9 || national.length > 12) {
-    return { e164: null, ok: false, operatorKnown: false };
+  if (national.startsWith('8')) {
+    if (national.length < 9 || national.length > 12) {
+      return { e164: null, ok: false, operatorKnown: false };
+    }
+    // Operator code is the first 3 digits of the national number, e.g. "812".
+    const prefix = national.slice(0, 3);
+    return {
+      e164: `+62${national}`,
+      ok: true,
+      operatorKnown: OPERATOR_PREFIXES.has(prefix),
+    };
   }
-  // Operator code is the first 3 digits of the national number, e.g. "812".
-  const prefix = national.slice(0, 3);
-  return {
-    e164: `+62${national}`,
-    ok: true,
-    operatorKnown: OPERATOR_PREFIXES.has(prefix),
-  };
+  // Landline: geographic area codes start 2–7 ("021 555 1234" — an office
+  // number, the only contact a fleet/company customer may have). WhatsApp
+  // cannot reach one, but refusing it at intake was wrong: the number's job
+  // on the SPK is identity and callback, not the blast. operatorKnown is
+  // true on purpose — an area code IS a recognised prefix; that warning
+  // exists to catch mobile typos, not offices.
+  if (/^[2-7]\d{7,10}$/.test(national)) {
+    return { e164: `+62${national}`, ok: true, operatorKnown: true };
+  }
+  return { e164: null, ok: false, operatorKnown: false };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
