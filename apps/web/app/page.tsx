@@ -720,11 +720,25 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                             {svcOpts[s.code]!.options.map((o) => <option key={o.sku} value={o.sku}>{o.label}</option>)}
                           </optgroup>
                           {s.catalog.map((cat) => (
+                            // A category whose preload hit the 300 cap (BAN: 3.3k
+                            // tires) would show only the head of the alphabet here
+                            // — staff scrolled it for Hankook twice today and
+                            // concluded the tire "doesn't exist". A truncated
+                            // list misleads; a pointer to the box that searches
+                            // everything does not.
+                            (catalog[cat] ?? []).length >= 300 ? (
+                              <optgroup key={cat} label={`Katalog ${cat.replace(/_/g, ' ')}`}>
+                                <option disabled value="">
+                                  ⚠ {(cat === 'BAN' ? 'Ban' : cat)} terlalu banyak untuk daftar ini — KETIK di kotak “merk / tipe” di atas, lalu SENTUH pilihannya
+                                </option>
+                              </optgroup>
+                            ) : (
                             <optgroup key={cat} label={`Katalog ${cat.replace(/_/g, ' ')} — pilih, masuk ke merk/tipe`}>
                               {(catalog[cat] ?? []).map((n) => (
                                 <option key={`${cat}:${n}`} value={`katalog::${n}`}>{n}</option>
                               ))}
                             </optgroup>
+                            )
                           ))}
                         </>
                       ) : (
