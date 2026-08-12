@@ -147,7 +147,8 @@ for (const [file, category] of PRODUCT_FILES) {
             brand: r.Brand ?? null,
             category,
             // Search key: everything a counter person might type, one lowercase field.
-            search: `${r.SKU} ${r.Name ?? ''} ${r.Brand ?? ''}`.toLowerCase(),
+            // Category included so category words ('ban', 'busi') match too.
+            search: `${r.SKU} ${r.Name ?? ''} ${r.Brand ?? ''} ${category.replace(/_/g, ' ')}`.toLowerCase(),
             syncedAt: new Date().toISOString(),
           },
         },

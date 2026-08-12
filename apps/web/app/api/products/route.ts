@@ -19,7 +19,10 @@ export async function GET(req: Request): Promise<Response> {
   const q = (url.searchParams.get('q') ?? '').toLowerCase().trim();
   if (!cat) return NextResponse.json({ error: 'cat_required' }, { status: 400 });
 
-  const filter: Record<string, unknown> = { category: cat };
+  // ALL = the sparepart rows' search box: any product the tenant sells,
+  // whatever its category — a counter adding a wiper or an air filter must
+  // not need to know which bucket the catalogue filed it under.
+  const filter: Record<string, unknown> = cat === 'ALL' ? {} : { category: cat };
   if (q) {
     // Space-separated terms must all appear — "brid 185" finds Bridgestone 185/…
     filter.$and = q.split(/\s+/).map((t) => ({ search: { $regex: t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') } }));

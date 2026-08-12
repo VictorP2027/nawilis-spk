@@ -87,6 +87,13 @@ export default function Intake() {
   // Two handwriting rows — free text or a pick from the jasa catalog.
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
+  // Sparepart rows: search the WHOLE product catalogue, tap a pick, set qty.
+  // A TAPPED pick keeps its SKU and becomes a real sparepart line on the
+  // Turboly order (the same lift the Ban tile uses); typed-only text stays
+  // free prose and rides to the notes — never guessed into a product.
+  const [parts, setParts] = useState<Array<{ text: string; pick?: string; qty: number | '' }>>(
+    [{ text: '', qty: 1 }, { text: '', qty: 1 }],
+  );
   // Mobil / Motor: four make names are BOTH brands; this picks the model list
   // and Turboly's vehicle type for a new vehicle.
   const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
@@ -273,6 +280,12 @@ export default function Intake() {
       ...Object.values(jobs)
         .filter((j) => j.code === 'BAN' && j.catalogPick)
         .map((j) => ({ serviceCode: j.catalogPick!, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null, chosenSku: null })),
+      // The sparepart rows: a TAPPED pick carries "SKU Name" and becomes a
+      // real sparepart line with its qty; typed-only text goes as prose,
+      // exactly like a handwriting row.
+      ...parts
+        .filter((p) => p.pick || p.text.trim())
+        .map((p) => ({ serviceCode: p.pick ?? p.text.trim(), ordered: true, qty: Number(p.qty) || 1, quotedPrice: null, chosenSku: null })),
       // The handwriting rows ride as UNMAPPED job lines: the typed text IS the
       // serviceCode, so it lands verbatim in the SO's Notes ("Pekerjaan lain").
       ...[extra1, extra2].map((t) => t.trim()).filter(Boolean).map((t) => ({ serviceCode: t, ordered: true, qty: 1, quotedPrice: null, chosenSku: null }))],
@@ -349,6 +362,7 @@ export default function Intake() {
     setEstimasi('');
     setFuelMode('fuel'); setFuelPct(null); setEvPct('');
     setExtra1(''); setExtra2('');
+    setParts([{ text: '', qty: 1 }, { text: '', qty: 1 }]);
     setKind('car');
     dmgInk.current?.clear();
     // Advisor must be a deliberate choice per SPK — never carried over from the
@@ -758,6 +772,33 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <datalist id="jasa-all">
             {[...new Set(Object.values(svcOpts).flatMap((o) => o.options.map((x) => x.label)))].map((l) => <option key={l} value={l} />)}
           </datalist>
+          {/* Sparepart rows: whole-catalogue search. TAP a pick and it becomes a
+              real sparepart line on the Turboly order; there must still be at
+              least one pekerjaan above — Turboly refuses an order that is
+              nothing but parts. */}
+          <div className="label" style={{ marginTop: 10 }}>Sparepart (cari / ketik — SENTUH pilihan)</div>
+          {parts.map((p, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: i ? 4 : 0 }}>
+              <span style={{ flex: 1 }}>
+                <ProductInput
+                  cat="ALL"
+                  value={p.text}
+                  onChange={(v) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: v, pick: undefined } : x)))}
+                  onPick={(pr) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: pr.name, pick: `${pr.sku} ${pr.name}` } : x)))}
+                  placeholder={`Sparepart ${i + 1} — contoh: filter udara, ban, aki…`}
+                />
+              </span>
+              <input
+                type="number"
+                min={1}
+                value={p.qty}
+                onChange={(e) => { const v = e.target.value; setParts((prev) => prev.map((x, j) => (j === i ? { ...x, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } : x))); }}
+                onBlur={() => setParts((prev) => prev.map((x, j) => (j === i && x.qty === '' ? { ...x, qty: 1 } : x)))}
+                style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
+              />
+              <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>pcs</span>
+            </div>
+          ))}
         </div>
 
         <div className="card">
