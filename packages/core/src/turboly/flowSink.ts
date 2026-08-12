@@ -214,7 +214,7 @@ export class TurbolyFlowRpa {
   }
 
   private get baseUrl(): string {
-    return (this.session as unknown as { cfg?: { baseUrl?: string } }).cfg?.baseUrl ?? 'https://sandbox.turboly.com';
+    return (this.session as unknown as { cfg?: { baseUrl?: string } }).cfg?.baseUrl ?? 'https://live.turboly.com';
   }
 
   async dispose(): Promise<void> {

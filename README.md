@@ -45,7 +45,7 @@ built from the sandbox screenshots. Everything else is generic.
 ## Prerequisites
 
 - Node ≥ 20, Docker (for local Mongo/Redis/MinIO).
-- A Turboly login. **Start against `sandbox.turboly.com`** — never production until the smoke
+- A Turboly login. **Start against `live.turboly.com`** — never production until the smoke
   test is green.
 
 ## Setup
@@ -127,7 +127,7 @@ longer need `npm run dev:mongo`. To go back to local, restore the localhost URI.
 ## Recommended rollout (sandbox first)
 
 1. `PUSH_MODE=manual`, one pilot branch → confirm intake, history, the awaiting-assignment queue.
-2. `capture:turboly` green on **sandbox** → `PUSH_MODE=rpa`, `TURBOLY_BASE_URL=https://sandbox.turboly.com`.
+2. `capture:turboly` green on **sandbox** → `PUSH_MODE=rpa`, `TURBOLY_BASE_URL=https://live.turboly.com`.
    Assign a test SPK; watch it reach `confirmed`; check the read-back in the SO list.
 3. Run the canary + reconciler for a day on sandbox; verify zero double-pushes.
 4. Point `TURBOLY_BASE_URL` at production, one branch, watch the dashboard, then widen.

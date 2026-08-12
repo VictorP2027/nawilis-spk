@@ -4,7 +4,7 @@ import { SELECTOR_MAP as S, type Loc } from '@spk/core/turboly';
 /**
  * Selector verification / capture helper.
  *
- * Opens a HEADED browser at sandbox.turboly.com so you can log in by hand
+ * Opens a HEADED browser at live.turboly.com so you can log in by hand
  * (safest — no credentials on disk), then navigates to a New Service Order form
  * and checks that every locator in SELECTOR_MAP resolves. It prints a ✓/✗ report
  * so you know exactly which entries in packages/core/src/turboly/selmap.ts need
@@ -15,7 +15,7 @@ import { SELECTOR_MAP as S, type Loc } from '@spk/core/turboly';
  * Tip: for locators marked ✗, run `npm run codegen -w @spk/turboly-capture`,
  * click the control, and copy Playwright's suggested locator into selmap.ts.
  */
-const BASE = process.env.TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
+const BASE = process.env.TURBOLY_BASE_URL ?? 'https://live.turboly.com';
 
 function describe(loc: Loc): string {
   return `${loc.kind}(${loc.value}${loc.name ? `, name=${loc.name}` : ''})${loc.note ? ` [${loc.note}]` : ''}`;

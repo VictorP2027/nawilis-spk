@@ -135,7 +135,7 @@ Paste and fill in:
 ```
 MONGODB_URI=mongodb+srv://...           # your Atlas connection string
 MONGODB_DB=spk
-TURBOLY_BASE_URL=https://sandbox.turboly.com   # sandbox until fully verified!
+TURBOLY_BASE_URL=https://live.turboly.com   # sandbox until fully verified!
 PUSH_MODE=rpa
 PUSH_APPROVE=true
 CREDENTIAL_ENC_KEY=<32-byte base64>     # node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
@@ -177,7 +177,7 @@ npm run seed:turboly -- ./turboly-export.json    # on the VM or locally against 
 ```
 
 ## Notes
-- **Sandbox first.** Keep `TURBOLY_BASE_URL=https://sandbox.turboly.com` until a full
+- **Sandbox first.** Keep `TURBOLY_BASE_URL=https://live.turboly.com` until a full
   run is verified, then switch to production.
 - **2FA:** the headless VM can't solve OTP — use a Turboly service account without 2FA,
   or do an interactive `login:turboly` once on your laptop and copy the saved

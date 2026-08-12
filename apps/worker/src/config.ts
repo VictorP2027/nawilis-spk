@@ -19,7 +19,7 @@ export const config = {
   redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
 
   pushMode: (process.env.PUSH_MODE ?? 'manual') as PushMode,
-  turbolyBaseUrl: process.env.TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com',
+  turbolyBaseUrl: process.env.TURBOLY_BASE_URL ?? 'https://live.turboly.com',
   turbolyStateDir: process.env.TURBOLY_STATE_DIR ?? './.turboly-state',
   userAgentSuffix: process.env.PUSH_USER_AGENT_SUFFIX ?? 'NawilisSPKBridge/0.1 (+ops@nawilis.com)',
   screenshotDir: process.env.PUSH_SCREENSHOT_DIR ?? './.turboly-state/screenshots',

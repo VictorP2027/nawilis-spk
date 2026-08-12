@@ -2,7 +2,7 @@
  * Turboly Service Order — SELECTOR MAP.
  *
  * This is the ONLY file that encodes Turboly's DOM. Everything else is generic.
- * Built from screenshots of sandbox.turboly.com (2026-07-31, tenant "VICTOR - NAWILIS").
+ * Built from screenshots of live.turboly.com (2026-07-31, tenant "VICTOR - NAWILIS").
  *
  * Strategy (per the design brief): prefer accessible/label/placeholder locators
  * over brittle CSS paths, so a Turboly restyle doesn't break us. Where Turboly
@@ -14,7 +14,7 @@
  *     need adjustment. Do not run the RPA against production until it's green.
  *
  * Known from screenshots:
- *   - Base tenant host:      https://sandbox.turboly.com  (prod host TBD — set in env)
+ *   - Base tenant host:      https://live.turboly.com  (prod host TBD — set in env)
  *   - Sales menu:            /welcome/sales
  *   - Service Orders list:   /service_orders   (filters incl. Registration, Store, Document Number, Status)
  *   - New Service Order:     list → "+ New Service Order"
@@ -152,7 +152,7 @@ export const SELECTOR_MAP: TurbolySelectorMap = {
     newServiceOrderButton: role('link', 'New Service Order'),
   },
   login: {
-    // Confirmed Rails/Devise login form on sandbox.turboly.com/users/sign_in.
+    // Confirmed Rails/Devise login form on live.turboly.com/users/sign_in.
     username: css('#user_email'),
     password: css('#password-input'),
     submit: role('button', 'Login'),

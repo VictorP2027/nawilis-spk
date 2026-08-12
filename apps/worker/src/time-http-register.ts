@@ -4,7 +4,7 @@ import { registerWholesaleHttp, registerRetailHttp } from '@spk/core/turboly';
 /** Time a real corporate registration over the HTTP fast path. No browser. */
 const TAG = process.argv[2] ?? 'H1';
 const cfg = {
-  baseUrl: process.env.TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com',
+  baseUrl: process.env.TURBOLY_BASE_URL ?? 'https://live.turboly.com',
   username: process.env.TURBOLY_USERNAME ?? '',
   password: process.env.TURBOLY_PASSWORD ?? '',
 };

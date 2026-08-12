@@ -12,7 +12,7 @@ import { getDb, canonPhoneKey, flowJobs } from '@spk/core';
  * For zero interference, set TURBOLY_LOOKUP_USERNAME/PASSWORD to a dedicated
  * second Turboly user; otherwise the main credentials are used.
  */
-const BASE = process.env.TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
+const BASE = process.env.TURBOLY_BASE_URL ?? 'https://live.turboly.com';
 const USER = process.env.TURBOLY_LOOKUP_USERNAME ?? process.env.TURBOLY_USERNAME ?? '';
 const PASS = process.env.TURBOLY_LOOKUP_PASSWORD ?? process.env.TURBOLY_PASSWORD ?? '';
 

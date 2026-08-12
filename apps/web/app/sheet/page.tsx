@@ -15,7 +15,7 @@ function uuid(): string {
 
 
 /** Turboly base for "add it there" deep-links (switch via env at prod go-live). */
-const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
+const TURBOLY_URL = process.env.NEXT_PUBLIC_TURBOLY_BASE_URL ?? 'https://live.turboly.com';
 
 interface PkRow { order: boolean; qty: number | ''; keterangan: string; mk: string; waktu: string; sku?: string }
 interface SvcOpt { defaultSku: string; options: { sku: string; label: string }[] }

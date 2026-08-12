@@ -26,7 +26,7 @@ import { SELECTOR_MAP as S, type Loc } from '@spk/core/turboly';
  *         --create      after login, create a TEST Service Order in sandbox and
  *                       read it back (proves the whole RPA path end to end)
  */
-const BASE = process.env.TURBOLY_BASE_URL ?? 'https://sandbox.turboly.com';
+const BASE = process.env.TURBOLY_BASE_URL ?? 'https://live.turboly.com';
 const STATE_DIR = process.env.TURBOLY_STATE_DIR ?? './.turboly-state';
 const BRANCH = process.env.TURBOLY_LOGIN_BRANCH ?? 'DEFAULT';
 const HEADLESS = process.argv.includes('--headless');
