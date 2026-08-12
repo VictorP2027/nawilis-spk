@@ -799,6 +799,15 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               <span style={{ fontSize: 11, color: 'var(--muted, #667)' }}>pcs</span>
             </div>
           ))}
+          {/* More parts on one SPK: rows only ever grow within the visit —
+              submit ignores empty ones, and a new form starts back at two. */}
+          <button
+            type="button"
+            onClick={() => setParts((p) => [...p, { text: '', qty: 1 }])}
+            style={{ marginTop: 6, fontSize: 12, padding: '6px 12px' }}
+          >
+            + Sparepart
+          </button>
         </div>
 
         <div className="card">
