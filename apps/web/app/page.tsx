@@ -267,6 +267,12 @@ export default function Intake() {
       // Merk/tipe rides in keterangan, the free-text the paper form itself
       // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
       keterangan: j.brandType?.trim() || undefined })),
+      // A tire PICKED from the catalog (tap, not typed) also goes as its own
+      // line, "SKU Name" verbatim — the push lifts the leading SKU and bills
+      // it on the sparepart tab, so the tire stops living only in the note.
+      ...Object.values(jobs)
+        .filter((j) => j.code === 'BAN' && j.catalogPick)
+        .map((j) => ({ serviceCode: j.catalogPick!, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null, chosenSku: null })),
       // The handwriting rows ride as UNMAPPED job lines: the typed text IS the
       // serviceCode, so it lands verbatim in the SO's Notes ("Pekerjaan lain").
       ...[extra1, extra2].map((t) => t.trim()).filter(Boolean).map((t) => ({ serviceCode: t, ordered: true, qty: 1, quotedPrice: null, chosenSku: null }))],
@@ -674,6 +680,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                         cat={s.catalog[0]!}
                         value={jobs[s.code]!.brandType ?? ''}
                         onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } }))}
+                        // A TAPPED tire keeps its SKU (catalogPick), so submit can
+                        // turn it into a real sparepart line. Typing afterwards
+                        // clears it — free text is prose again, never a fake SKU.
+                        onPick={(pr) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pr.name, catalogPick: `${pr.sku} ${pr.name}` } }))}
                         placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
                         style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
                       />

@@ -14,6 +14,7 @@ export function ProductInput({
   cat,
   value,
   onChange,
+  onPick,
   placeholder,
   style,
 }: {
@@ -21,10 +22,13 @@ export function ProductInput({
   cat: string;
   value: string;
   onChange: (v: string) => void;
+  /** Fired when a catalog row is TAPPED (not typed): the caller gets the SKU
+   *  too, so a picked product can become a real order line, not just prose. */
+  onPick?: (p: { sku: string; name: string }) => void;
   placeholder?: string;
   style?: React.CSSProperties;
 }) {
-  const [opts, setOpts] = useState<string[]>([]);
+  const [opts, setOpts] = useState<{ sku: string; name: string }[]>([]);
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -39,9 +43,10 @@ export function ProductInput({
       fetch(`/api/products?cat=${encodeURIComponent(cat)}${q ? `&q=${encodeURIComponent(q)}` : '&limit=300'}`)
         .then((r) => r.json())
         .then((d: { products?: Array<{ sku: string; name: string; brand: string | null }> }) => {
-          // Names only: this list fills a free-text description box, and
-          // "1.0L Castrol Edge 5/30" is what a person would have written there.
-          if (live) setOpts((d.products ?? []).map((p) => p.name));
+          // The box displays the NAME ("1.0L Castrol Edge 5/30" is what a
+          // person would have written there); the SKU is kept alongside for
+          // onPick, so a tap can carry the product onto the order for real.
+          if (live) setOpts((d.products ?? []).map((p) => ({ sku: p.sku, name: p.name })));
         })
         .catch(() => undefined);
     }, q ? 250 : 0);
@@ -71,11 +76,11 @@ export function ProductInput({
         >
           {opts.map((o) => (
             <div
-              key={o}
-              onMouseDown={(e) => { e.preventDefault(); onChange(o); setOpen(false); }}
+              key={o.sku}
+              onMouseDown={(e) => { e.preventDefault(); onChange(o.name); onPick?.(o); setOpen(false); }}
               style={{ padding: '8px 10px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f1f5f9', textAlign: 'left' }}
             >
-              {o}
+              {o.name}
             </div>
           ))}
         </div>
