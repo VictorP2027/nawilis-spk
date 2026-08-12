@@ -199,22 +199,6 @@ export function parseKm(raw: string): { value: number | null; raw: string } {
 // Mobile number (Nomor WA) — normalise to E.164 (+62)
 // ─────────────────────────────────────────────────────────────────────────
 
-/** 3-digit operator prefixes (after the leading 8) for a sanity check. */
-const OPERATOR_PREFIXES = new Set([
-  // Telkomsel
-  '811', '812', '813', '814', '821', '822', '823', '851', '852', '853',
-  // Indosat
-  '814', '815', '816', '855', '856', '857', '858',
-  // XL
-  '817', '818', '819', '859', '877', '878',
-  // Axis
-  '831', '832', '833', '838',
-  // Three
-  '895', '896', '897', '898', '899',
-  // Smartfren
-  '881', '882', '883', '884', '885', '886', '887', '888', '889',
-]);
-
 export interface WaParse {
   e164: string | null;
   ok: boolean;
@@ -252,18 +236,16 @@ export function parseWa(raw: string): WaParse {
   if (digits.startsWith('62')) national = digits.slice(2);
   else if (digits.startsWith('0')) national = digits.slice(1);
   else national = digits;
-  // Indonesian mobiles start with 8, total national length 9–12.
+  // Indonesian mobiles start with 8, total national length 9–12. No operator
+  // prefix list: it was a losing battle — operators add prefixes (0895-0899
+  // arrived after the list was written) and every false "prefix tidak
+  // dikenal" trains the counter to ignore warnings. Shape is the check;
+  // reachability is WhatsApp's problem.
   if (national.startsWith('8')) {
     if (national.length < 9 || national.length > 12) {
       return { e164: null, ok: false, operatorKnown: false };
     }
-    // Operator code is the first 3 digits of the national number, e.g. "812".
-    const prefix = national.slice(0, 3);
-    return {
-      e164: `+62${national}`,
-      ok: true,
-      operatorKnown: OPERATOR_PREFIXES.has(prefix),
-    };
+    return { e164: `+62${national}`, ok: true, operatorKnown: true };
   }
   // Landline: geographic area codes start 2–7 ("021 555 1234" — an office
   // number, the only contact a fleet/company customer may have). WhatsApp
