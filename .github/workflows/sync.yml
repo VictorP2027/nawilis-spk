@@ -116,7 +116,7 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
-          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_BASE_URL: https://live.turboly.com
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
         run: node scripts/sync-catalogs.mjs
