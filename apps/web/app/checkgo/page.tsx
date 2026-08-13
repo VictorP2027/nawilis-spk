@@ -4,6 +4,7 @@ import BrandMark from './../components/BrandMark';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProductInput } from '../../lib/productSuggest';
+import { SuggestInput } from '../../lib/suggestInput';
 import { submitOrQueue, flush } from '../../lib/outbox';
 import {
   BRANCHES,
@@ -662,16 +663,14 @@ export default function CheckGoIntake() {
                 ))}
               </div>
               <div className="label">Merk</div>
-              <input list="make-list-cg" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
+              <SuggestInput options={makes} value={merk} onChange={setMerk} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
               {!merkOk && <div className="req-note">⚠ wajib diisi</div>}
-              <datalist id="make-list-cg">{makes.map((m) => <option key={m} value={m} />)}</datalist>
               {makeUnknown && <div className="warn-note">⚠ Merk tidak ada di katalog Turboly — boleh lanjut.</div>}
             </div>
             <div>
               <div className="label">Tipe</div>
-              <input list="model-list-cg" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza — WAJIB" style={!tipeOk ? { borderColor: '#dc2626' } : modelUnknown ? { borderColor: '#d97706' } : undefined} />
+              <SuggestInput options={models} value={tipe} onChange={setTipe} placeholder="Avanza — WAJIB" style={!tipeOk ? { borderColor: '#dc2626' } : modelUnknown ? { borderColor: '#d97706' } : undefined} />
               {!tipeOk && <div className="req-note">⚠ wajib diisi</div>}
-              <datalist id="model-list-cg">{models.map((m) => <option key={m} value={m} />)}</datalist>
               {modelUnknown && <div className="warn-note">⚠ Tipe tidak ada di daftar {merk.trim().toUpperCase()} — dipetakan ke model paling mirip saat kirim.</div>}
             </div>
           </div>
@@ -945,15 +944,13 @@ export default function CheckGoIntake() {
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
           <div className="label" style={{ marginTop: 12 }}>Diperiksa oleh (mekanik)</div>
-          <input list="mekanik-list-cg" value={inspector} onChange={(e) => setInspector(e.target.value)} placeholder={mekanikList.length ? 'Pilih dari daftar / ketik' : 'Nama pemeriksa — boleh dikosongkan'} />
-          <datalist id="mekanik-list-cg">{mekanikList.map((m) => <option key={m.code} value={m.name} />)}</datalist>
+          <SuggestInput options={mekanikList.map((m) => m.name)} value={inspector} onChange={setInspector} placeholder={mekanikList.length ? 'Pilih dari daftar / ketik' : 'Nama pemeriksa — boleh dikosongkan'} />
           <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
             Tercetak di &quot;Diperiksa Oleh&quot; dan dikirim ke customer lewat WhatsApp. Kosong = nama advisor.
           </div>
 
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor) — WAJIB</div>
-          <input list="advisor-list-cg" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
-          <datalist id="advisor-list-cg">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
+          <SuggestInput options={advisors.map((a) => a.name)} value={advisor} onChange={setAdvisor} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
 
@@ -961,14 +958,13 @@ export default function CheckGoIntake() {
               has to match Turboly exactly, so an unknown one is warned about rather
               than silently accepted. */}
           <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
-          <input
-            list="salesperson-list-cg"
+          <SuggestInput
+            options={salespeople.map((s) => s.name)}
             value={salesperson}
-            onChange={(e) => setSalesperson(e.target.value)}
+            onChange={setSalesperson}
             placeholder={salespeople.length ? 'Pilih dari daftar / ketik' : 'Nama salesperson'}
             style={!salespersonOk ? { borderColor: '#dc2626' } : salespersonUnknown ? { borderColor: '#d97706' } : undefined}
           />
-          <datalist id="salesperson-list-cg">{salespeople.map((s) => <option key={s.code} value={s.name} />)}</datalist>
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
           {salespersonUnknown && <div className="warn-note">⚠ Tidak ada di daftar salesperson cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
           {!salespeople.length && (

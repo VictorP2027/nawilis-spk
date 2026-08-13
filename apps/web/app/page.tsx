@@ -8,6 +8,7 @@ import { DiagramInk, type InkHandle } from './components/DiagramInk';
 import { CarDiagram } from './components/CarDiagram';
 import { SERVICES, BRANCHES, CONDITION_ITEMS } from '../lib/refdata.client';
 import { ProductInput } from '../lib/productSuggest';
+import { SuggestInput } from '../lib/suggestInput';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
 
 interface VehicleHist {
@@ -152,6 +153,8 @@ export default function Intake() {
   const [salespeople, setSalespeople] = useState<{ code: string; name: string }[]>([]);
   const [salesperson, setSalesperson] = useState('');
   const [svcOpts, setSvcOpts] = useState<Record<string, { defaultSku: string; options: { sku: string; label: string }[] }>>({});
+  // Every jasa label, for the two Pekerjaan-lain pickers' on-screen list.
+  const jasaAll = [...new Set(Object.values(svcOpts).flatMap((o) => o.options.map((x) => x.label)))];
   // Full product catalogs (OLM oils, BAN tires) for the brandType tiles' merged
   // dropdown — fetched once per category the first time such a tile turns on.
   const [catalog, setCatalog] = useState<Record<string, string[]>>({});
@@ -617,16 +620,14 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             ))}
           </div>
           <div className="label">Merk</div>
-                <input list="make-list-q" value={merk} onChange={(e) => setMerk(e.target.value)} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
+                <SuggestInput options={makes} value={merk} onChange={setMerk} placeholder="Toyota — WAJIB" style={!merkOk ? { borderColor: '#dc2626' } : makeUnknown ? { borderColor: '#d97706' } : undefined} />
                 {!merkOk && <div className="req-note">⚠ wajib diisi</div>}
-                <datalist id="make-list-q">{makes.map((m) => <option key={m} value={m} />)}</datalist>
                 {makeUnknown && <div className="warn-note">⚠ Merk tidak ada di katalog Turboly — boleh lanjut.</div>}
               </div>
               <div>
                 <div className="label">Tipe</div>
-                <input list="model-list-q" value={tipe} onChange={(e) => setTipe(e.target.value)} placeholder="Avanza — WAJIB" style={!tipeOk ? { borderColor: '#dc2626' } : modelUnknown ? { borderColor: '#d97706' } : undefined} />
+                <SuggestInput options={models} value={tipe} onChange={setTipe} placeholder="Avanza — WAJIB" style={!tipeOk ? { borderColor: '#dc2626' } : modelUnknown ? { borderColor: '#d97706' } : undefined} />
                 {!tipeOk && <div className="req-note">⚠ wajib diisi</div>}
-                <datalist id="model-list-q">{models.map((m) => <option key={m} value={m} />)}</datalist>
                 {modelUnknown && <div className="warn-note">⚠ Tipe tidak ada di daftar {merk.trim().toUpperCase()} — dipetakan ke model paling mirip saat kirim.</div>}
               </div>
             </div>
@@ -840,11 +841,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {/* Two blank rows, exactly like the paper's 13/14: pick from the jasa
               list or handwrite anything — either way it reaches the order. */}
           <div className="label" style={{ marginTop: 10 }}>Pekerjaan lain (tulis / pilih)</div>
-          <input list="jasa-all" value={extra1} onChange={(e) => setExtra1(e.target.value)} placeholder="Pekerjaan lain 1…" />
-          <input list="jasa-all" value={extra2} onChange={(e) => setExtra2(e.target.value)} placeholder="Pekerjaan lain 2…" style={{ marginTop: 4 }} />
-          <datalist id="jasa-all">
-            {[...new Set(Object.values(svcOpts).flatMap((o) => o.options.map((x) => x.label)))].map((l) => <option key={l} value={l} />)}
-          </datalist>
+          <SuggestInput options={jasaAll} value={extra1} onChange={setExtra1} placeholder="Pekerjaan lain 1…" />
+          <span style={{ display: 'block', marginTop: 4 }}>
+            <SuggestInput options={jasaAll} value={extra2} onChange={setExtra2} placeholder="Pekerjaan lain 2…" />
+          </span>
           {/* Sparepart rows: whole-catalogue search. TAP a pick and it becomes a
               real sparepart line on the Turboly order; there must still be at
               least one pekerjaan above — Turboly refuses an order that is
@@ -895,22 +895,20 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             {!alamatOk && <div className="req-note">⚠ wajib diisi — otomatis untuk customer terdaftar</div>}
           </div>
           <div className="label" style={{ marginTop: 12 }}>Yang menerima (Service Advisor)</div>
-          <input list="advisor-list-q" value={advisor} onChange={(e) => setAdvisor(e.target.value)} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
-          <datalist id="advisor-list-q">{advisors.map((a) => <option key={a.code} value={a.name} />)}</datalist>
+          <SuggestInput options={advisors.map((a) => a.name)} value={advisor} onChange={setAdvisor} placeholder={advisors.length ? 'Pilih dari daftar / ketik' : 'Nama advisor'} style={!advisorOk ? { borderColor: '#dc2626' } : advisorUnknown ? { borderColor: '#d97706' } : undefined} />
           {!advisorOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa advisor</div>}
           {advisorUnknown && <div className="warn-note">⚠ Tidak ada di daftar advisor cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
-          {/* Typeable, with the branch roster offered as a datalist: the name still
-              has to match Turboly exactly, so an unknown one is warned about rather
+          {/* Typeable, with the branch roster on screen: the name still has to
+              match Turboly exactly, so an unknown one is warned about rather
               than silently accepted. */}
           <div className="label" style={{ marginTop: 12 }}>Salesperson — WAJIB</div>
-          <input
-            list="salesperson-list-spk"
+          <SuggestInput
+            options={salespeople.map((s) => s.name)}
             value={salesperson}
-            onChange={(e) => setSalesperson(e.target.value)}
+            onChange={setSalesperson}
             placeholder={salespeople.length ? 'Pilih dari daftar / ketik' : 'Nama salesperson'}
             style={!salespersonOk ? { borderColor: '#dc2626' } : salespersonUnknown ? { borderColor: '#d97706' } : undefined}
           />
-          <datalist id="salesperson-list-spk">{salespeople.map((s) => <option key={s.code} value={s.name} />)}</datalist>
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
           {salespersonUnknown && <div className="warn-note">⚠ Tidak ada di daftar salesperson cabang — harus sama persis dengan nama di Turboly, atau order gagal.</div>}
           {!salespeople.length && (
