@@ -717,7 +717,7 @@ export class RpaSink implements ServiceOrderSink {
    * page.evaluate is compiled to a __name(...) call that does not exist in the
    * browser, which silently turned a whole callback into "no match" once.
    */
-  private async findCustomerByPhoneAnyFormat(phoneKey: string): Promise<{ name: string; phone: string } | null> {
+  private async findCustomerByPhoneAnyFormat(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
     if (phoneKey.length < 8) return null;
     const page = this.session.page_();
     const rows = (await page.evaluate(
@@ -755,7 +755,13 @@ export class RpaSink implements ServiceOrderSink {
         return out;
       })()`,
     )) as Array<{ id: number; name: string; phone: string }> | null;
-    if (!rows) return null;
+    // LIVE returns HTTP 500 for q[phone_cont] (measured 2026-08-13, every
+    // format), so a failed request is NOT "phone not in Turboly" — that verdict
+    // created duplicates for every returning customer with a stored phone
+    // (Ibu Jane B1943PNV ×5). Only a 200 with no canonical match may say null;
+    // anything else is "don't know", which sends the matcher down its NAME
+    // queries where identity is still proved on the phone digits.
+    if (!rows) return undefined;
     // The server filtered on a substring, so confirm the canonical key before
     // trusting it — "829839838" must not adopt someone whose number merely
     // contains those digits.
@@ -937,6 +943,16 @@ export class RpaSink implements ServiceOrderSink {
             } else if (wantName) {
               var name = (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
               if (name === wantName) return i;
+            }
+          }
+          // Digit proof failed on every row. If live renders rows without the
+          // phone, an EXACT full-name match is still identity (never a prefix,
+          // so FRANK cannot adopt FRANKI).
+          if (want && wantName) {
+            for (var k = 0; k < lis.length; k++) {
+              var t2 = lis[k].innerText || '';
+              var n2 = (t2.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
+              if (n2 === wantName) return k;
             }
           }
           return -1;
