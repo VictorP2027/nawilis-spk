@@ -41,13 +41,9 @@ interface VehicleHist {
 interface CustVehicle { plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }
 
 /** One wheel of section 8. `tekanan` is the Lebih/Cukup/Kurang CODE (or ''),
- *  `flags` holds the ticked damage-mark codes. `merkUkuran` holds the tires
- *  COMMITTED so far (comma-joined, one per tire); `draft` is the one being
- *  typed — the typeahead binds to it so querying "Goodyear …, Bri" never
- *  happens. Submit merges draft back in, so one typed tire with no tap
- *  submits the identical string this field always produced. */
-interface TireAnswer { merkUkuran: string; draft: string; tekanan: string; psi: string; flags: string[] }
-const EMPTY_TIRE: TireAnswer = { merkUkuran: '', draft: '', tekanan: '', psi: '', flags: [] };
+ *  `flags` holds the ticked damage-mark codes. */
+interface TireAnswer { merkUkuran: string; tekanan: string; psi: string; flags: string[] }
+const EMPTY_TIRE: TireAnswer = { merkUkuran: '', tekanan: '', psi: '', flags: [] };
 
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -489,8 +485,7 @@ export default function CheckGoIntake() {
         })),
         tires: CHECKGO_TIRE.positions.map((p) => {
           const t = tireOf(p.code);
-          const merk = [t.merkUkuran, t.draft.trim()].filter(Boolean).join(', ');
-          return { position: p.code, merkUkuran: merk || null, tekanan: t.tekanan || null, psi: t.psi.trim() || null, flags: t.flags };
+          return { position: p.code, merkUkuran: t.merkUkuran || null, tekanan: t.tekanan || null, psi: t.psi.trim() || null, flags: t.flags };
         }),
         tireRekomendasi: {
           picks: tireRekom,
@@ -865,55 +860,14 @@ export default function CheckGoIntake() {
               return (
                 <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{pos.label}</div>
-                  {/* Committed tires, one chip each — tap to remove a mis-add. */}
-                  {t.merkUkuran && (
-                    <div className="chk-row" style={{ marginBottom: 4 }}>
-                      {t.merkUkuran.split(', ').map((entry, i) => (
-                        <button
-                          key={`${entry}-${i}`}
-                          type="button"
-                          className="chk-chip ok"
-                          title="Ketuk untuk hapus ban ini"
-                          onClick={() => setTireOf(pos.code, {
-                            merkUkuran: t.merkUkuran.split(', ').filter((_, j) => j !== i).join(', '),
-                          })}
-                        >
-                          {entry} ✕
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {/* 3.3k tires scraped from the tenant behind this box. The
-                      typeahead binds to the DRAFT, not the joined string —
-                      querying "Goodyear …, Bri" would match nothing. */}
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
-                    <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-                      <ProductInput
-                        cat="BAN"
-                        value={t.draft}
-                        onChange={(v) => setTireOf(pos.code, { draft: v })}
-                        onPick={(p) => setTireOf(pos.code, {
-                          merkUkuran: t.merkUkuran ? `${t.merkUkuran}, ${p.name}` : p.name,
-                          draft: '',
-                        })}
-                        placeholder={t.merkUkuran ? 'Ban berikutnya…' : 'Merk & ukuran ban'}
-                        style={SMALL_INPUT}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      style={{ ...VERDICT_BTN, padding: '6px 10px' }}
-                      title="Tambah ban ini ke daftar (satu koma per ban)"
-                      onClick={() => {
-                        const x = t.draft.trim();
-                        if (!x) return;
-                        setTireOf(pos.code, { merkUkuran: t.merkUkuran ? `${t.merkUkuran}, ${x}` : x, draft: '' });
-                      }}
-                    >
-                      ＋
-                    </button>
-                  </div>
+                  {/* 3.3k tires scraped from the tenant behind this box. */}
+                  <ProductInput
+                    cat="BAN"
+                    value={t.merkUkuran}
+                    onChange={(v) => setTireOf(pos.code, { merkUkuran: v })}
+                    placeholder="Merk & ukuran ban"
+                    style={SMALL_INPUT}
+                  />
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                     <span style={{ flex: '1 1 90px', fontSize: 12.5, color: t.tekanan ? 'var(--muted)' : '#dc2626' }}>Tekanan angin</span>
                     {CHECKGO_TIRE.tekanan.map((o) => (

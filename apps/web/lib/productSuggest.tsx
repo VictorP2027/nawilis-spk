@@ -57,7 +57,11 @@ export function ProductInput({
     <span style={{ position: 'relative', display: 'inline-block', ...(style?.width ? { width: style.width } : { width: '100%' }) }}>
       <input
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        // Typing REOPENS the list: a pick keeps the input focused (its
+        // mousedown prevents the blur), so no new focus event ever comes and
+        // the box looked dead when the user typed the next thing — measured
+        // on the Ban tile's second tire, 2026-08-13.
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         // Blur fires before an option's click would — mousedown on the list
         // runs first, so picking works; anywhere else closes it.

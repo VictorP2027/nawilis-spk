@@ -34,6 +34,10 @@ interface JobSel {
    * SHOWS the pick instead of snapping back to the jasa (which read as "it
    * didn't take"). The jasa remains the ordered SKU underneath. */
   catalogPick?: string;
+  /** Ban tile only: the tire being TYPED right now. Committed tires live in
+   * brandType comma-joined (one per tire) — binding the search box to a draft
+   * keeps suggestions working for the second tire. */
+  draft?: string;
 }
 
 function uuid(): string {
@@ -254,11 +258,12 @@ export default function Intake() {
    * tile's pcs count; other tiles start at 1 because their tile qty can be
    * liters, not units.
    */
-  function syncAutoPart(code: string, pick: string | undefined, name?: string, qty?: number | '') {
+  function syncAutoPart(code: string, pick: string | undefined, name?: string) {
     setParts((prev) => {
+      // Withdrawal covers the tile's own key AND its per-tire keys ("BAN#…").
+      if (!pick) return prev.filter((x) => !(x.from === code || x.from?.startsWith(`${code}#`)));
       const at = prev.findIndex((x) => x.from === code);
-      if (!pick) return at >= 0 ? prev.filter((_, i) => i !== at) : prev;
-      const row = { text: name ?? pick.replace(/^\S+\s+/, ''), pick, qty: code === 'BAN' && qty ? qty : 1, from: code };
+      const row = { text: name ?? pick.replace(/^\S+\s+/, ''), pick, qty: 1 as number | '', from: code };
       if (at >= 0) return prev.map((x, i) => (i === at ? row : x));
       const empty = prev.findIndex((x) => !x.text.trim() && !x.pick);
       if (empty >= 0) return prev.map((x, i) => (i === empty ? row : x));
@@ -704,7 +709,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                         type="number"
                         min={1}
                         value={jobs[s.code]!.qty}
-                        onChange={(e) => { const v = e.target.value; const q = v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1); setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: q } })); if (s.code === 'BAN' && q !== '') setParts((prev) => prev.map((x) => (x.from === 'BAN' ? { ...x, qty: q } : x))); }}
+                        onChange={(e) => { const v = e.target.value; setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } })); }}
                         onBlur={() => setJobs((p) => (p[s.code]?.qty === '' ? { ...p, [s.code]: { ...p[s.code]!, qty: 1 } } : p))}
                         style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
                       />
@@ -716,17 +721,83 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                     // actually stocks for this card. Free text still wins —
                     // the catalog offers, never constrains.
                     <span onClick={(e) => e.stopPropagation()} style={{ display: 'block', marginTop: 6 }}>
-                      <ProductInput
-                        cat={s.catalog[0]!}
-                        value={jobs[s.code]!.brandType ?? ''}
-                        onChange={(v) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } })); syncAutoPart(s.code, undefined); }}
-                        // A TAPPED pick keeps its SKU (catalogPick) and lands as a
-                        // visible Sparepart row below (syncAutoPart). Typing
-                        // afterwards clears both — free text is prose again.
-                        onPick={(pr) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pr.name, catalogPick: `${pr.sku} ${pr.name}` } })); syncAutoPart(s.code, `${pr.sku} ${pr.name}`, pr.name, jobs[s.code]?.qty); }}
-                        placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
-                        style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
-                      />
+                      {s.code === 'BAN' ? (
+                        <>
+                          {/* MULTI-TIRE: each committed tire is a chip (tap ✕ to
+                              remove) and one comma in brandType — and a TAPPED
+                              pick is also its own Sparepart row below, so what
+                              is billed stays visible. The box binds the DRAFT
+                              so the second tire still gets suggestions. */}
+                          {/* Both blocks are KEYED: unkeyed siblings after a
+                              growing keyed list get remounted by React, which
+                              was resetting the search box's dropdown state on
+                              every chip change. */}
+                          <span key="ban-chips" style={{ display: 'block' }}>
+                            {(jobs[s.code]!.brandType ?? '').split(', ').filter(Boolean).map((entry, ei) => (
+                              <button
+                                key={`${entry}-${ei}`}
+                                type="button"
+                                title="Ketuk untuk hapus ban ini"
+                                style={{ fontSize: 11, padding: '3px 8px', marginRight: 4, marginBottom: 4 }}
+                                onClick={() => {
+                                  const left = (jobs['BAN']?.brandType ?? '').split(', ').filter(Boolean).filter((_, j) => j !== ei);
+                                  setJobs((p) => ({ ...p, BAN: { ...p['BAN']!, brandType: left.join(', ') } }));
+                                  setParts((prev) => prev.filter((x) => x.from !== `BAN#${entry}`));
+                                }}
+                              >
+                                {entry} ✕
+                              </button>
+                            ))}
+                          </span>
+                          <span key="ban-input" style={{ display: 'flex', gap: 4 }}>
+                            <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                              <ProductInput
+                                cat="BAN"
+                                value={jobs[s.code]!.draft ?? ''}
+                                onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, draft: v } }))}
+                                onPick={(pr) => {
+                                  const cur = (jobs['BAN']?.brandType ?? '').split(', ').filter(Boolean);
+                                  if (cur.includes(pr.name)) {
+                                    // Same tire tapped again = one more of it.
+                                    setJobs((p) => ({ ...p, BAN: { ...p['BAN']!, draft: '' } }));
+                                    setParts((prev) => prev.map((x) => (x.from === `BAN#${pr.name}` ? { ...x, qty: (Number(x.qty) || 1) + 1 } : x)));
+                                  } else {
+                                    setJobs((p) => ({ ...p, BAN: { ...p['BAN']!, brandType: [...cur, pr.name].join(', '), draft: '' } }));
+                                    syncAutoPart(`BAN#${pr.name}`, `${pr.sku} ${pr.name}`, pr.name);
+                                  }
+                                }}
+                                placeholder={(jobs[s.code]!.brandType ?? '') ? 'ban berikutnya — pilih atau ketik' : 'merk / tipe — pilih atau ketik'}
+                                style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+                              />
+                            </span>
+                            <button
+                              type="button"
+                              title="Tambah ban ketikan bebas (catatan saja, tanpa SKU)"
+                              style={{ fontSize: 12, padding: '6px 10px' }}
+                              onClick={() => {
+                                const x = (jobs['BAN']?.draft ?? '').trim();
+                                if (!x) return;
+                                const cur = (jobs['BAN']?.brandType ?? '').split(', ').filter(Boolean);
+                                setJobs((p) => ({ ...p, BAN: { ...p['BAN']!, brandType: [...cur, x].join(', '), draft: '' } }));
+                              }}
+                            >
+                              ＋
+                            </button>
+                          </span>
+                        </>
+                      ) : (
+                        <ProductInput
+                          cat={s.catalog[0]!}
+                          value={jobs[s.code]!.brandType ?? ''}
+                          onChange={(v) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } })); syncAutoPart(s.code, undefined); }}
+                          // A TAPPED pick keeps its SKU (catalogPick) and lands as a
+                          // visible Sparepart row below (syncAutoPart). Typing
+                          // afterwards clears both — free text is prose again.
+                          onPick={(pr) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pr.name, catalogPick: `${pr.sku} ${pr.name}` } })); syncAutoPart(s.code, `${pr.sku} ${pr.name}`, pr.name); }}
+                          placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
+                          style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
+                        />
+                      )}
                     </span>
                   ) : null}
                   {on && svcOpts[s.code]?.options?.length ? (
@@ -746,7 +817,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                           // person wrote it: the product NAME. The SKU stays
                           // visible where it belongs — on the dropdown option.
                           setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pick.replace(/^\S+\s+/, ''), catalogPick: pick } }));
-                          syncAutoPart(s.code, pick, pick.replace(/^\S+\s+/, ''), jobs[s.code]?.qty);
+                          syncAutoPart(s.code, pick, pick.replace(/^\S+\s+/, ''));
                         } else {
                           setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v, catalogPick: undefined } }));
                           syncAutoPart(s.code, undefined);
