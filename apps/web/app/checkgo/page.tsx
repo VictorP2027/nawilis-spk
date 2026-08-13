@@ -41,9 +41,13 @@ interface VehicleHist {
 interface CustVehicle { plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }
 
 /** One wheel of section 8. `tekanan` is the Lebih/Cukup/Kurang CODE (or ''),
- *  `flags` holds the ticked damage-mark codes. */
-interface TireAnswer { merkUkuran: string; tekanan: string; psi: string; flags: string[] }
-const EMPTY_TIRE: TireAnswer = { merkUkuran: '', tekanan: '', psi: '', flags: [] };
+ *  `flags` holds the ticked damage-mark codes. `merkUkuran` holds the tires
+ *  COMMITTED so far (comma-joined, one per tire); `draft` is the one being
+ *  typed — the typeahead binds to it so querying "Goodyear …, Bri" never
+ *  happens. Submit merges draft back in, so one typed tire with no tap
+ *  submits the identical string this field always produced. */
+interface TireAnswer { merkUkuran: string; draft: string; tekanan: string; psi: string; flags: string[] }
+const EMPTY_TIRE: TireAnswer = { merkUkuran: '', draft: '', tekanan: '', psi: '', flags: [] };
 
 function uuid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -106,6 +110,10 @@ export default function CheckGoIntake() {
   const [tireStd, setTireStd] = useState(''); // door-placard standard psi, one per vehicle
   const [tireRekom, setTireRekom] = useState<string[]>([]); // tire rekomendasi picks
   const [tireLain, setTireLain] = useState<string[]>([]); // the 3 blank tire lines, by index
+  // Spareparts the customer takes with the check — only a TAPPED catalog pick
+  // enters the list (free text could never route to the Spareparts tab).
+  const [spareparts, setSpareparts] = useState<Array<{ sku: string; name: string; qty: number | '' }>>([]);
+  const [partQuery, setPartQuery] = useState('');
   const router = useRouter();
   // Signatures moved to PAPER: submit opens the printout and both parties sign
   // there — the printed form is the consent document now.
@@ -197,6 +205,17 @@ export default function CheckGoIntake() {
   }, [secRekom, tireRekom]);
 
   const [kind, setKind] = useState<'car' | 'motorcycle'>('car');
+  // EV/Oli is a separate question from Mobil/Motor and a FORM concept only:
+  // the wire schema's vehicle.kind is untouched (packages/core enum is
+  // car|motorcycle) and EV-ness rides raw.bahan_bakar_mode, the same field
+  // the SPK quick form already uses for fuel mode.
+  const [engine, setEngine] = useState<'oil' | 'ev'>('oil');
+  const isEV = engine === 'ev';
+  // An EV has no engine oil: its sheet simply omits section OLI_MESIN — the
+  // server drops untouched sections anyway, so a thinner report is the normal
+  // path, not a special case. Everything (render, gate, header count, submit)
+  // must read from THIS list, never CHECKGO_SECTIONS directly.
+  const activeSections = isEV ? CHECKGO_SECTIONS.filter((s) => s.code !== 'OLI_MESIN') : CHECKGO_SECTIONS;
   useEffect(() => {
     const m = merk.trim();
     if (!m) { setModels([]); setMakeKnown(false); return; }
@@ -409,7 +428,7 @@ export default function CheckGoIntake() {
   // The report IS the product being sold: every section answered, every wheel's
   // pressure recorded. "Semua baik" makes the healthy car eight taps.
   const reportOk =
-    CHECKGO_SECTIONS.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
+    activeSections.every((s2) => sectionSlots(s2) === 0 || sectionDone(s2) === sectionSlots(s2)) &&
     CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '');
   const canSubmit = !!branch && waOk && namaOk && alamatOk && plateOk && merkOk && tipeOk && tahunOk && warnaOk && kmOk && advisorOk && salespersonOk && estimasiOk && reportOk && !submitting;
 
@@ -446,18 +465,25 @@ export default function CheckGoIntake() {
       // Who did the check — the paper's "Diperiksa Oleh". Name only: the Work
       // Order assignee is a Turboly id and is chosen on the flow board.
       mechanicName: inspector.trim() || null,
-      // A Check & Go orders NOTHING but the check. The checker inspects the whole
-      // car and recommends what he finds, but the customer may take none of it —
-      // "They inspect everything but maybe customers dont do all service
-      // recommended" — so a recommendation is a row on the inspection list, never
-      // a service line that reads as work agreed and to be charged. Work goes on
-      // an SPK. The server pins this too; this is the near half of the same rule.
-      jobLines: [],
+      // A Check & Go orders the check — and nothing free-typed. Recommendations
+      // stay rows on the inspection list ("They inspect everything but maybe
+      // customers dont do all service recommended"); the ONE exception is a
+      // sparepart the customer takes with the check, tapped from the catalog so
+      // its serviceCode is 'SKU Name' and routes to the SO's Spareparts tab.
+      // The server still pins the service line and accepts only SKU-token lines.
+      jobLines: spareparts
+        .filter((sp) => sp.sku)
+        .map((sp) => ({
+          serviceCode: `${sp.sku} ${sp.name}`,
+          ordered: true,
+          qty: typeof sp.qty === 'number' && sp.qty >= 1 ? Math.floor(sp.qty) : 1,
+        })),
+      raw: isEV ? { bahan_bakar_mode: 'ev' } : undefined,
       // The whole sheet goes out as CODES, blanks included: the server is the
       // one place that decides what counts as "filled", so this form and
       // /checkgo/sheet can never disagree about it.
       checkReport: {
-        sections: CHECKGO_SECTIONS.map((s) => ({
+        sections: activeSections.map((s) => ({
           code: s.code,
           verdict: secVerdict[s.code] || null,
           items: s.items.map((it) => ({
@@ -473,7 +499,8 @@ export default function CheckGoIntake() {
         })),
         tires: CHECKGO_TIRE.positions.map((p) => {
           const t = tireOf(p.code);
-          return { position: p.code, merkUkuran: t.merkUkuran || null, tekanan: t.tekanan || null, psi: t.psi.trim() || null, flags: t.flags };
+          const merk = [t.merkUkuran, t.draft.trim()].filter(Boolean).join(', ');
+          return { position: p.code, merkUkuran: merk || null, tekanan: t.tekanan || null, psi: t.psi.trim() || null, flags: t.flags };
         }),
         tireRekomendasi: {
           picks: tireRekom,
@@ -521,12 +548,13 @@ export default function CheckGoIntake() {
 
   function resetForm() {
     setWa(''); setNama(''); setAlamat('');
-    setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm(''); setKind('car');
+    setPlate(''); setMerk(''); setTipe(''); setTahun(''); setWarna(''); setKm(''); setKind('car'); setEngine('oil');
     setHist(null); setPlateOwner(null); setCustVehicles([]); setCustHint(null); setRegName(null);
     setEstimasi(String(DEFAULT_ESTIMASI));
     setSecVerdict({}); setItemVerdict({}); setReading({});
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
     setTire({}); setTireRekom([]); setTireLain([]); setTireStd('');
+    setSpareparts([]); setPartQuery('');
     setJobs({});
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
@@ -559,6 +587,20 @@ export default function CheckGoIntake() {
         )}
 
         <div className="card">
+          {/* EV/Oli at the very top (Victor) — separate from Mobil/Motor,
+              which stays in its usual place further down. */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+            {([['oil', '🛢 Pakai Oli'], ['ev', '⚡ Listrik (EV)']] as const).map(([v, label]) => (
+              <button key={v} type="button" className={`chk-chip${engine === v ? ' ok' : ''}`} onClick={() => setEngine(v)}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {isEV && (
+            <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', margin: '-4px 0 8px' }}>
+              Mobil listrik — bagian Oli Mesin dihilangkan dari checklist.
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0 16px' }}>
           <div>
           <div className="label">Nomor WhatsApp — ketik dulu</div>
@@ -673,7 +715,7 @@ export default function CheckGoIntake() {
         <div className="card">
           {(() => {
             const full =
-              CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) === sectionSlots(s2)).length +
+              activeSections.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) === sectionSlots(s2)).length +
               (CHECKGO_TIRE.positions.every((p2) => (tire[p2.code]?.tekanan ?? '') !== '') ? 1 : 0);
             return (
               <button
@@ -683,7 +725,7 @@ export default function CheckGoIntake() {
               >
                 <span className="label" style={{ marginBottom: 0 }}>Check and Go Report — WAJIB</span>
                 <span style={{ fontSize: 12.5, color: reportOk ? '#15803d' : 'var(--block, #dc2626)', fontWeight: 700 }}>
-                  {reportOk ? '✓ lengkap' : `${full}/8 — belum lengkap`} {reportOpen ? '▲' : '▼'}
+                  {reportOk ? '✓ lengkap' : `${full}/${activeSections.length + 1} — belum lengkap`} {reportOpen ? '▲' : '▼'}
                 </span>
               </button>
             );
@@ -696,7 +738,7 @@ export default function CheckGoIntake() {
           {!reportOk && (
             <div className="req-note" style={{ marginBottom: 8 }}>
               ⚠ belum lengkap: {[
-                ...CHECKGO_SECTIONS.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) < sectionSlots(s2)).map((s2) => s2.title),
+                ...activeSections.filter((s2) => sectionSlots(s2) > 0 && sectionDone(s2) < sectionSlots(s2)).map((s2) => s2.title),
                 ...(CHECKGO_TIRE.positions.some((p2) => (tire[p2.code]?.tekanan ?? '') === '') ? ['Tekanan ban (semua roda)'] : []),
               ].join(' · ')}
             </div>
@@ -705,7 +747,7 @@ export default function CheckGoIntake() {
           {/* Sections 1-7: per-row verdict pairs + readings, each section with
               its own recommendation checklist right under it (the printed
               layout). */}
-          {CHECKGO_SECTIONS.map((s) => (
+          {activeSections.map((s) => (
             <div key={s.code} id={`cg-sec-${s.no}`} style={SEC_SEP}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* No printed numbers — incompleteness is shown where it is,
@@ -834,14 +876,55 @@ export default function CheckGoIntake() {
               return (
                 <div key={pos.code} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{pos.label}</div>
-                  {/* 3.3k tires scraped from the tenant behind this box. */}
-                  <ProductInput
-                    cat="BAN"
-                    value={t.merkUkuran}
-                    onChange={(v) => setTireOf(pos.code, { merkUkuran: v })}
-                    placeholder="Merk & ukuran ban"
-                    style={SMALL_INPUT}
-                  />
+                  {/* Committed tires, one chip each — tap to remove a mis-add. */}
+                  {t.merkUkuran && (
+                    <div className="chk-row" style={{ marginBottom: 4 }}>
+                      {t.merkUkuran.split(', ').map((entry, i) => (
+                        <button
+                          key={`${entry}-${i}`}
+                          type="button"
+                          className="chk-chip ok"
+                          title="Ketuk untuk hapus ban ini"
+                          onClick={() => setTireOf(pos.code, {
+                            merkUkuran: t.merkUkuran.split(', ').filter((_, j) => j !== i).join(', '),
+                          })}
+                        >
+                          {entry} ✕
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {/* 3.3k tires scraped from the tenant behind this box. The
+                      typeahead binds to the DRAFT, not the joined string —
+                      querying "Goodyear …, Bri" would match nothing. */}
+                  <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                    <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                      <ProductInput
+                        cat="BAN"
+                        value={t.draft}
+                        onChange={(v) => setTireOf(pos.code, { draft: v })}
+                        onPick={(p) => setTireOf(pos.code, {
+                          merkUkuran: t.merkUkuran ? `${t.merkUkuran}, ${p.name}` : p.name,
+                          draft: '',
+                        })}
+                        placeholder={t.merkUkuran ? 'Ban berikutnya…' : 'Merk & ukuran ban'}
+                        style={SMALL_INPUT}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      style={{ ...VERDICT_BTN, padding: '6px 10px' }}
+                      title="Tambah ban ini ke daftar (satu koma per ban)"
+                      onClick={() => {
+                        const x = t.draft.trim();
+                        if (!x) return;
+                        setTireOf(pos.code, { merkUkuran: t.merkUkuran ? `${t.merkUkuran}, ${x}` : x, draft: '' });
+                      }}
+                    >
+                      ＋
+                    </button>
+                  </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
                     <span style={{ flex: '1 1 90px', fontSize: 12.5, color: t.tekanan ? 'var(--muted)' : '#dc2626' }}>Tekanan angin</span>
                     {CHECKGO_TIRE.tekanan.map((o) => (
@@ -951,6 +1034,51 @@ export default function CheckGoIntake() {
             </div>
           )}
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
+        </div>
+
+        <div className="card">
+          <div className="label">Sparepart (opsional)</div>
+          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 6 }}>
+            Sparepart yang dibeli customer bersama pemeriksaan — ketik lalu pilih
+            dari daftar; hanya pilihan katalog yang masuk order.
+          </div>
+          <ProductInput
+            cat="ALL"
+            value={partQuery}
+            onChange={setPartQuery}
+            onPick={(p) => {
+              setSpareparts((prev) => [...prev, { sku: p.sku, name: p.name, qty: 1 }]);
+              setPartQuery('');
+            }}
+            placeholder="Cari sparepart — ketik nama / SKU"
+          />
+          {spareparts.map((sp, i) => (
+            <div key={`${sp.sku}-${i}`} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+              <span style={{ flex: '1 1 200px', minWidth: 0, fontSize: 13.5 }}>{sp.name}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <input
+                  value={sp.qty}
+                  inputMode="numeric"
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    const n = v === '' ? '' : Math.max(1, Math.floor(Number(v) || 1));
+                    setSpareparts((prev) => prev.map((x, j) => (j === i ? { ...x, qty: n } : x)));
+                  }}
+                  onBlur={() => setSpareparts((prev) => prev.map((x, j) => (j === i && x.qty === '' ? { ...x, qty: 1 } : x)))}
+                  style={{ ...SMALL_INPUT, width: 52 }}
+                />
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>pcs</span>
+              </span>
+              <button
+                type="button"
+                className="btn ghost"
+                style={{ ...VERDICT_BTN, padding: '4px 10px' }}
+                onClick={() => setSpareparts((prev) => prev.filter((_, j) => j !== i))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
         </div>
 
         <div className="card">

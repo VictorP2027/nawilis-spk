@@ -116,18 +116,25 @@ export async function POST(req: Request): Promise<Response> {
     inspectionItems.push(intakeRow('Check and Go', null, null));
   }
 
-  // The General Check is the ONLY line. A Check & Go is a check, not work: the
-  // checker inspects everything and recommends what he finds, but the customer
-  // may take none of it, so a recommendation belongs on the inspection list and
-  // never on the order as a service line. Work is ordered on an SPK.
+  // The General Check is the only SERVICE line. A Check & Go is a check, not
+  // work: recommendations belong on the inspection list, never on the order as
+  // service lines — work is ordered on an SPK. Enforced here rather than only
+  // in the form, because an old tab, a queued offline submission, or
+  // /checkgo/sheet can all still post jobLines, and one line per
+  // recommendation is exactly what this is meant to stop. Turboly will not
+  // take an order with no line at all — VERIFIED 2026-08-09.
   //
-  // Enforced here rather than only in the form, because the form is not the only
-  // caller: an old tab, a queued offline submission, or /checkgo/sheet can all
-  // still post jobLines, and one line per recommendation is exactly what this is
-  // meant to stop. Turboly will not take an order with no line at all — VERIFIED
-  // 2026-08-09: an empty Services tab is refused with "Service Items can't be
-  // blank" — which is why the check itself stays.
-  void orderedLines;
+  // The one deliberate exception (2026-08-13, Victor): SPAREPARTS the customer
+  // buys with the check. Only lines whose serviceCode is 'SKU Name' with a
+  // catalog-shaped SKU token pass — that token is what routes a line to the
+  // SO's Spareparts tab (payload.ts leadingSku); anything free-typed is still
+  // dropped, so the old one-line-per-recommendation failure cannot return.
+  // Same pattern as payload.ts leadingSku — a line passing here is exactly a
+  // line the push builder will lift into a real (billed) sparepart line.
+  const partLines = (orderedLines ?? []).filter((l) => {
+    const first = (l.serviceCode ?? '').trim().split(/\s+/)[0] ?? '';
+    return /^[A-Z]{3}-[A-Z0-9]+-[A-Z0-9]+$/i.test(first);
+  });
 
   // Reuse the proven SPK pipeline: build the intake with the General Check line
   // first; docType is corrected to CHECK_AND_GO right after the insert.
@@ -146,6 +153,7 @@ export async function POST(req: Request): Promise<Response> {
         quotedPrice: harga,
         chosenSku: CHECKGO_SKU,
       },
+      ...partLines,
     ],
   };
 
