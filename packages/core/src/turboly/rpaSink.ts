@@ -517,7 +517,7 @@ export class RpaSink implements ServiceOrderSink {
       // answer a "+62…" query is guaranteed to die with `no Turboly match`
       // (01KZWRSWWJ, landline +62213522733). The NAME found this customer on
       // the SO form moments ago — ask for the same name here.
-      else if (q.startsWith('+') && cr?.nama) q = cr.nama.trim();
+      else if (q && q.startsWith('+') && cr?.nama) q = cr.nama.trim();
     }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
