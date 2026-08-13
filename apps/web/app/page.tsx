@@ -82,6 +82,19 @@ export default function Intake() {
    */
   const [banProduksi, setBanProduksi] = useState('');
   const [banTwi, setBanTwi] = useState('');
+  /** Wheel labels in recording order — left→right, front→back. */
+  const BAN_ORDER = ['DK', 'DKN', 'BK', 'BKN'] as const;
+  /** "＋ ban": stamp the next wheel's label (and the comma) into the field.
+   * Empty field starts at DK; an unlabeled first entry is adopted as DK. */
+  const appendBan = (set: (f: (v: string) => string) => void) =>
+    set((v) => {
+      const t = v.trim().replace(/,\s*$/, '');
+      if (!t) return 'DK ';
+      let parts = t.split(',').map((x) => x.trim()).filter(Boolean);
+      if (parts[0] && !/^(DK|DKN|BK|BKN)\b/i.test(parts[0])) parts = [`DK ${parts[0]}`, ...parts.slice(1)];
+      const next = BAN_ORDER[Math.min(parts.length, BAN_ORDER.length - 1)];
+      return `${parts.join(', ')}, ${next} `;
+    });
   const [fuelPct, setFuelPct] = useState<number | null>(null);
   const [evPct, setEvPct] = useState('');
   // Two handwriting rows — free text or a pick from the jasa catalog.
@@ -624,9 +637,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           <FuelGauge mode={fuelMode} pct={fuelPct} ev={evPct} onMode={setFuelMode} onPct={setFuelPct} onEv={setEvPct} />
           <div style={{ marginTop: 12 }}>
             <div className="label" style={{ marginBottom: 4 }}>Kondisi ban <em style={{ fontWeight: 400 }}>(opsional)</em></div>
-            {/* "＋ ban" appends the comma so the next tire's value types
-                straight on — one comma per tire, the format the hint has
-                always shown ("DK 2419, BK 2320"). */}
+            {/* "＋ ban" records tires LEFT→RIGHT, FRONT→BACK: it stamps the
+                next wheel's label (DK, DKN, BK, BKN) and the comma, so the
+                value reads "DK 2419, DKN 2523, BK 2320, BKN 2411" and every
+                figure names its wheel. Hand-typing stays free text. */}
             <div className="row">
               <span style={{ display: 'flex', gap: 4, flex: 1, minWidth: 0 }}>
                 <input
@@ -639,10 +653,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                 />
                 <button
                   type="button"
-                  title="Tambah ban berikutnya (koma per ban)"
+                  title="Tambah ban berikutnya — urutan kiri→kanan, depan→belakang (DK, DKN, BK, BKN)"
                   style={{ fontSize: 12, padding: '6px 10px', flex: '0 0 auto' }}
                   onClick={(e) => {
-                    setBanProduksi((v) => (v.trim() && !v.trimEnd().endsWith(',') ? `${v.trimEnd()}, ` : v));
+                    appendBan(setBanProduksi);
                     (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus();
                   }}
                 >
@@ -660,10 +674,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                 />
                 <button
                   type="button"
-                  title="Tambah ban berikutnya (koma per ban)"
+                  title="Tambah ban berikutnya — urutan kiri→kanan, depan→belakang (DK, DKN, BK, BKN)"
                   style={{ fontSize: 12, padding: '6px 10px', flex: '0 0 auto' }}
                   onClick={(e) => {
-                    setBanTwi((v) => (v.trim() && !v.trimEnd().endsWith(',') ? `${v.trimEnd()}, ` : v));
+                    appendBan(setBanTwi);
                     (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus();
                   }}
                 >
@@ -672,7 +686,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
               </span>
             </div>
             <div className="hint" style={{ fontSize: 11, color: 'var(--muted, #667)', marginTop: 2 }}>
-              Tercetak di SPK. Boleh dikosongkan, dan boleh ditulis per ban — mis. &quot;DK 2419, BK 2320&quot;.
+              Tercetak di SPK. Boleh dikosongkan. ＋ ban mengurut kiri→kanan, depan→belakang —
+              mis. &quot;DK 2419, DKN 2523, BK 2320, BKN 2411&quot;.
             </div>
           </div>
           {fuelMode === 'ev' && (
