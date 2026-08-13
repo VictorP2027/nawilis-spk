@@ -729,7 +729,12 @@ export class RpaSink implements ServiceOrderSink {
     const rows = (await page.evaluate(
       `(async () => {
         var key = ${JSON.stringify(phoneKey)};
-        var res = await fetch('/customers?q%5Bphone_cont%5D=' + encodeURIComponent(key), { credentials: 'include' });
+        // LIVE renamed the Ransack filter: phone_cont answers 500, phone_start
+        // works and NORMALIZES (matched "021-3522733" from "+62213522733" and
+        // "+6287736513601" from "87736513601" — measured 2026-08-13). Try the
+        // live param first, keep phone_cont for the sandbox tenant.
+        var res = await fetch('/customers?q%5Bphone_start%5D=' + encodeURIComponent(key), { credentials: 'include' });
+        if (!res.ok) res = await fetch('/customers?q%5Bphone_cont%5D=' + encodeURIComponent(key), { credentials: 'include' });
         if (!res.ok) return null;
         var doc = new DOMParser().parseFromString(await res.text(), 'text/html');
         var out = [];
