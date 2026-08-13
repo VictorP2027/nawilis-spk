@@ -1,19 +1,15 @@
 name: sync-catalogs
 
-# Hourly catalog re-sync: stores, per-branch advisors, vehicle makes/models
-# mirrored from Turboly's live UI into Mongo. Shares the turboly-push
-# concurrency group so it can NEVER run while a push is in flight (one
-# Turboly session per user). Service SKU mappings are human-confirmed and
-# not touched.
-#
-# Sharing that group is exactly why this job's setup is on the registration
-# critical path: at :10 every hour a registration dispatched behind this run
-# waits out its ENTIRE cold start before the runner is even claimed. Same
-# caching as push/flow, for latency the operator feels somewhere else.
+# DAILY catalog re-sync (Victor, 2026-08-13 — was hourly): stores, per-branch
+# advisors, vehicle makes/models mirrored from Turboly's live UI into Mongo.
+# 01:00 WIB, the quiet hour the reminder pipeline also uses — no store is
+# open, so the shared turboly-push concurrency group (one Turboly session per
+# user) never makes a registration wait behind this job's cold start anymore.
+# Service SKU mappings are human-confirmed and not touched.
 
 on:
   schedule:
-    - cron: '10 * * * *'   # hourly at :10 (offset from the */5 push cron ticks)
+    - cron: '0 18 * * *'   # 01:00 WIB (UTC+7) daily
   workflow_dispatch: {}
 
 concurrency:
