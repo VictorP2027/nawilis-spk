@@ -110,10 +110,6 @@ export default function CheckGoIntake() {
   const [tireStd, setTireStd] = useState(''); // door-placard standard psi, one per vehicle
   const [tireRekom, setTireRekom] = useState<string[]>([]); // tire rekomendasi picks
   const [tireLain, setTireLain] = useState<string[]>([]); // the 3 blank tire lines, by index
-  // Spareparts the customer takes with the check — only a TAPPED catalog pick
-  // enters the list (free text could never route to the Spareparts tab).
-  const [spareparts, setSpareparts] = useState<Array<{ sku: string; name: string; qty: number | '' }>>([]);
-  const [partQuery, setPartQuery] = useState('');
   const router = useRouter();
   // Signatures moved to PAPER: submit opens the printout and both parties sign
   // there — the printed form is the consent document now.
@@ -465,19 +461,13 @@ export default function CheckGoIntake() {
       // Who did the check — the paper's "Diperiksa Oleh". Name only: the Work
       // Order assignee is a Turboly id and is chosen on the flow board.
       mechanicName: inspector.trim() || null,
-      // A Check & Go orders the check — and nothing free-typed. Recommendations
-      // stay rows on the inspection list ("They inspect everything but maybe
-      // customers dont do all service recommended"); the ONE exception is a
-      // sparepart the customer takes with the check, tapped from the catalog so
-      // its serviceCode is 'SKU Name' and routes to the SO's Spareparts tab.
-      // The server still pins the service line and accepts only SKU-token lines.
-      jobLines: spareparts
-        .filter((sp) => sp.sku)
-        .map((sp) => ({
-          serviceCode: `${sp.sku} ${sp.name}`,
-          ordered: true,
-          qty: typeof sp.qty === 'number' && sp.qty >= 1 ? Math.floor(sp.qty) : 1,
-        })),
+      // A Check & Go orders NOTHING but the check. The checker inspects the whole
+      // car and recommends what he finds, but the customer may take none of it —
+      // "They inspect everything but maybe customers dont do all service
+      // recommended" — so a recommendation is a row on the inspection list, never
+      // a service line that reads as work agreed and to be charged. Work goes on
+      // an SPK. The server pins this too; this is the near half of the same rule.
+      jobLines: [],
       raw: isEV ? { bahan_bakar_mode: 'ev' } : undefined,
       // The whole sheet goes out as CODES, blanks included: the server is the
       // one place that decides what counts as "filled", so this form and
@@ -554,7 +544,6 @@ export default function CheckGoIntake() {
     setSecVerdict({}); setItemVerdict({}); setReading({});
     setSecRekom({}); setRekomLain({}); setExtraParts([]);
     setTire({}); setTireRekom([]); setTireLain([]); setTireStd('');
-    setSpareparts([]); setPartQuery('');
     setJobs({});
     // Advisor must be a deliberate choice per order — never carried over.
     setAdvisor('');
@@ -1034,51 +1023,6 @@ export default function CheckGoIntake() {
             </div>
           )}
           {!salespersonOk && <div className="req-note">⚠ wajib — Turboly menolak order tanpa salesperson</div>}
-        </div>
-
-        <div className="card">
-          <div className="label">Sparepart (opsional)</div>
-          <div style={{ fontSize: 12.5, color: 'var(--muted)', marginBottom: 6 }}>
-            Sparepart yang dibeli customer bersama pemeriksaan — ketik lalu pilih
-            dari daftar; hanya pilihan katalog yang masuk order.
-          </div>
-          <ProductInput
-            cat="ALL"
-            value={partQuery}
-            onChange={setPartQuery}
-            onPick={(p) => {
-              setSpareparts((prev) => [...prev, { sku: p.sku, name: p.name, qty: 1 }]);
-              setPartQuery('');
-            }}
-            placeholder="Cari sparepart — ketik nama / SKU"
-          />
-          {spareparts.map((sp, i) => (
-            <div key={`${sp.sku}-${i}`} style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
-              <span style={{ flex: '1 1 200px', minWidth: 0, fontSize: 13.5 }}>{sp.name}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <input
-                  value={sp.qty}
-                  inputMode="numeric"
-                  onChange={(e) => {
-                    const v = e.target.value.trim();
-                    const n = v === '' ? '' : Math.max(1, Math.floor(Number(v) || 1));
-                    setSpareparts((prev) => prev.map((x, j) => (j === i ? { ...x, qty: n } : x)));
-                  }}
-                  onBlur={() => setSpareparts((prev) => prev.map((x, j) => (j === i && x.qty === '' ? { ...x, qty: 1 } : x)))}
-                  style={{ ...SMALL_INPUT, width: 52 }}
-                />
-                <span style={{ fontSize: 12, color: 'var(--muted)' }}>pcs</span>
-              </span>
-              <button
-                type="button"
-                className="btn ghost"
-                style={{ ...VERDICT_BTN, padding: '4px 10px' }}
-                onClick={() => setSpareparts((prev) => prev.filter((_, j) => j !== i))}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
         </div>
 
         <div className="card">

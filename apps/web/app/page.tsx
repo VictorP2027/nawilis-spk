@@ -91,7 +91,10 @@ export default function Intake() {
   // A TAPPED pick keeps its SKU and becomes a real sparepart line on the
   // Turboly order (the same lift the Ban tile uses); typed-only text stays
   // free prose and rides to the notes — never guessed into a product.
-  const [parts, setParts] = useState<Array<{ text: string; pick?: string; qty: number | '' }>>(
+  // `from` marks a row the Pekerjaan section auto-added (the tile's code): a
+  // catalog pick on a tile lands here so the operator SEES the goods being
+  // billed; editing the row by hand makes it a normal manual row again.
+  const [parts, setParts] = useState<Array<{ text: string; pick?: string; qty: number | ''; from?: string }>>(
     [{ text: '', qty: 1 }, { text: '', qty: 1 }],
   );
   // Mobil / Motor: four make names are BOTH brands; this picks the model list
@@ -231,11 +234,35 @@ export default function Intake() {
   }, [plate]);
 
   function toggleJob(code: string, label: string) {
+    // Unticking a tile also withdraws the sparepart row its pick auto-added.
+    if (jobs[code]) syncAutoPart(code, undefined);
     setJobs((prev) => {
       const next = { ...prev };
       if (next[code]) delete next[code];
       else next[code] = { code, label, qty: 1 };
       return next;
+    });
+  }
+
+  /**
+   * A catalog pick made INSIDE a Pekerjaan tile (a tire on the Ban tile, an
+   * oil/aki/filter on its own tile) is goods the customer is buying, so it
+   * auto-populates the Sparepart section below — visible, qty editable —
+   * and ships from there as the real sparepart line. One row per tile
+   * (`from` remembers whose it is); re-typing free text on the tile, picking
+   * a jasa instead, or unticking the tile withdraws the row. BAN mirrors the
+   * tile's pcs count; other tiles start at 1 because their tile qty can be
+   * liters, not units.
+   */
+  function syncAutoPart(code: string, pick: string | undefined, name?: string, qty?: number | '') {
+    setParts((prev) => {
+      const at = prev.findIndex((x) => x.from === code);
+      if (!pick) return at >= 0 ? prev.filter((_, i) => i !== at) : prev;
+      const row = { text: name ?? pick.replace(/^\S+\s+/, ''), pick, qty: code === 'BAN' && qty ? qty : 1, from: code };
+      if (at >= 0) return prev.map((x, i) => (i === at ? row : x));
+      const empty = prev.findIndex((x) => !x.text.trim() && !x.pick);
+      if (empty >= 0) return prev.map((x, i) => (i === empty ? row : x));
+      return [...prev, row];
     });
   }
 
@@ -274,12 +301,9 @@ export default function Intake() {
       // Merk/tipe rides in keterangan, the free-text the paper form itself
       // uses for it ("Castrol Edge 5/30") — it lands on the Turboly line note.
       keterangan: j.brandType?.trim() || undefined })),
-      // A tire PICKED from the catalog (tap, not typed) also goes as its own
-      // line, "SKU Name" verbatim — the push lifts the leading SKU and bills
-      // it on the sparepart tab, so the tire stops living only in the note.
-      ...Object.values(jobs)
-        .filter((j) => j.code === 'BAN' && j.catalogPick)
-        .map((j) => ({ serviceCode: j.catalogPick!, ordered: true, qty: Number(j.qty) || 1, quotedPrice: null, chosenSku: null })),
+      // A catalog pick on a tile no longer ships from here: syncAutoPart put
+      // it in the Sparepart rows below, where the operator can SEE and adjust
+      // what is billed — those rows are the single source of goods lines now.
       // The sparepart rows: a TAPPED pick carries "SKU Name" and becomes a
       // real sparepart line with its qty; typed-only text goes as prose,
       // exactly like a handwriting row.
@@ -680,7 +704,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                         type="number"
                         min={1}
                         value={jobs[s.code]!.qty}
-                        onChange={(e) => { const v = e.target.value; setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1) } })); }}
+                        onChange={(e) => { const v = e.target.value; const q = v === '' ? '' : Math.max(1, Math.floor(Number(v)) || 1); setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, qty: q } })); if (s.code === 'BAN' && q !== '') setParts((prev) => prev.map((x) => (x.from === 'BAN' ? { ...x, qty: q } : x))); }}
                         onBlur={() => setJobs((p) => (p[s.code]?.qty === '' ? { ...p, [s.code]: { ...p[s.code]!, qty: 1 } } : p))}
                         style={{ width: 64, fontSize: 12, padding: '6px 8px' }}
                       />
@@ -695,11 +719,11 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                       <ProductInput
                         cat={s.catalog[0]!}
                         value={jobs[s.code]!.brandType ?? ''}
-                        onChange={(v) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } }))}
-                        // A TAPPED tire keeps its SKU (catalogPick), so submit can
-                        // turn it into a real sparepart line. Typing afterwards
-                        // clears it — free text is prose again, never a fake SKU.
-                        onPick={(pr) => setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pr.name, catalogPick: `${pr.sku} ${pr.name}` } }))}
+                        onChange={(v) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: v, catalogPick: undefined } })); syncAutoPart(s.code, undefined); }}
+                        // A TAPPED pick keeps its SKU (catalogPick) and lands as a
+                        // visible Sparepart row below (syncAutoPart). Typing
+                        // afterwards clears both — free text is prose again.
+                        onPick={(pr) => { setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pr.name, catalogPick: `${pr.sku} ${pr.name}` } })); syncAutoPart(s.code, `${pr.sku} ${pr.name}`, pr.name, jobs[s.code]?.qty); }}
                         placeholder={s.code === 'OLI' ? 'merk / tipe — contoh: Castrol Edge 5W-30' : 'merk / tipe — pilih atau ketik'}
                         style={{ fontSize: 12, padding: '6px 8px', width: '100%' }}
                       />
@@ -722,8 +746,10 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                           // person wrote it: the product NAME. The SKU stays
                           // visible where it belongs — on the dropdown option.
                           setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, brandType: pick.replace(/^\S+\s+/, ''), catalogPick: pick } }));
+                          syncAutoPart(s.code, pick, pick.replace(/^\S+\s+/, ''), jobs[s.code]?.qty);
                         } else {
                           setJobs((p) => ({ ...p, [s.code]: { ...p[s.code]!, sku: v, catalogPick: undefined } }));
+                          syncAutoPart(s.code, undefined);
                         }
                       }}
                       style={{ marginTop: 6, fontSize: 12, padding: '6px 8px', maxWidth: '100%' }}
@@ -783,8 +809,8 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                 <ProductInput
                   cat="ALL"
                   value={p.text}
-                  onChange={(v) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: v, pick: undefined } : x)))}
-                  onPick={(pr) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: pr.name, pick: `${pr.sku} ${pr.name}` } : x)))}
+                  onChange={(v) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: v, pick: undefined, from: undefined } : x)))}
+                  onPick={(pr) => setParts((prev) => prev.map((x, j) => (j === i ? { ...x, text: pr.name, pick: `${pr.sku} ${pr.name}`, from: undefined } : x)))}
                   placeholder={`Sparepart ${i + 1} — contoh: filter udara, ban, aki…`}
                 />
               </span>
