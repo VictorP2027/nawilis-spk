@@ -512,6 +512,12 @@ export class RpaSink implements ServiceOrderSink {
       // Same reason as tryPickCustomerExact: a stored "+62…" cannot be searched
       // in the picker, so ask by name and let the row's digits prove identity.
       if (orig) q = orig.phone.trim().startsWith('+') ? (orig.name.trim() || q) : orig.phone.trim();
+      // Live cannot search ANY phone form (select2 misses every digit spelling
+      // and the q[phone_cont] fallback answers 500), so when the probe has no
+      // answer a "+62…" query is guaranteed to die with `no Turboly match`
+      // (01KZWRSWWJ, landline +62213522733). The NAME found this customer on
+      // the SO form moments ago — ask for the same name here.
+      else if (q.startsWith('+') && cr?.nama) q = cr.nama.trim();
     }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
