@@ -509,9 +509,12 @@ export class RpaSink implements ServiceOrderSink {
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
-      // Same reason as tryPickCustomerExact: a stored "+62…" cannot be searched
-      // in the picker, so ask by name and let the row's digits prove identity.
-      if (orig) q = orig.phone.trim().startsWith('+') ? (orig.name.trim() || q) : orig.phone.trim();
+      // Same reason as tryPickCustomerExact — but stronger on live: the select2
+      // cannot search ANY phone spelling, not even the exact stored form
+      // (measured 2026-08-13: Jane's stored "+6287736513601" returns 0 rows).
+      // The record was already phone-proven by the list filter, so its NAME is
+      // the one query the picker can actually answer.
+      if (orig) q = orig.name.trim() || q;
       // Live cannot search ANY phone form (select2 misses every digit spelling
       // and the q[phone_cont] fallback answers 500), so when the probe has no
       // answer a "+62…" query is guaranteed to die with `no Turboly match`
