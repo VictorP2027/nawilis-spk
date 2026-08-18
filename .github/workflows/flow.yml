@@ -26,6 +26,10 @@ on:
         description: 'Lewati pemasangan Chromium — HANYA jika semua job di antrean berjalan lewat HTTP (mis. pendaftaran customer). Salah pilih = job gagal permanen.'
         type: boolean
         default: false
+      enqueue:
+        description: 'Jalankan satu langkah untuk satu dokumen: "<spkId>:<aksi>", mis. 01ABC…:fill_inspections (untuk mengisi ulang daftar inspeksi Cek n Go). Kosongkan untuk hanya menguras antrean.'
+        type: string
+        default: ''
 
 # Turboly = ONE SESSION PER USER: share the pusher's concurrency group so the
 # flow worker NEVER runs in parallel with push.yml / sync (belt-and-braces on
@@ -159,7 +163,7 @@ jobs:
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           PUSH_MODE: rpa
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
-        run: node --import tsx apps/worker/src/flow-once.ts
+        run: node --import tsx apps/worker/src/flow-once.ts ${{ inputs.enqueue && format('--enqueue={0}', inputs.enqueue) || '' }}
 
       # Skipped on a browser-free run: there is nothing to collect, and the
       # upload holds the turboly-push concurrency group open a few more seconds

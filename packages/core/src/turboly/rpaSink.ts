@@ -103,6 +103,8 @@ export class RpaSink implements ServiceOrderSink {
     let serviceOrderNo: string | null = null;
     let wasApproved = false;
     let inspectionsBefore = 0;
+    let missingServices = payload.serviceLines;
+    let missingParts = payload.sparepartLines;
     try {
       await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(1500);
@@ -126,9 +128,21 @@ export class RpaSink implements ServiceOrderSink {
       }
       serviceOrderNo = await this.captureDocNumber(page);
       wasApproved = /\bAPPROVED\b/.test(body) && !/\bPENDING APPROVAL\b/.test(body);
-      // 2. Already appended by a previous attempt that died before recording it.
-      if (body.includes(target.spkToken)) {
+      // 2. What of this document is ALREADY on the order? Judged line by line,
+      //    by SKU, not by the token alone: SRO/TA17/26080160 carried the token
+      //    in its notes while the General Check line it was supposed to bring
+      //    had been dropped, and a token-only test called that "already done".
+      const flat = body.replace(/\s+/g, ' ');
+      const present = (sku: string): boolean => Boolean(sku) && flat.includes(sku);
+      missingServices = payload.serviceLines.filter((l) => !present(l.expectedSku));
+      missingParts = payload.sparepartLines.filter((l) => !present(l.expectedSku));
+      if (!missingServices.length && !missingParts.length && body.includes(target.spkToken)) {
         return { ok: true, serviceOrderNo, alreadyAppended: true };
+      }
+      if (body.includes(target.spkToken) && (missingServices.length || missingParts.length)) {
+        // A half-finished merge: only what is missing gets added, so a retry
+        // can heal the order instead of duplicating what is already on it.
+        console.log(`  · gabungan sebelumnya belum lengkap — menambahkan ${missingServices.length + missingParts.length} baris yang hilang saja`);
       }
       // The order must still be editable. Turboly shows the Edit action only
       // while it is (draft/approved); a cancelled or closed order has none.
@@ -172,7 +186,7 @@ export class RpaSink implements ServiceOrderSink {
 
     // ── fill: rows are typed but NOTHING is saved yet ─────────────────────
     try {
-      await this.addLinesOnOpenForm(page, payload, target.spkToken);
+      await this.addLinesOnOpenForm(page, { ...payload, serviceLines: missingServices, sparepartLines: missingParts }, target.spkToken);
     } catch (e) {
       const c = await this.classifyFailure(e, payload.spkId);
       const retryable = c.failureClass === 'transient' || c.failureClass === 'auth' || c.failureClass === 'infra';
@@ -211,7 +225,11 @@ export class RpaSink implements ServiceOrderSink {
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
-    }, { extra: [payload.notes, ...this.notesExtra, `[${target.spkToken}]`].filter(Boolean).join('\n') }).catch(() => false);
+    }, {
+      extra: [payload.notes, ...this.notesExtra, (payload.notes ?? '').includes(target.spkToken) ? '' : `[${target.spkToken}]`]
+        .filter(Boolean)
+        .join('\n'),
+    }).catch(() => false);
     // ── the Check & Go's checklist, into the SAME form ────────────────────
     // VERIFIED by hand in the sandbox 2026-08-18 (SO 249192): the Inspections
     // tab of a DRAFT order offers "Add Category" and "Add Inspection", each row
@@ -368,6 +386,22 @@ export class RpaSink implements ServiceOrderSink {
       // order provably does not carry our token: nothing changed on it. A
       // separate order is what would have happened before this feature.
       return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'data', error: `Turboly menolak simpan gabungan: ${inlineErr}`, screenshotRef };
+    }
+    if (tokenSeen) {
+      // The token is not proof the LINES landed — that is the exact way
+      // SRO/TA17/26080160 went wrong. Re-read the order and demand the SKUs.
+      const after = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\s+/g, ' ');
+      const stillMissing = [...missingServices, ...missingParts].map((l) => l.expectedSku).filter((sku) => sku && !after.includes(sku));
+      if (stillMissing.length) {
+        return {
+          ok: false,
+          serviceOrderNo,
+          fallbackToCreate: false,
+          failureClass: 'structural',
+          error: `gabungan tersimpan tapi baris ${stillMissing.join(', ')} tidak terlihat di SO ${serviceOrderNo ?? soPath} — CEK MANUAL, jangan buat SO baru`,
+          screenshotRef,
+        };
+      }
     }
     if (!tokenSeen) {
       // Save was clicked and did not visibly fail, but the order does not show
@@ -1677,6 +1711,20 @@ export class RpaSink implements ServiceOrderSink {
       // is the belt to this pair of braces.
       const desc = line.description || line.serviceName;
       await this.setLastServiceRow(page, line.qty, markerToken ? `${desc} [${markerToken}]` : desc, line.priceIncTax);
+      // PROVE the picker took. A row whose service_product_id stayed empty is
+      // silently DISCARDED by Turboly while the save still reports success —
+      // this repo has been bitten by it before (SRO/PMLNP/26080101), and it is
+      // how a merged Check & Go landed on SRO/TA17/26080160 with its notes but
+      // WITHOUT its General Check line. Nothing is saved yet, so throwing here
+      // is free.
+      const productId = await page
+        .evaluate(() => {
+          const rows = Array.from(document.querySelectorAll('tr.additional-line-item-row'));
+          const el = rows[rows.length - 1]?.querySelector('input[name*="[service_product_id]"]') as HTMLInputElement | null;
+          return el?.value ?? '';
+        })
+        .catch(() => '');
+      if (!productId) throw new DataError(`baris jasa "${line.serviceName || line.expectedSku}" tidak menempel ke katalog Turboly (pilihan kosong) — tidak disimpan setengah jadi`);
     }
     const rowCount = await page.locator(rowSel).count();
     if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);

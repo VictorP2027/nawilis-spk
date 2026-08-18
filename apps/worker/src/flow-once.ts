@@ -1,6 +1,6 @@
 import {
   connect, close, collections, emit, getDb,
-  flowJobs, claimNextFlowJob, completeFlowJob, failFlowJob, ensureFlowIndexes,
+  flowJobs, claimNextFlowJob, completeFlowJob, failFlowJob, ensureFlowIndexes, enqueueFlowJob,
   updateFlow, clearFlowError, flowPatchAfter, effectiveFlow, isFlowAction, keluhanFromFindings,
   FLOW_JOB_MAX_ATTEMPTS, FLOW_PAYMENT_METHODS,
   type FlowActionType, type FlowJob, type FlowPaymentMethod, type FlowState, type SpkDoc,
@@ -490,7 +490,36 @@ async function claimJob(onlyId: string | undefined): Promise<FlowJob | null> {
 
 async function main(): Promise<void> {
   const onlyId = process.argv.find((a) => a.startsWith('--id='))?.slice(5);
+  /**
+   * Manual recovery lever: `--enqueue=<spkId>:<action>` queues one flow step and
+   * then runs it. The board is the normal way in, but a step can be needed for a
+   * document the board has no button for — above all `fill_inspections`, when a
+   * Check & Go's checklist did not reach Turboly and has to be re-sent from our
+   * own data. Driven from flow.yml's workflow_dispatch, so the credentials stay
+   * in CI and nobody has to hold them.
+   */
+  const enqueueArg = process.argv.find((a) => a.startsWith('--enqueue='))?.slice(10);
   await connect(config.mongoUri, config.mongoDb);
+  if (enqueueArg) {
+    const [spkId, actionRaw] = enqueueArg.split(':');
+    const action = (actionRaw ?? '').trim();
+    if (!spkId || !isFlowAction(action)) {
+      console.error(`flow-once: --enqueue butuh "<spkId>:<aksi>" dengan aksi yang dikenal (dapat: ${enqueueArg})`);
+      process.exitCode = 1;
+      await close();
+      return;
+    }
+    const doc = await collections.spk().findOne({ _id: spkId }, { projection: { _id: 1, docType: 1, 'turboly.serviceOrderUrl': 1, 'turboly.mergedInto': 1 } });
+    if (!doc) {
+      console.error(`flow-once: dokumen ${spkId} tidak ada`);
+      process.exitCode = 1;
+      await close();
+      return;
+    }
+    const target = doc.turboly?.serviceOrderUrl ?? doc.turboly?.mergedInto?.serviceOrderUrl ?? null;
+    const job = await enqueueFlowJob(spkId, action, {}, 'manual-dispatch');
+    console.log(`flow-once: antre ${action} untuk ${spkId} (job ${job._id}) → SO ${target ?? 'BELUM ADA'}`);
+  }
   // createIndexes is a full Atlas round trip paid on EVERY invocation (a */5
   // cron plus one dispatch per board click) and nothing below waits on it:
   // flow_jobs is small, so a missing ix_flow_queue costs the claim a scan, not

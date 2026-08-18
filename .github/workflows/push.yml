@@ -22,6 +22,10 @@ on:
         description: 'Upload RPA screenshots on failure (contains customer PII — public repo)'
         type: boolean
         default: false       # + a manual "Run workflow" button
+      repair_merge_id:
+        description: 'Perbaiki SATU gabungan yang setengah jadi: isi spkId dokumen yang sudah digabung (mis. Cek n Go). Menambahkan HANYA baris yang belum ada di SO-nya + daftar inspeksi. Kosongkan untuk push biasa.'
+        type: string
+        default: ''
 
 # Never let two pushes overlap (belt-and-braces on top of the DB lease/CAS).
 concurrency:
@@ -143,7 +147,12 @@ jobs:
           MERGE_INTO_CHECKGO_SO: 'false'
           MERGE_WINDOW_HOURS: '24'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
-        run: node --import tsx apps/worker/src/push-once.ts
+        run: |
+          if [ -n "${{ inputs.repair_merge_id }}" ]; then
+            node --import tsx apps/worker/src/merge-repair.ts --id="${{ inputs.repair_merge_id }}"
+          else
+            node --import tsx apps/worker/src/push-once.ts
+          fi
 
       # PUBLIC REPO: these are full-page shots of Turboly forms holding a real
       # customer's name, phone and home address, and an artifact on a public
