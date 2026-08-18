@@ -674,6 +674,41 @@ async function main(): Promise<void> {
     config.mergeIntoCheckGo = true;
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  section('X. Production shape: SPK, then a Cek n Go with a full 23-row checklist');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // exactly as shipped
+    const spk = await pushOne(await queuedSpk('B2129UYM'), stub);
+    const cgId = await queuedCheckGo('B2129UYM');
+    // The real intake writes ~20-31 rows; SRO/TA17/26080160 carried 23.
+    const items = Array.from({ length: 23 }, (_, i) => ({
+      item: `${i + 1}. Item periksa`,
+      hasil: i % 3 === 0 ? 'Bagus' : null,
+      catatan: i % 3 === 0 ? null : 'perlu perhatian',
+      feedback: null,
+      inspected: true,
+    }));
+    await collections.spk().updateOne({ _id: cgId }, { $set: { 'checkGo.inspectionItems': items } });
+
+    const log: string[] = [];
+    const cg = await pushOne(cgId, stub, log);
+    ok(stub.created.length === 1, 'ONE Service Order for the car — the SPK\'s');
+    ok(cg.turboly.mergedInto?.spkId === spk._id && cg.state === 'confirmed', 'the Cek n Go joined it and confirmed');
+
+    const sent = stub.appends.at(-1)!;
+    ok(sent.target.inspections?.rows.length === 23, `all 23 checklist rows went to the form (got ${sent.target.inspections?.rows.length ?? 0})`);
+    ok(sent.payload.serviceLines.some((l) => l.expectedSku === 'JASA-SPOOR' || l.expectedSku), 'the General Check line rides along with them');
+    ok(sent.target.inspections?.rows.every((r) => r.description && r.notes), 'every row carries a description and a finding — no blank lines in the ERP');
+
+    const after = (await collections.spk().findOne({ _id: cgId }))!;
+    ok(!!after.checkGo?.inspectionsFilledAt, 'the document records the checklist as written');
+    ok(!after.checkGo?.inspectionError, 'and no error was recorded');
+    ok(!log.some((l) => /jalur HTTP/.test(l)), 'the HTTP writer — the one Turboly refused on a merged order — was NOT used');
+    ok(log.some((l) => /inspection list terisi \(23 baris\) lewat form gabungan/.test(l)), 'the log says 23 rows went in with the merge');
+    config.mergeIntoCheckGo = true;
+  }
+
   await close();
   await mongod.stop();
   console.log(`\n${passed} passed, ${failed} failed`);
