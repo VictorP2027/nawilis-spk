@@ -531,10 +531,11 @@ async function main(): Promise<void> {
     const stub = new StubSink();
     const cg = await pushOne(await queuedCheckGo('B9107AB'), stub);
     await collections.spk().updateOne({ _id: cg._id }, { $set: { 'flow.wo': 'created', 'flow.workOrderNo': 'WO/BKS/26080009' } });
-    stub.appendResult = { ok: true, serviceOrderNo: cg.turboly.serviceOrderNo, notesCarried: false, approvalReset: true };
+    stub.appendResult = { ok: true, serviceOrderNo: cg.turboly.serviceOrderNo, notesCarried: false, approvalReset: true, inspectionsLost: true };
     const spk = await pushOne(await queuedSpk('B9107AB'), stub);
     const w = spk.turboly.mergedInto?.warnings ?? [];
-    ok(w.length === 3, `all three warnings stored on the doc (got ${w.length})`);
+    ok(w.length === 4, `all four warnings stored on the doc (got ${w.length})`);
+    ok(w.some((x) => /daftar inspeksi/.test(x)), 'a shrunken inspection list is reported (the Check & Go checklist is re-fillable from our own data)');
     ok(w.some((x) => /Work Order WO\/BKS\/26080009/.test(x)), 'WO already made → add the lines there too');
     ok(w.some((x) => /[Cc]atatan SPK/.test(x)), 'notes could not be carried');
     ok(w.some((x) => /PENDING APPROVAL/.test(x)), 'the order needs approving again (VERIFIED in sandbox 2026-08-18)');

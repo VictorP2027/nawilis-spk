@@ -102,6 +102,7 @@ export class RpaSink implements ServiceOrderSink {
     // ── pre-flight on the DETAIL page: nothing typed until all of it passes ──
     let serviceOrderNo: string | null = null;
     let wasApproved = false;
+    let inspectionsBefore = 0;
     try {
       await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(1500);
@@ -145,6 +146,17 @@ export class RpaSink implements ServiceOrderSink {
         return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'data', error: `form edit SO tidak terbuka (${page.url()})` };
       }
       // The pane and its add-links must be there before a single row is added.
+      // The Check & Go's INSPECTION LIST lives on this very form (Rails nested
+      // attributes: service_order[service_order_inspection_lines_attributes]),
+      // in the hidden Inspections pane — the same list the Check & Go push
+      // fills via httpInspection. We never write those fields, and the browser
+      // resubmits them unchanged, so they survive. Counted anyway: it is the
+      // customer's inspection record, and "it should survive" is not the same
+      // as knowing it did.
+      inspectionsBefore = await page
+        .locator('[name*="service_order_inspection_lines_attributes"][name$="[id]"]')
+        .evaluateAll((els) => els.filter((e) => (e as HTMLInputElement).value !== '').length)
+        .catch(() => 0);
       const addSvc = await page.locator('a.btn-add-item', { hasText: /add service item/i }).count().catch(() => 0);
       if (addSvc === 0) {
         return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'structural', error: 'form edit SO tidak menampilkan "Add Service Item" — struktur Turboly berbeda dari yang diverifikasi; dibuat SO terpisah' };
@@ -284,7 +296,24 @@ export class RpaSink implements ServiceOrderSink {
     // (PUSH_APPROVE=false), so this is the exception, not the rule; when it
     // does happen somebody has to press Approve, and only this method can see it.
     const approvalReset = wasApproved && /PENDING\s*APPROVAL/i.test(((await page.textContent('body').catch(() => '')) ?? '').toUpperCase());
-    return { ok: true, serviceOrderNo, screenshotRef, notesCarried: notesCarried || !payload.notes, approvalReset };
+    // Re-count the inspection list. Only when the order had one — most Check &
+    // Go orders do — and never fatal: the lines are in, and a lost inspection
+    // list is re-fillable from Mongo, which still holds every checklist row.
+    let inspectionsLost = false;
+    if (inspectionsBefore > 0) {
+      try {
+        await page.goto(`${detailUrl}/edit`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(1200);
+        const after = await page
+          .locator('[name*="service_order_inspection_lines_attributes"][name$="[id]"]')
+          .evaluateAll((els) => els.filter((e) => (e as HTMLInputElement).value !== '').length)
+          .catch(() => inspectionsBefore);
+        inspectionsLost = after < inspectionsBefore;
+      } catch {
+        /* the append is already proven; a failed re-read proves nothing either way */
+      }
+    }
+    return { ok: true, serviceOrderNo, screenshotRef, notesCarried: notesCarried || !payload.notes, approvalReset, inspectionsLost };
   }
 
   /**

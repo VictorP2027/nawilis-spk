@@ -147,6 +147,8 @@ export interface AppendResult {
   notesCarried?: boolean;
   /** The order was APPROVED and the edit sent it back to PENDING APPROVAL — a human must re-approve. */
   approvalReset?: boolean;
+  /** The Check & Go's inspection list had rows before the append and fewer after — never expected; re-fill from Mongo. */
+  inspectionsLost?: boolean;
 }
 
 export interface ServiceOrderSink {

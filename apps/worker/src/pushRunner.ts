@@ -463,6 +463,9 @@ export async function pushQueued(
                 ap.approvalReset === true
                   ? 'SO Check & Go tadinya APPROVED; setelah ditambah baris Turboly mengembalikannya ke PENDING APPROVAL — minta approval ulang.'
                   : null,
+                ap.inspectionsLost === true
+                  ? 'PERIKSA: daftar inspeksi Check & Go di SO berkurang setelah baris SPK ditambahkan. Isi ulang dari kartu Check & Go (checklist lengkap masih tersimpan di sistem kita).'
+                  : null,
               ].filter((x): x is string => Boolean(x));
               const merged = {
                 ...claimed.turboly,
