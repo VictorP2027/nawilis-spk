@@ -164,6 +164,7 @@ async function main(): Promise<void> {
     const rows = (check?.lineSkus ?? []).join(' | ');
     const hasSpkLine = rows.includes(SPK_SKU);
     const hasCheckLine = rows.includes(CHECKGO_SKU);
+    if (!rows) log('     (peringatan: baris tidak terbaca — periksa SO-nya sendiri di tautan di atas)');
     log(`4/4 SO ${spk?.turboly?.serviceOrderNo ?? '?'} → ${soUrl}`);
     log(`     baris: ${rows.slice(0, 300) || '(tidak terbaca)'}`);
     log(`     token Cek n Go terbaca: ${check?.found ? 'ya' : 'TIDAK'}`);

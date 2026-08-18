@@ -1881,12 +1881,20 @@ export class RpaSink implements ServiceOrderSink {
     }).catch(() => null);
     const savedNo = await this.captureDocNumber(page);
 
+    /**
+     * The ITEM tables, addressed by their panes.
+     *
+     * This used to take `table` `.last()`, which on a real Service Order page is
+     * whatever table happens to sit lowest in the DOM — the sandbox acceptance
+     * run read back "2019 2020 2021 … 2030", a YEAR dropdown, as its line items.
+     * Nothing decides anything on this list (the confirm test is the token), but
+     * a read-back that records a year list as the order's contents is worse than
+     * useless when someone is trying to work out what went wrong.
+     */
     const lineSkus = await page
-      .locator('table')
-      .last()
-      .locator('tbody tr')
+      .locator('#item-details tbody tr, #additional-item-details tbody tr')
       .allTextContents()
-      .then((rows) => rows.map((r) => r.trim()).filter(Boolean))
+      .then((rows) => rows.map((r) => r.replace(/\s+/g, ' ').trim()).filter(Boolean))
       .catch(() => [] as string[]);
 
     return {
