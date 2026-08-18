@@ -1,0 +1,136 @@
+name: e2e-merge-sandbox
+
+# MANUAL ONLY. Drives the real worker against the Turboly SANDBOX to prove
+# "one car, one SRO" end to end: an SPK creates the order, a Check & Go for the
+# same car merges into it with its line AND its inspection list.
+#
+# Never touches live: the script refuses any TURBOLY_BASE_URL without "sandbox"
+# and any run against the production database name. It still takes the shared
+# `turboly-push` concurrency group, because Turboly allows ONE SESSION PER USER
+# and a sandbox login would otherwise kick a live push out mid-order.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Kode cabang (harus ada di data/turboly-sandbox-stores.json)'
+        type: string
+        default: 'NWL-BKS'
+      advisor:
+        description: 'Nama service advisor di sandbox'
+        type: string
+        default: 'MARCEL ZAKARIA'
+
+concurrency:
+  group: turboly-push
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        id: node
+        with:
+          node-version: '22'
+          # Deliberately no `cache: npm`. That caches ~/.npm (the tarballs), which
+          # is ~250MB to restore and only ever speeds up `npm ci` — and the
+          # node_modules cache below skips `npm ci` outright on the common path.
+
+      # The browser cache must track the browser, not unrelated lockfile churn:
+      # keyed on package-lock.json it was thrown away by every dependency bump,
+      # buying a fresh ~130MB Chromium download for a change to, say, zod.
+      - name: Resolve Playwright version
+        id: pw
+        run: |
+          v="$(node -p "require('./package-lock.json').packages['node_modules/playwright']?.version || ''" 2>/dev/null || true)"
+          # Fall back to the old whole-lockfile key rather than failing the run:
+          # a stale key here would silently pair a cached browser with a
+          # different Playwright build, which fails at launch.
+          [ -n "$v" ] || v="lock-$(sha256sum package-lock.json | cut -c1-16)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # 588MB / ~15k files, and 277MB of it is next + @next, which no workflow
+      # runs. Restoring the tree beats rebuilding it: `npm ci` wipes node_modules
+      # first, so there are deliberately no restore-keys — a partial hit would be
+      # downloaded and then deleted. Same key as flow/sync/monitor, one entry.
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+            tools/*/node_modules
+          key: v1-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        env:
+          # mongodb-memory-server's postinstall downloads a ~100MB mongod binary.
+          # It is a root devDependency used only by tests/e2e.mts and local dev —
+          # no workflow starts an in-memory Mongo, so this was pure download on
+          # every run. NOT --omit=dev: tsx and typescript are devDependencies and
+          # every worker step runs through them.
+          MONGOMS_DISABLE_POSTINSTALL: '1'
+        run: npm ci
+
+      # @spk/core's package.json exports point at dist/, so tsx cannot skip this
+      # build — but 10.7k lines of TypeScript recompile identically whenever the
+      # sources have not changed. The key covers sources, both tsconfigs and the
+      # lockfile (the TypeScript version), so a hit can never be stale.
+      - name: Cache built core
+        id: core-dist
+        uses: actions/cache@v4
+        with:
+          path: packages/core/dist
+          key: v1-core-dist-${{ runner.os }}-${{ hashFiles('packages/core/src/**', 'packages/core/tsconfig.json', 'tsconfig.base.json', 'package-lock.json') }}
+
+      - name: Build core
+        if: steps.core-dist.outputs.cache-hit != 'true'
+        run: npm run build -w @spk/core
+
+      - name: Cache Chromium
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: v1-playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Chromium (for Playwright RPA)
+        env:
+          CACHE_HIT: ${{ steps.pw-cache.outputs.cache-hit }}
+        run: |
+          # --with-deps is an apt-get update + install on every run and is never
+          # cached, yet the hosted ubuntu image already carries Chromium's libs;
+          # it is worth paying only when we are downloading the browser anyway.
+          # The cache-hit branch is not a no-op: it re-verifies the restored
+          # binary, so a truncated cache entry self-heals instead of failing at
+          # launch inside the Turboly session.
+          if [ "$CACHE_HIT" = 'true' ]; then
+            npx playwright install chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Sandbox acceptance — one car, one SRO
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          # NOT the production database: the run seeds its own catalogue and
+          # writes its own test documents.
+          MONGODB_DB: spk_e2e_merge
+          TURBOLY_BASE_URL: https://sandbox.turboly.com
+          TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
+          TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
+          PUSH_MODE: rpa
+          PUSH_APPROVE: 'false'
+          MERGE_CHECKGO_INTO_SPK: 'true'
+          MERGE_INTO_CHECKGO_SO: 'false'
+          MERGE_WINDOW_HOURS: '24'
+          PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
+        run: |
+          node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
+            --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}"

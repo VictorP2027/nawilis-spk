@@ -344,6 +344,10 @@ export interface CheckGoReport {
 }
 
 export interface CheckGo {
+  /** When the checklist reached the Service Order's Inspections tab (ours or the order it merged into). */
+  inspectionsFilledAt?: string | null;
+  /** Why it did not, if it did not — so a missing list is visible instead of living only in a CI log. */
+  inspectionError?: string | null;
   harga: number;
   inspectionItems: CheckGoInspectionItem[];
   /** null when the checklist was left blank — see CheckGoReport. */
