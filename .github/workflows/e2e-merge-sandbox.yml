@@ -19,6 +19,10 @@ on:
         description: 'Nama service advisor di sandbox'
         type: string
         default: 'MARCEL ZAKARIA'
+      phone:
+        description: 'Nomor customer. Isi nomor kantor (mis. +622155512345) untuk menguji apakah Turboly menerima nomor kantor untuk customer BARU.'
+        type: string
+        default: ''
 
 concurrency:
   group: turboly-push
@@ -133,4 +137,5 @@ jobs:
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
         run: |
           node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
-            --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}"
+            --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}" \
+            ${{ inputs.phone && format('--phone={0}', inputs.phone) || '' }}

@@ -36,6 +36,12 @@ const PART_SKU = arg('part-sku') ?? 'BAN-HAN-16513LV01';
 const CHECKGO_SKU = 'JAS-NAWJAS-GC';
 const digits = String(Date.now()).slice(-4);
 const PLATE = arg('plate') ?? `B${digits}UJI`;
+/**
+ * The customer's number. Defaults to a mobile; pass an office number
+ * (--phone=+6221…) to prove Turboly accepts a landline for a NEW customer —
+ * the forms accept them, and a fleet contact often has nothing else.
+ */
+const PHONE = arg('phone') ?? `+62812${digits}${digits}`;
 
 const log = (m: string): void => console.log(`[e2e-merge ${TAG}] ${m}`);
 const fail = (m: string): never => {
@@ -100,7 +106,7 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
     spkNumber: `E2E-${TAG}-${kind}`,
     qrPayload: null,
     capturedAt: now,
-    customer: { nama: `UJI GABUNG ${TAG}`, wa: `+62812${digits}${digits}`, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
+    customer: { nama: `UJI GABUNG ${TAG}`, wa: PHONE, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
     vehicle: { noPolisi: PLATE, merk: 'Toyota', tipe: 'Avanza', tahun: 2021, warna: 'Silver', km: '31000', createMakeConfirmed: false },
     complaint: kind === 'SPK' ? 'bunyi roda depan' : 'cek rutin',
     jobLines:
@@ -149,7 +155,7 @@ async function main(): Promise<void> {
   if (!/sandbox/i.test(config.turbolyBaseUrl)) fail(`ini HANYA untuk sandbox — TURBOLY_BASE_URL=${config.turbolyBaseUrl}`);
   if (config.mongoDb === 'spk') fail('pakai database terpisah (MONGODB_DB=spk_e2e_merge), jangan database produksi');
   await connect(config.mongoUri, config.mongoDb);
-  log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE}`);
+  log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE} telp=${PHONE}`);
   try {
     await seedMirror();
     log('1/4 katalog sandbox siap');
