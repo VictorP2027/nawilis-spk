@@ -521,10 +521,18 @@ export async function pushQueued(
             continue;
           }
           if (decision.target) {
+            // A Check & Go brings its checklist with it: typed into the same
+            // form as its line, in one save. The HTTP writer stays as the
+            // fallback — it is what a re-fill from the board uses.
+            const cgItems = (claimed as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null; feedback?: string | null; inspected?: boolean }> } }).checkGo?.inspectionItems ?? [];
             const target: AppendTarget = {
               serviceOrderUrl: decision.target.serviceOrderUrl,
               expectedPlate: (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, ''),
               spkToken: claimed.push.correlationToken,
+              inspections:
+                isCheckGoDoc && cgItems.length
+                  ? { category: 'NAWILIS CHECK & GO', rows: inspectionRowsFromCheckGo(cgItems) }
+                  : null,
             };
             const ap = await branchSinks.withSink(claimed.branchCode, (sink) =>
               sink.appendLinesToServiceOrder
@@ -557,7 +565,7 @@ export async function pushQueued(
               await transition(doc._id, 'pushing', 'pushed', { turboly: merged, push: { ...claimed.push, mergeHoldSince: null } });
               await collections.spk().updateOne({ _id: decision.target.spkId }, { $addToSet: { 'checkGo.mergedSpkIds': doc._id } }).catch(() => {});
               out.pushed++;
-              log(`✓ ${doc._id} → digabung ke SO ${merged.serviceOrderNo ?? '?'} milik Check & Go ${decision.target.spkId}${ap.alreadyAppended ? ' (sudah ada dari percobaan sebelumnya — diadopsi)' : ''}`);
+              log(`✓ ${doc._id} → digabung ke SO ${merged.serviceOrderNo ?? '?'} milik ${isCheckGoDoc ? 'SPK' : 'Check & Go'} ${decision.target.spkId}${ap.alreadyAppended ? ' (sudah ada dari percobaan sebelumnya — diadopsi)' : ''}`);
               for (const w of warnings) log(`  ⚠ ${w}`);
               // Read-back on the Check & Go's order: our token must be visible there.
               const v = await branchSinks
@@ -568,15 +576,22 @@ export async function pushQueued(
                   turboly: { ...merged, serviceOrderNo: v.serviceOrderNo ?? merged.serviceOrderNo, readback: { matchedOn: ['reference_token', 'merged_into_checkgo'], lineCount: v.lineCount, lineSkus: v.lineSkus, km: v.km } },
                 });
                 out.confirmed++;
-                log(`  ✓ verified on Check & Go order → confirmed`);
+                log(`  ✓ verified on ${isCheckGoDoc ? 'SPK' : 'Check & Go'} order → confirmed`);
               } else {
                 log(`  ⚠ not verified (left in 'pushed')`);
               }
-              // A Check & Go that joined the SPK's order still owes that order
-              // its inspection list — the whole point of a Cek n Go, and the
-              // thing Turboly prints. It goes to the TARGET order, not to one
-              // this document never created.
-              await fillInspectionsFor(claimed, decision.target.serviceOrderUrl, log);
+              // The checklist: written in the same save when the form allowed
+              // it, otherwise through the HTTP writer as a fallback.
+              if (typeof ap.inspectionsWritten === 'number' && ap.inspectionsWritten > 0) {
+                await collections
+                  .spk()
+                  .updateOne({ _id: doc._id }, { $set: { 'checkGo.inspectionsFilledAt': new Date().toISOString() }, $unset: { 'checkGo.inspectionError': '' } })
+                  .catch(() => {});
+                log(`  ✓ inspection list terisi (${ap.inspectionsWritten} baris) lewat form gabungan`);
+              } else if (isCheckGoDoc && cgItems.length) {
+                log(`  · form gabungan tidak bisa menerima daftar inspeksi — dicoba lewat jalur HTTP`);
+                await fillInspectionsFor(claimed, decision.target.serviceOrderUrl, log);
+              }
               continue;
             }
             // Append did not happen cleanly.

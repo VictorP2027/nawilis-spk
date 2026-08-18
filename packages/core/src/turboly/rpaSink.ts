@@ -153,6 +153,7 @@ export class RpaSink implements ServiceOrderSink {
       // resubmits them unchanged, so they survive. Counted anyway: it is the
       // customer's inspection record, and "it should survive" is not the same
       // as knowing it did.
+      // counted on the DETAIL/edit form BEFORE anything is typed
       inspectionsBefore = await page
         .locator('[name*="service_order_inspection_lines_attributes"][name$="[id]"]')
         .evaluateAll((els) => els.filter((e) => (e as HTMLInputElement).value !== '').length)
@@ -211,6 +212,76 @@ export class RpaSink implements ServiceOrderSink {
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }, { extra: [payload.notes, ...this.notesExtra, `[${target.spkToken}]`].filter(Boolean).join('\n') }).catch(() => false);
+    // ── the Check & Go's checklist, into the SAME form ────────────────────
+    // VERIFIED by hand in the sandbox 2026-08-18 (SO 249192): the Inspections
+    // tab of a DRAFT order offers "Add Category" and "Add Inspection", each row
+    // being description / notes / inspected with the category carried on a
+    // hidden field. Typing it here means ONE save for lines + checklist, no
+    // second login (Turboly allows one session per user), and no re-submission
+    // of the whole order — which is exactly what Turboly refused on the first
+    // merged order in production.
+    let inspectionsWritten: number | null = null;
+    const wanted = target.inspections?.rows ?? [];
+    if (wanted.length) {
+      try {
+        // Tag-agnostic on purpose: these three controls were confirmed present
+        // in the sandbox but not confirmed to be <a> rather than <button>, and
+        // getByRole('link') would simply never match a button — the checklist
+        // would go missing quietly, which is the bug this whole change fixes.
+        await page.locator('.nav-tabs a, .nav-tabs button').filter({ hasText: /^\s*inspections\s*$/i }).first().click({ timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(600);
+        const addCategory = page.locator('a, button').filter({ hasText: /add category/i }).first();
+        const canEditInspections = await addCategory.isVisible().catch(() => false);
+        if (!canEditInspections) {
+          // No inspection editor: the order is past DRAFT. Leave it to the
+          // caller — it still has the HTTP path and the board's re-fill action.
+          inspectionsWritten = null;
+        } else {
+          await addCategory.click({ timeout: 8000 });
+          await page.waitForTimeout(500);
+          await page.locator('input[name="inspection-category"], input[placeholder*="Category" i]').last().fill(target.inspections!.category).catch(() => {});
+          const addRow = page.locator('a, button').filter({ hasText: /add inspection/i }).last();
+          for (let i = 0; i < wanted.length; i++) {
+            await addRow.click({ timeout: 8000 });
+            await page.waitForTimeout(120);
+          }
+          await page.waitForTimeout(500);
+          inspectionsWritten = await page.evaluate((rows) => {
+            const keyOf = (n: string): string => (/\[([^\]]+)\]\[\w+\]$/.exec(n) ?? [])[1] ?? '';
+            const all = Array.from(document.querySelectorAll('[name*="service_order_inspection_lines_attributes"]')) as HTMLInputElement[];
+            const keys = [...new Set(all.map((e) => keyOf(e.name)).filter(Boolean))];
+            // Fill the LAST n rows — the ones just added; anything already on
+            // the order stays untouched.
+            const mine = keys.slice(-rows.length);
+            const fire = (el: HTMLInputElement | null, v: string): void => {
+              if (!el) return;
+              el.value = v;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            };
+            let n = 0;
+            mine.forEach((k, i) => {
+              const row = rows[i];
+              if (!row) return;
+              fire(document.querySelector(`[name$="[${k}][description]"]`), row.description);
+              fire(document.querySelector(`[name$="[${k}][notes]"]`), row.notes);
+              const c = document.querySelector(`[name$="[${k}][inspected]"]`) as HTMLInputElement | null;
+              if (c && c.type === 'checkbox' && c.checked !== row.inspected) {
+                c.checked = row.inspected;
+                c.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+              n += 1;
+            });
+            return n;
+          }, wanted.map((r) => ({ description: r.description.slice(0, 250), notes: r.notes.slice(0, 250), inspected: r.inspected })));
+        }
+      } catch {
+        // The lines matter more than the checklist, and the checklist is still
+        // safe in our own database: never let it stop the save.
+        inspectionsWritten = null;
+      }
+    }
+
     // Not fatal when it did not fit — the lines are the order; the notes were a
     // courtesy. Reported on the result so the runner can say so in its log.
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-append-presave`);
@@ -336,7 +407,7 @@ export class RpaSink implements ServiceOrderSink {
         /* the append is already proven; a failed re-read proves nothing either way */
       }
     }
-    return { ok: true, serviceOrderNo, screenshotRef, notesCarried: notesCarried || !payload.notes, approvalReset, inspectionsLost };
+    return { ok: true, serviceOrderNo, screenshotRef, notesCarried: notesCarried || !payload.notes, approvalReset, inspectionsLost, inspectionsWritten };
   }
 
   /**

@@ -72,7 +72,13 @@ class StubSink implements ServiceOrderSink {
   }
   async appendLinesToServiceOrder(target: AppendTarget, payload: TurbolyServiceOrderPayload, _ctx: PushContext): Promise<AppendResult> {
     this.appends.push({ target, payload });
-    const r = this.appendResult ?? { ok: true, serviceOrderNo: `SRO/BKS/${/(\d+)$/.exec(target.serviceOrderUrl)?.[1]}` };
+    const typed = target.inspections?.rows.length ?? 0;
+    const r = this.appendResult ?? {
+      ok: true,
+      serviceOrderNo: `SRO/BKS/${/(\d+)$/.exec(target.serviceOrderUrl)?.[1]}`,
+      // the real form takes the checklist in the same save (sandbox-verified)
+      ...(typed ? { inspectionsWritten: typed } : {}),
+    };
     if (r.ok) this.tokensOn.get(target.serviceOrderUrl)?.add(target.spkToken);
     return r;
   }
@@ -607,13 +613,28 @@ async function main(): Promise<void> {
     const log: string[] = [];
     const cg = await pushOne(cgId, stub, log);
     ok(cg.turboly.mergedInto?.serviceOrderUrl === spk.turboly.serviceOrderUrl, 'joined the SPK order');
-    // The stub Turboly has no HTTP inspection endpoint, so the fill fails — and
-    // that failure must be RECORDED on the doc, not swallowed into a log line.
+    // The checklist rides along in the SAME save as the line. The old route —
+    // a second HTTP round trip that re-submits the whole order — is what
+    // Turboly refused on the first merged order in production (HTTP 200).
+    const sent = stub.appends.at(-1)!.target.inspections;
+    ok(sent?.rows.length === 2, `both checklist rows were handed to the form (got ${sent?.rows.length ?? 0})`);
+    ok(sent?.category === 'NAWILIS CHECK & GO', 'under the Check & Go category');
+    ok(sent?.rows[0]?.description === '1. Oli Mesin' && /Kotor/.test(sent?.rows[0]?.notes ?? ''), 'item → Description, finding → Feedback');
     const after = (await collections.spk().findOne({ _id: cgId }))!;
-    const filled = after.checkGo?.inspectionsFilledAt ?? null;
-    const errored = after.checkGo?.inspectionError ?? null;
-    ok(Boolean(filled || errored), 'the inspection-list attempt leaves a trace on the document (filled or error)');
-    ok(log.some((l) => /inspection list/i.test(l)), 'and the runner says what happened to the list');
+    ok(!!after.checkGo?.inspectionsFilledAt, 'the document records that the list was written');
+    ok(log.some((l) => /inspection list terisi .*form gabungan/.test(l)), 'and the runner says it went in with the merge');
+
+    // When the form cannot take it (order past DRAFT), the HTTP writer is tried.
+    const stub2 = new StubSink();
+    const spk2 = await pushOne(await queuedSpk('B9203CD'), stub2);
+    const cg2Id = await queuedCheckGo('B9203CD');
+    await collections.spk().updateOne({ _id: cg2Id }, { $set: { 'checkGo.inspectionItems': [{ item: 'Aki', hasil: null, catatan: 'Lemah', feedback: null, inspected: true }] } });
+    stub2.appendResult = { ok: true, serviceOrderNo: spk2.turboly.serviceOrderNo, inspectionsWritten: null };
+    const log2: string[] = [];
+    await pushOne(cg2Id, stub2, log2);
+    ok(log2.some((l) => /jalur HTTP/.test(l)), 'falls back to the HTTP writer when the form will not take the list');
+    const c2 = (await collections.spk().findOne({ _id: cg2Id }))!;
+    ok(Boolean(c2.checkGo?.inspectionsFilledAt || c2.checkGo?.inspectionError), 'and the outcome is recorded either way');
     config.mergeIntoCheckGo = true;
   }
 

@@ -107,6 +107,12 @@ export interface VerifyResult {
  * Check & Go Service Order (Jane, Turboly, 2026-08-18: "if same car then
  * should be 1 SRO").
  */
+/** One Check & Go checklist row, as it appears in the Service Order's Inspections tab. */
+export interface AppendInspection {
+  category: string;
+  rows: Array<{ description: string; notes: string; inspected: boolean }>;
+}
+
 export interface AppendTarget {
   /** Absolute URL of the Check & Go's SO detail page. */
   serviceOrderUrl: string;
@@ -118,6 +124,14 @@ export interface AppendTarget {
    * retry able to see "already appended" instead of appending twice.
    */
   spkToken: string;
+  /**
+   * The Check & Go's checklist, to be typed into the SAME edit form as the
+   * lines. Writing it here — rather than through a second, HTTP round trip that
+   * re-serialises and re-submits the whole order — is what keeps a merged order
+   * from being refused: that re-submission works on a small order and was
+   * rejected (HTTP 200, no error block) on a merged one carrying 15 line items.
+   */
+  inspections?: AppendInspection | null;
 }
 
 export interface AppendResult {
@@ -149,6 +163,8 @@ export interface AppendResult {
   approvalReset?: boolean;
   /** The Check & Go's inspection list had rows before the append and fewer after — never expected; re-fill from Mongo. */
   inspectionsLost?: boolean;
+  /** The checklist was typed into the order's Inspections tab (so no HTTP re-fill is needed). */
+  inspectionsWritten?: number | null;
 }
 
 export interface ServiceOrderSink {
