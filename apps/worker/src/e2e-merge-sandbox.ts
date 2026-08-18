@@ -1,5 +1,5 @@
 import {
-  connect, close, collections, buildSpkDoc, loadMirror, resolveSkus, assignMechanic,
+  connect, close, collections, getDb, buildSpkDoc, loadMirror, resolveSkus, assignMechanic,
 } from '@spk/core';
 import { BranchSinks } from './sessions.js';
 import { pushQueued } from './pushRunner.js';
@@ -31,6 +31,8 @@ const BRANCH = arg('branch') ?? 'NWL-BKS';
 const TAG = (arg('tag') ?? String(Date.now()).slice(-5)).toUpperCase();
 const ADVISOR = arg('advisor') ?? 'MARCEL ZAKARIA';
 const SPK_SKU = arg('spk-sku') ?? 'GRS-NAW-SU';
+/** A goods SKU that exists in the sandbox catalogue (seen on SO 249185). */
+const PART_SKU = arg('part-sku') ?? 'BAN-HAN-16513LV01';
 const CHECKGO_SKU = 'JAS-NAWJAS-GC';
 const digits = String(Date.now()).slice(-4);
 const PLATE = arg('plate') ?? `B${digits}UJI`;
@@ -60,7 +62,17 @@ async function seedMirror(): Promise<void> {
       { upsert: true },
     );
   }
-  for (const [code, sku] of [['SPOORING', SPK_SKU], ['CHECKGO', CHECKGO_SKU]] as const) {
+  // Goods must be known as goods, or the payload would send the tyre as a
+  // service line and Turboly would refuse it.
+  await getDb()
+    .collection<{ _id: string; sku: string; syncedAt: string }>('tb_products')
+    .updateOne({ _id: PART_SKU }, { $set: { sku: PART_SKU, syncedAt: now } }, { upsert: true });
+  await collections.tbServiceProducts().updateOne(
+    { _id: PART_SKU },
+    { $set: { sku: PART_SKU, name: 'Hankook 165 R13 LV01', type: 'product', taxCode: 'PPN', price: 0, masterDurationMin: 0, storeCode: null, syncedAt: now } },
+    { upsert: true },
+  );
+  for (const [code, sku] of [['SPOORING', SPK_SKU], ['GANTI_BAN', PART_SKU], ['CHECKGO', CHECKGO_SKU]] as const) {
     await collections.serviceSkuMap().updateOne(
       { _id: `*:${code}` },
       { $set: { branchCode: null, serviceCode: code, sku, matchScore: 1, confirmed: true, updatedAt: now } },
@@ -91,11 +103,15 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
     customer: { nama: `UJI GABUNG ${TAG}`, wa: `+62812${digits}${digits}`, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
     vehicle: { noPolisi: PLATE, merk: 'Toyota', tipe: 'Avanza', tahun: 2021, warna: 'Silver', km: '31000', createMakeConfirmed: false },
     complaint: kind === 'SPK' ? 'bunyi roda depan' : 'cek rutin',
-    jobLines: [
+    jobLines:
       kind === 'SPK'
-        ? { serviceCode: 'SPOORING', ordered: true, qty: 1, keterangan: 'Spooring', quotedPrice: 350000 }
-        : { serviceCode: 'CHECKGO', ordered: true, qty: 1, keterangan: 'General Check', quotedPrice: 100000, chosenSku: CHECKGO_SKU },
-    ],
+        ? [
+            { serviceCode: 'SPOORING', ordered: true, qty: 1, keterangan: 'Spooring', quotedPrice: 350000 },
+            // The repair's goods. The whole question is whether these survive
+            // the Check & Go re-saving the same form.
+            { serviceCode: 'GANTI_BAN', ordered: true, qty: 2, keterangan: 'Ban depan', quotedPrice: 500000, chosenSku: PART_SKU },
+          ]
+        : [{ serviceCode: 'CHECKGO', ordered: true, qty: 1, keterangan: 'General Check', quotedPrice: 100000, chosenSku: CHECKGO_SKU }],
     conditionChecks: [],
     rekomendasiService: null,
     estimasiMinutes: 60,
@@ -169,7 +185,10 @@ async function main(): Promise<void> {
     log(`     baris: ${rows.slice(0, 300) || '(tidak terbaca)'}`);
     log(`     token Cek n Go terbaca: ${check?.found ? 'ya' : 'TIDAK'}`);
     log(`     daftar inspeksi tercatat: ${cg?.checkGo?.inspectionsFilledAt ? 'ya' : `TIDAK (${cg?.checkGo?.inspectionError ?? 'tanpa pesan'})`}`);
+    const hasPartLine = rows.includes(PART_SKU);
+    log(`     sparepart SPK masih ada: ${hasPartLine ? 'ya' : 'TIDAK'}`);
     if (!hasSpkLine) fail(`baris SPK (${SPK_SKU}) tidak ada di SO`);
+    if (!hasPartLine) fail(`SPAREPART SPK (${PART_SKU}) HILANG setelah Cek n Go digabung — inilah yang tidak boleh terjadi`);
     if (!hasCheckLine) fail(`baris General Check (${CHECKGO_SKU}) tidak ada di SO — persis kegagalan SRO/TA17/26080160`);
     if (!cg?.checkGo?.inspectionsFilledAt) fail('daftar inspeksi tidak terisi');
     console.log(`\n✓ LULUS — satu SRO berisi kedua baris + daftar inspeksi: ${soUrl}\n`);

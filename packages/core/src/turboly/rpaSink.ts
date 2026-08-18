@@ -105,6 +105,7 @@ export class RpaSink implements ServiceOrderSink {
     let inspectionsBefore = 0;
     let missingServices = payload.serviceLines;
     let missingParts = payload.sparepartLines;
+    let linesBefore = 0;
     try {
       await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(1500);
@@ -167,6 +168,11 @@ export class RpaSink implements ServiceOrderSink {
       // resubmits them unchanged, so they survive. Counted anyway: it is the
       // customer's inspection record, and "it should survive" is not the same
       // as knowing it did.
+      // How many lines does this order already carry? The merge re-saves the
+      // whole edit form, so the lines that were there BEFORE — a repair
+      // order's spareparts and labour — have to still be there after. Nothing
+      // else in this method would notice if they were not.
+      linesBefore = await this.countOrderLines(page);
       // counted on the DETAIL/edit form BEFORE anything is typed
       inspectionsBefore = await page
         .locator('[name*="service_order_inspection_lines_attributes"][name$="[id]"]')
@@ -369,6 +375,7 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     // ── prove it: fresh read of the detail page must now carry the token ────
+    let linesKept: { before: number; after: number } | null = null;
     let tokenSeen = false;
     for (let i = 0; i < 3 && !tokenSeen; i++) {
       try {
@@ -391,6 +398,22 @@ export class RpaSink implements ServiceOrderSink {
       // The token is not proof the LINES landed — that is the exact way
       // SRO/TA17/26080160 went wrong. Re-read the order and demand the SKUs.
       const after = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\s+/g, ' ');
+      const linesAfter = await this.countOrderLines(page);
+      if (linesBefore > 0 && linesAfter < linesBefore) {
+        // The order came back with FEWER lines than it had. Nothing in this
+        // method removes a line, so this is Turboly dropping rows on save —
+        // the same silent discard that lost a General Check line, but this time
+        // it would be the repair's own spareparts and labour.
+        return {
+          ok: false,
+          serviceOrderNo,
+          fallbackToCreate: false,
+          failureClass: 'structural',
+          error: `SO ${serviceOrderNo ?? soPath} kehilangan baris setelah digabung (${linesBefore} → ${linesAfter}) — CEK MANUAL SEGERA, jangan buat SO baru`,
+          screenshotRef,
+        };
+      }
+      linesKept = { before: linesBefore, after: linesAfter };
       const stillMissing = [...missingServices, ...missingParts].map((l) => l.expectedSku).filter((sku) => sku && !after.includes(sku));
       if (stillMissing.length) {
         return {
@@ -428,6 +451,7 @@ export class RpaSink implements ServiceOrderSink {
     // Go orders do — and never fatal: the lines are in, and a lost inspection
     // list is re-fillable from Mongo, which still holds every checklist row.
     let inspectionsLost = false;
+    void linesKept;
     if (inspectionsBefore > 0) {
       try {
         await page.goto(`${detailUrl}/edit`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -1799,6 +1823,19 @@ export class RpaSink implements ServiceOrderSink {
       }
     }
 
+  }
+
+  /**
+   * How many LINE rows the order shows — spareparts and services together.
+   * Addressed by their panes, never by "the last table on the page": that used
+   * to read a year dropdown as the order's contents.
+   */
+  private async countOrderLines(page: Page): Promise<number> {
+    return page
+      .locator('#item-details tbody tr, #additional-item-details tbody tr')
+      .allTextContents()
+      .then((rows) => rows.filter((r) => r.replace(/\s+/g, ' ').trim().length > 0).length)
+      .catch(() => 0);
   }
 
   private async setLastServiceRow(page: Page, qty: number, description: string, priceIncTax?: number | null): Promise<void> {
