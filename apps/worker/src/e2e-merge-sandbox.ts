@@ -155,6 +155,7 @@ async function main(): Promise<void> {
   if (!/sandbox/i.test(config.turbolyBaseUrl)) fail(`ini HANYA untuk sandbox — TURBOLY_BASE_URL=${config.turbolyBaseUrl}`);
   if (config.mongoDb === 'spk') fail('pakai database terpisah (MONGODB_DB=spk_e2e_merge), jangan database produksi');
   await connect(config.mongoUri, config.mongoDb);
+  let sinks: BranchSinks | undefined;
   log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE} telp=${PHONE}`);
   try {
     await seedMirror();
@@ -165,7 +166,7 @@ async function main(): Promise<void> {
     const cgId = await capture('CHECKGO');
     log('2/4 dua dokumen antre — persis urutan kasir');
 
-    const sinks = new BranchSinks();
+    sinks = new BranchSinks();
     const res = await pushQueued(sinks, { workerId: `e2e-${TAG}`, log: (m) => console.log(`      ${m}`) });
     log(`3/4 satu putaran selesai — ${res.candidates} kandidat, ${res.confirmed} confirmed, ${res.failed} gagal`);
 
@@ -182,7 +183,7 @@ async function main(): Promise<void> {
     //    Read as the Check & Go, but pointed at the SPK's order — the same
     //    read-back the runner uses to confirm a merge.
     const asMerged = { ...cg!, turboly: { ...cg!.turboly, serviceOrderUrl: soUrl } };
-    const check = await sinks.withSink(BRANCH, (sink) => sink.verifyByToken(asMerged));
+    const check = await sinks!.withSink(BRANCH, (sink) => sink.verifyByToken(asMerged));
     const rows = (check?.lineSkus ?? []).join(' | ');
     const hasSpkLine = rows.includes(SPK_SKU);
     const hasCheckLine = rows.includes(CHECKGO_SKU);
@@ -198,9 +199,16 @@ async function main(): Promise<void> {
     if (!hasCheckLine) fail(`baris General Check (${CHECKGO_SKU}) tidak ada di SO — persis kegagalan SRO/TA17/26080160`);
     if (!cg?.checkGo?.inspectionsFilledAt) fail('daftar inspeksi tidak terisi');
     console.log(`\n✓ LULUS — satu SRO berisi kedua baris + daftar inspeksi: ${soUrl}\n`);
+    await sinks.dispose().catch(() => {});
+    await close();
+    // Explicit, like push-once: a live Playwright browser keeps the event loop
+    // alive, so a PASSING run used to sit there until someone killed it — the
+    // work was long done. Only the failing path exited, because fail() does.
+    process.exit(0);
   } catch (e) {
     fail((e as Error).message ?? String(e));
   } finally {
+    await sinks?.dispose().catch(() => {});
     await close();
   }
 }
