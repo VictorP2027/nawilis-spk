@@ -122,16 +122,22 @@ export async function POST(req: Request): Promise<Response> {
     if (!doc) {
       return NextResponse.json({ error: 'not_found', message: `Dokumen ${spkId} tidak ditemukan` }, { status: 404 });
     }
-    // An SPK whose lines were appended onto the same car's Check & Go order has
-    // no Service Order of its own; every flow step (approve, work order,
-    // invoice) belongs to that Check & Go's card. Acting here would run the RPA
-    // against a URL this doc does not have.
+    // A merged document has no Service Order of its own: its lines live on the
+    // other half of the visit's order, and every step that moves the JOB along
+    // (approve, work order, QC, invoice) belongs to that other card.
+    //
+    // The exception is the Cek n Go's own inspection list. That checklist is
+    // this document's data, it belongs on the order its lines went to, and
+    // re-filling it is how a branch recovers when the automatic fill failed —
+    // so it stays available here and follows mergedInto (flow-once.ts resolves
+    // the URL the same way).
     const mergedInto = doc.turboly?.mergedInto;
-    if (mergedInto) {
+    const inspectionRefill = action === 'fill_inspections' && String(doc.docType) === 'CHECK_AND_GO';
+    if (mergedInto && !inspectionRefill) {
       return NextResponse.json(
         {
           error: 'merged_into_checkgo',
-          message: `SPK ini sudah digabung ke Service Order ${mergedInto.serviceOrderNo ?? ''} milik Check & Go ${mergedInto.spkId} — jalankan langkah alur dari kartu Check & Go itu.`,
+          message: `Dokumen ini sudah digabung ke Service Order ${mergedInto.serviceOrderNo ?? ''} milik ${mergedInto.spkId} — jalankan langkah alur dari kartu itu.`,
           mergedInto,
         },
         { status: 409 },

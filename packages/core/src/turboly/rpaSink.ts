@@ -215,6 +215,29 @@ export class RpaSink implements ServiceOrderSink {
     // courtesy. Reported on the result so the runner can say so in its log.
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-append-presave`);
 
+    // IDENTITY CHECK, still before the irreversible click. The whole scheme —
+    // "did my lines already land on this order?" — rests on the token being
+    // readable on the order afterwards. If neither a line description nor the
+    // notes field is holding it right now, saving would produce lines nobody
+    // can recognise on a retry. Nothing has been written yet, so falling back
+    // to this doc's own order costs nothing and stays honest.
+    const tokenOnForm = await page
+      .evaluate((tok) => {
+        const inputs = Array.from(document.querySelectorAll('input,textarea')) as Array<HTMLInputElement | HTMLTextAreaElement>;
+        return inputs.some((el) => String(el.value ?? '').includes(tok));
+      }, target.spkToken)
+      .catch(() => true); // a failed probe must not block a legitimate merge
+    if (!tokenOnForm) {
+      return {
+        ok: false,
+        serviceOrderNo,
+        fallbackToCreate: true,
+        failureClass: 'data',
+        error: 'tanda pengenal SPK tidak menempel di form gabungan (Turboly menimpa deskripsi baris dan SO ini tidak punya kolom catatan) — dibuat SO terpisah supaya tetap bisa dilacak',
+        screenshotRef,
+      };
+    }
+
     // ── Save: the one irreversible click ─────────────────────────────────
     try {
       this.assertLease(ctx);
@@ -1575,11 +1598,15 @@ export class RpaSink implements ServiceOrderSink {
       await page.waitForTimeout(400);
       await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
       await page.waitForTimeout(600);
-      // The append path stamps the SPK token onto its FIRST service line so the
-      // Service Order page carries it afterwards — the same identity read-back
-      // uses, and the only thing that lets a retry see "already appended".
+      // The append path stamps the token onto EVERY service line it adds, not
+      // just the first. VERIFIED in sandbox 2026-08-18: Turboly keeps a typed
+      // description for some services (Spooring Ulangan, Balancing Free) and
+      // REPLACES it with the catalogue name for others (JAS-NAWJAS-GC General
+      // Check) — on save, not on pick. One marked line is therefore not a
+      // reliable carrier; every line is a better bet, and the notes field below
+      // is the belt to this pair of braces.
       const desc = line.description || line.serviceName;
-      await this.setLastServiceRow(page, line.qty, firstService && markerToken ? `${desc} [${markerToken}]` : desc, line.priceIncTax);
+      await this.setLastServiceRow(page, line.qty, markerToken ? `${desc} [${markerToken}]` : desc, line.priceIncTax);
       firstService = false;
     }
     const rowCount = await page.locator(rowSel).count();

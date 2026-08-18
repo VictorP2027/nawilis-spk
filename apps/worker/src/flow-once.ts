@@ -223,7 +223,12 @@ async function executeJob(
   const branchCode = doc?.branchCode ?? str(p.branchCode) ?? str(p.storeCode) ?? '';
   if (!branchCode) throw new DataError('branchCode tidak ada — sertakan params.branchCode untuk registrasi customer');
 
-  const soUrl = str(doc?.turboly?.serviceOrderUrl) ?? str(p.serviceOrderUrl);
+  // A merged document does not own a Service Order URL — its lines live on the
+  // other half of the visit's order (turboly.mergedInto). Steps that address
+  // the ORDER (above all fill_inspections, which carries the Cek n Go's
+  // checklist) have to follow it there, or they fail with "URL Service Order
+  // belum ada" on a document whose work is sitting in Turboly already.
+  const soUrl = str(doc?.turboly?.serviceOrderUrl) ?? str(doc?.turboly?.mergedInto?.serviceOrderUrl) ?? str(p.serviceOrderUrl);
   const woUrl = str(f?.workOrderUrl) ?? str(p.workOrderUrl);
   const invUrl = str(f?.invoiceUrl) ?? str(p.invoiceUrl);
   const needSo = (): string => {

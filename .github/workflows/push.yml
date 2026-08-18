@@ -136,7 +136,11 @@ jobs:
           # car whose Check & Go was already pushed inside the window has its
           # lines APPENDED to that order instead of opening a second one. Set
           # 'false' to return to one order per document.
-          MERGE_INTO_CHECKGO_SO: 'true'
+          # Cek n Go joins the same car's SPK order (Turboly's own advice).
+          MERGE_CHECKGO_INTO_SPK: 'true'
+          # Opposite direction (SPK joins a Check & Go order) stays off: the SPK
+          # path keeps behaving exactly as it does today.
+          MERGE_INTO_CHECKGO_SO: 'false'
           MERGE_WINDOW_HOURS: '24'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
         run: node --import tsx apps/worker/src/push-once.ts

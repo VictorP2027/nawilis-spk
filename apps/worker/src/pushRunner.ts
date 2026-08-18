@@ -67,6 +67,13 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
   const none: MergeDecision = { target: null, hold: null, note: null };
   const full = doc.vehicle?.noPolisi?.full ?? '';
   if (!full || !REAL_PLATE.test(full)) return none;
+  // Whichever half of the visit arrives SECOND joins the first one's order.
+  // Turboly's own staff say the SPK is normally submitted first and the Cek n
+  // Go follows, but the pipeline cannot rely on that: either document can win
+  // the race, so each looks for the other kind.
+  const isCheckGo = String(doc.docType) === 'CHECK_AND_GO';
+  const otherKind = isCheckGo ? { docType: { $ne: 'CHECK_AND_GO' as const } } : { docType: 'CHECK_AND_GO' as const };
+  const kindLabel = isCheckGo ? 'SPK' : 'Check & Go';
   // The window is anchored on THIS SPK's own capture, not on the clock at push
   // time. An SPK captured Monday that only pushes Tuesday (a day-long outage,
   // or a human requeue) must not land on the Check & Go of Tuesday's visit:
@@ -79,7 +86,7 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
     .spk()
     .find(
       {
-        docType: 'CHECK_AND_GO',
+        ...otherKind,
         branchCode: doc.branchCode,
         'vehicle.plateVariants': { $in: keys },
         createdAt: { $gte: since, $lte: doc.createdAt },
@@ -101,7 +108,7 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
     const url = c.turboly?.serviceOrderUrl ?? null;
     if ((c.state === 'confirmed' || c.state === 'pushed') && url && /\/service_orders\/\d+/.test(url)) {
       if (c.flow?.invoice) {
-        note ??= `Check & Go ${c._id} sudah berinvoice — kunjungan itu sudah ditutup`;
+        note ??= `${kindLabel} ${c._id} sudah berinvoice — kunjungan itu sudah ditutup`;
         continue; // a closed visit is not this SPK's order; an older open one still might be
       }
       // A Work Order already made from that SO was made from the lines it had
@@ -109,7 +116,7 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
       // SRO could never be deleted — but the WO will not grow a line by itself,
       // so this has to be said out loud.
       const woNote = c.flow?.wo
-        ? `SO Check & Go ${c._id} sudah punya Work Order ${c.flow.workOrderNo ?? ''} — baris SPK masuk ke SO, minta cabang menambahkannya juga ke WO`.trim()
+        ? `SO ${kindLabel} ${c._id} sudah punya Work Order ${c.flow.workOrderNo ?? ''} — baris baru masuk ke SO, minta cabang menambahkannya juga ke WO`.trim()
         : null;
       return { target: { spkId: c._id, serviceOrderUrl: url, serviceOrderNo: c.turboly?.serviceOrderNo ?? null }, hold: null, note: woNote ?? note };
     }
@@ -122,9 +129,52 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
     }
     // Data-failed, parked for a human, voided: this candidate will never carry
     // lines. Say so once and keep looking at the older ones.
-    note ??= `Check & Go ${c._id} berstatus ${c.state}${c.turboly?.serviceOrderUrl ? '' : ' tanpa URL SO'} — tidak bisa digabung`;
+    note ??= `${kindLabel} ${c._id} berstatus ${c.state}${c.turboly?.serviceOrderUrl ? '' : ' tanpa URL SO'} — tidak bisa digabung`;
   }
   return { target: null, hold: null, note };
+}
+
+/**
+ * A Check & Go's findings belong in the Service Order's Inspection List — the
+ * list Turboly prints and reports on, and the thing the branch actually reads.
+ *
+ * Takes the order to write to as an argument, because that order is no longer
+ * always the one this document created: when the SPK was submitted first (which
+ * Turboly says is the normal order of events), the Check & Go merges into the
+ * SPK's order and its list has to land THERE.
+ *
+ * Called LAST, after the document's state is already decided. It is a raw-HTTP
+ * call that logs in again, and Turboly allows one session per user, so it can
+ * kick the Playwright session out from under whatever runs next. A missing
+ * Inspection List is a gap in the ERP's notes; a lost Service Order is not
+ * recoverable — hence this order of operations. A failure is stamped on the
+ * document (not only logged) so the board can offer a re-fill.
+ */
+async function fillInspectionsFor(doc: SpkDoc, serviceOrderUrl: string | null, log: (m: string) => void): Promise<void> {
+  const checkGo = (doc as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null; feedback?: string | null; inspected?: boolean }> } }).checkGo;
+  const soId = /\/service_orders\/(\d+)/.exec(serviceOrderUrl ?? '')?.[1];
+  if (String(doc.docType) !== 'CHECK_AND_GO' || !soId || (checkGo?.inspectionItems?.length ?? 0) === 0) return;
+  try {
+    const rows = inspectionRowsFromCheckGo(checkGo!.inspectionItems!);
+    await fillServiceOrderInspection(
+      { baseUrl: config.turbolyBaseUrl, username: process.env.TURBOLY_USERNAME ?? '', password: process.env.TURBOLY_PASSWORD ?? '' },
+      soId,
+      rows,
+      'NAWILIS CHECK & GO',
+    );
+    await collections
+      .spk()
+      .updateOne({ _id: doc._id }, { $set: { 'checkGo.inspectionsFilledAt': new Date().toISOString() }, $unset: { 'checkGo.inspectionError': '' } })
+      .catch(() => {});
+    log(`  ✓ inspection list terisi (${rows.length} baris) di SO ${soId}`);
+  } catch (e) {
+    const msg = String((e as Error).message ?? e);
+    // Stamped, not just logged: without this the only record of a missing
+    // inspection list is a CI log line, and the branch finds out when a
+    // customer asks for the report.
+    await collections.spk().updateOne({ _id: doc._id }, { $set: { 'checkGo.inspectionError': msg } }).catch(() => {});
+    log(`  ⚠ inspection list gagal diisi (SO tetap utuh): ${msg}`);
+  }
 }
 
 /** Process every `queued` SPK (or a single `onlyId`). Returns per-run counts. */
@@ -352,6 +402,12 @@ export async function pushQueued(
             out.pushed++;
             out.confirmed++;
             log(`✓ ${doc._id} sudah ada di Turboly (${prior.serviceOrderNo ?? '?'}) — diadopsi, tidak dibuat ulang`);
+            // The push that created this order died before it could fill the
+            // inspection list, and nothing else ever retried it: a Check & Go
+            // adopted this way used to end up confirmed with an empty list.
+            if (!(claimed as { checkGo?: { inspectionsFilledAt?: string } }).checkGo?.inspectionsFilledAt) {
+              await fillInspectionsFor(claimed, adopted.mergedInto?.serviceOrderUrl ?? adopted.serviceOrderUrl ?? priorUrl, log);
+            }
             continue;
           }
           if (wasReclaimed) {
@@ -383,8 +439,24 @@ export async function pushQueued(
         // A booked FUTURE appointment is a visit of its own, and a goods-only
         // payload has no service line to carry the identity token — neither
         // is merged; both get their own order exactly as before.
-        const mergeEligible = String(claimed.docType) !== 'CHECK_AND_GO' && !sched && payload.serviceLines.length > 0;
-        if (config.mergeIntoCheckGo && mergeEligible) {
+        //
+        // Both document kinds are eligible. Turboly's staff say the SPK is
+        // normally submitted first and the Cek n Go follows, so the common case
+        // is a CHECK_AND_GO joining an SPK's order — bringing its General Check
+        // line AND its inspection list onto that one SRO.
+        //
+        // WHICH document gives way? The Check & Go. The SPK keeps doing exactly
+        // what it does today — it creates its own Service Order — because it is
+        // the document the branch builds the job on, and because a working
+        // production path should not change without a reason. The Cek n Go is
+        // the second visitor to the car, so it is the one that joins.
+        // (The opposite direction — an SPK joining a Check & Go's order — is
+        // implemented and tested too, but stays OFF unless MERGE_INTO_CHECKGO_SO
+        // is turned on.)
+        const isCheckGoDoc = String(claimed.docType) === 'CHECK_AND_GO';
+        const directionAllowed = isCheckGoDoc ? config.mergeCheckGoIntoSpk : config.mergeIntoCheckGo;
+        const mergeEligible = !sched && payload.serviceLines.length > 0;
+        if (directionAllowed && mergeEligible) {
           const decision = await findCheckGoMergeTarget(claimed, config.mergeWindowHours);
           // How long has THIS SPK been waiting? Measured from its own first
           // hold: a Check & Go that keeps failing transiently is requeued every
@@ -492,6 +564,11 @@ export async function pushQueued(
               } else {
                 log(`  ⚠ not verified (left in 'pushed')`);
               }
+              // A Check & Go that joined the SPK's order still owes that order
+              // its inspection list — the whole point of a Cek n Go, and the
+              // thing Turboly prints. It goes to the TARGET order, not to one
+              // this document never created.
+              await fillInspectionsFor(claimed, decision.target.serviceOrderUrl, log);
               continue;
             }
             // Append did not happen cleanly.
@@ -596,24 +673,7 @@ export async function pushQueued(
         // here, which is what makes the failure it can cause survivable: the
         // order exists, it is confirmed, and a missing Inspection List is a
         // gap in the ERP's notes rather than a lost Service Order.
-        const checkGo = (doc as { checkGo?: { inspectionItems?: Array<{ item: string; hasil?: string | null; catatan: string | null; feedback?: string | null; inspected?: boolean }> } }).checkGo;
-        // Only the RPA sink records a Service Order URL, so only that path can
-        // address the order afterwards; an HTTP-path push skips this silently.
-        const soId = /\/service_orders\/(\d+)/.exec(res.serviceOrderUrl ?? '')?.[1];
-        if (String(doc.docType) === 'CHECK_AND_GO' && soId && (checkGo?.inspectionItems?.length ?? 0) > 0) {
-          try {
-            const rows = inspectionRowsFromCheckGo(checkGo!.inspectionItems!);
-            await fillServiceOrderInspection(
-              { baseUrl: config.turbolyBaseUrl, username: process.env.TURBOLY_USERNAME ?? '', password: process.env.TURBOLY_PASSWORD ?? '' },
-              soId,
-              rows,
-              'NAWILIS CHECK & GO',
-            );
-            log(`  ✓ inspection list terisi (${rows.length} baris)`);
-          } catch (e) {
-            log(`  ⚠ inspection list gagal diisi (SO tetap utuh): ${(e as Error).message ?? e}`);
-          }
-        }
+        await fillInspectionsFor(claimed, res.serviceOrderUrl ?? null, log);
       } catch (e) {
         out.failed++;
         await transition(doc._id, 'pushing', 'failed', {

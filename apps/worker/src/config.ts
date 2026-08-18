@@ -33,7 +33,19 @@ export const config = {
    * are APPENDED to that order instead of opening a second one. Off = the old
    * behaviour: every document is its own order.
    */
-  mergeIntoCheckGo: (process.env.MERGE_INTO_CHECKGO_SO ?? 'true') === 'true',
+  /**
+   * A Check & Go joins the same car's existing SPK Service Order instead of
+   * opening a second one — Turboly's own recommendation ("integrate Cek n Go
+   * with the SPK to prevent a backlog of SROs for the same plate"), and their
+   * staff confirm the SPK is normally submitted first. ON.
+   */
+  mergeCheckGoIntoSpk: (process.env.MERGE_CHECKGO_INTO_SPK ?? 'true') === 'true',
+  /**
+   * The opposite direction — an SPK joining a Check & Go's order. Built and
+   * tested, but OFF: the SPK path is the one production runs on every day, and
+   * it keeps behaving exactly as it does today unless this is turned on.
+   */
+  mergeIntoCheckGo: (process.env.MERGE_INTO_CHECKGO_SO ?? 'false') === 'true',
   /** How long after the Check & Go a same-car SPK still counts as the same visit. */
   mergeWindowHours: num(process.env.MERGE_WINDOW_HOURS, 24),
 

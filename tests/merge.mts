@@ -11,7 +11,7 @@
  *
  *   npm run build -w @spk/core && npx tsx tests/merge.mts
  */
-process.env.MERGE_INTO_CHECKGO_SO = 'true';
+
 process.env.MERGE_WINDOW_HOURS = '24';
 process.env.PUSH_APPROVE = 'false';
 
@@ -26,8 +26,16 @@ import type {
   ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload,
   AppendTarget, AppendResult,
 } from '@spk/core/turboly';
+import { config } from '../apps/worker/src/config.ts';
 import { BranchSinks } from '../apps/worker/src/sessions.ts';
 import { pushQueued, findCheckGoMergeTarget } from '../apps/worker/src/pushRunner.ts';
+
+// Set on the config object, not through env: ESM hoists imports, so an
+// assignment to process.env in this file runs AFTER config.ts has already read
+// it. Sections A-S exercise the SPK→Check & Go direction, which ships OFF —
+// production keeps the SPK path exactly as it is today.
+config.mergeIntoCheckGo = true;
+config.mergeCheckGoIntoSpk = true;
 
 let passed = 0;
 let failed = 0;
@@ -442,7 +450,12 @@ async function main(): Promise<void> {
     // O1. A Check & Go from a LATER visit must not adopt an older SPK's work.
     const spkId = await queuedSpk('B9101AB');
     await collections.spk().updateOne({ _id: spkId }, { $set: { createdAt: new Date(Date.now() - 20 * 3600_000).toISOString() } });
+    // With the Cek n Go direction on, that later Check & Go would itself join
+    // the SPK's order — which is the point of section T. Here we only want it
+    // to exist as a candidate, so it makes its own order.
+    config.mergeCheckGoIntoSpk = false;
     const laterCg = await pushOne(await queuedCheckGo('B9101AB'), stub); // created now = after the SPK
+    config.mergeCheckGoIntoSpk = true;
     const spk = (await collections.spk().findOne({ _id: spkId }))!;
     let d = await findCheckGoMergeTarget(spk, 24);
     ok(!d.target && !d.hold, 'a Check & Go opened AFTER this SPK is a different visit — not its order');
@@ -539,6 +552,68 @@ async function main(): Promise<void> {
     ok(w.some((x) => /Work Order WO\/BKS\/26080009/.test(x)), 'WO already made → add the lines there too');
     ok(w.some((x) => /[Cc]atatan SPK/.test(x)), 'notes could not be carried');
     ok(w.some((x) => /PENDING APPROVAL/.test(x)), 'the order needs approving again (VERIFIED in sandbox 2026-08-18)');
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  section('T. THE REAL FLOW — SPK first, Cek n Go second, one SRO (Turboly: "SPK first..")');
+  {
+    const stub = new StubSink();
+    // The SPK behaves exactly as it always has: it creates the car's order.
+    config.mergeIntoCheckGo = false;
+    const spk = await pushOne(await queuedSpk('B9201AB'), stub);
+    ok(spk.state === 'confirmed' && !!spk.turboly.serviceOrderUrl, 'SPK made its own Service Order, unchanged');
+    ok(stub.created.length === 1 && stub.appends.length === 0, 'nothing about the SPK path changed');
+
+    // The Cek n Go arrives second and joins that order instead of opening one.
+    const log: string[] = [];
+    const cg = await pushOne(await queuedCheckGo('B9201AB'), stub, log);
+    ok(stub.created.length === 1, 'still ONE Service Order for the car — no backlog of SROs for one plate');
+    ok(stub.appends.length === 1, 'the Check & Go was APPENDED to the SPK\'s order');
+    ok(stub.appends[0]!.target.serviceOrderUrl === spk.turboly.serviceOrderUrl, 'onto the SPK\'s order URL');
+    ok(cg.state === 'confirmed', `Check & Go ends confirmed (got ${cg.state})`);
+    ok(cg.turboly.mergedInto?.spkId === spk._id, 'and records which SPK order it joined');
+    ok(cg.turboly.serviceOrderUrl == null, 'it does not claim the URL — one order, one owner');
+    const spk2 = (await collections.spk().findOne({ _id: spk._id }))!;
+    ok((spk2.checkGo?.mergedSpkIds ?? []).includes(cg._id), 'the SPK lists the Check & Go that joined it');
+    config.mergeIntoCheckGo = true;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  section('U. A Cek n Go that joins an SPK order still delivers its inspection list');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false;
+    const spk = await pushOne(await queuedSpk('B9202AB'), stub);
+    const cgId = await queuedCheckGo('B9202AB');
+    // A real Check & Go carries its checklist from intake.
+    await collections.spk().updateOne({ _id: cgId }, { $set: { 'checkGo.inspectionItems': [
+      { item: '1. Oli Mesin', hasil: 'Kotor', catatan: 'terakhir ganti Km 20115', feedback: null, inspected: true },
+      { item: '3. Kanvas rem depan', hasil: 'Tebal', catatan: null, feedback: null, inspected: true },
+    ] } });
+    const log: string[] = [];
+    const cg = await pushOne(cgId, stub, log);
+    ok(cg.turboly.mergedInto?.serviceOrderUrl === spk.turboly.serviceOrderUrl, 'joined the SPK order');
+    // The stub Turboly has no HTTP inspection endpoint, so the fill fails — and
+    // that failure must be RECORDED on the doc, not swallowed into a log line.
+    const after = (await collections.spk().findOne({ _id: cgId }))!;
+    const filled = after.checkGo?.inspectionsFilledAt ?? null;
+    const errored = after.checkGo?.inspectionError ?? null;
+    ok(Boolean(filled || errored), 'the inspection-list attempt leaves a trace on the document (filled or error)');
+    ok(log.some((l) => /inspection list/i.test(l)), 'and the runner says what happened to the list');
+    config.mergeIntoCheckGo = true;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  section('V. With the shipped switches, the SPK path is byte-for-byte the old one');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // as shipped
+    const cg = await pushOne(await queuedCheckGo('B9203AB'), stub);
+    ok(cg.state === 'confirmed' && !!cg.turboly.serviceOrderUrl, 'a Check & Go with no SPK still makes its own order');
+    const spk = await pushOne(await queuedSpk('B9203AB'), stub);
+    ok(stub.appends.length === 0, 'the SPK did NOT append — it behaves exactly as before');
+    ok(stub.created.length === 2 && spk.turboly.serviceOrderUrl != null && !spk.turboly.mergedInto, 'it made its own Service Order');
+    config.mergeIntoCheckGo = true;
   }
 
   await close();
