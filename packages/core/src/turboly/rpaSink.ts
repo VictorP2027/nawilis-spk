@@ -18,6 +18,9 @@ import { jaroWinkler, canonPhoneKey, e164Phone, localPhone } from '../indonesia.
  *   - Evidence: a screenshot is taken at submit.
  *   - Read-back is a SEPARATE method the worker runs in a fresh context.
  */
+/** Internal signal: the checklist is already on the order, nothing to type. */
+class SkipInspections extends Error {}
+
 export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
 
@@ -261,11 +264,24 @@ export class RpaSink implements ServiceOrderSink {
           // caller — it still has the HTTP path and the board's re-fill action.
           inspectionsWritten = null;
         } else {
+          // Which of these rows is ALREADY on the order? A second Check & Go for
+          // the same car — a re-entry at the counter, or a repair run over a
+          // list that did land — would otherwise type the whole checklist again
+          // and leave the customer's inspection printed twice.
+          const already = await page
+            .locator('[name*="service_order_inspection_lines_attributes"][name$="[description]"]')
+            .evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value.replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean))
+            .catch(() => [] as string[]);
+          const fresh = wanted.filter((r) => !already.includes(r.description.replace(/\s+/g, ' ').trim().toLowerCase()));
+          if (!fresh.length) {
+            inspectionsWritten = 0;
+            throw new SkipInspections();
+          }
           await addCategory.click({ timeout: 8000 });
           await page.waitForTimeout(500);
           await page.locator('input[name="inspection-category"], input[placeholder*="Category" i]').last().fill(target.inspections!.category).catch(() => {});
           const addRow = page.locator('a, button').filter({ hasText: /add inspection/i }).last();
-          for (let i = 0; i < wanted.length; i++) {
+          for (let i = 0; i < fresh.length; i++) {
             await addRow.click({ timeout: 8000 });
             await page.waitForTimeout(120);
           }
@@ -297,12 +313,17 @@ export class RpaSink implements ServiceOrderSink {
               n += 1;
             });
             return n;
-          }, wanted.map((r) => ({ description: r.description.slice(0, 250), notes: r.notes.slice(0, 250), inspected: r.inspected })));
+          }, fresh.map((r) => ({ description: r.description.slice(0, 250), notes: r.notes.slice(0, 250), inspected: r.inspected })));
         }
-      } catch {
-        // The lines matter more than the checklist, and the checklist is still
-        // safe in our own database: never let it stop the save.
-        inspectionsWritten = null;
+      } catch (e) {
+        // "Everything was already there" is a clean outcome, not a failure.
+        if (e instanceof SkipInspections) {
+          inspectionsWritten = 0;
+        } else {
+          // The lines matter more than the checklist, and the checklist is still
+          // safe in our own database: never let it stop the save.
+          inspectionsWritten = null;
+        }
       }
     }
 

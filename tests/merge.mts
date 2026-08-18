@@ -740,6 +740,39 @@ async function main(): Promise<void> {
     config.mergeIntoCheckGo = true;
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  section('Z. The Cek n Go sent twice');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // as shipped
+    const spk = await pushOne(await queuedSpk('B9501ZZ'), stub);
+
+    // 1. The SAME submission replayed (offline queue, double tap): the intake
+    //    dedupes on uploadId, so there is only ever ONE document.
+    const first = await queuedCheckGo('B9501ZZ');
+    const doc = (await collections.spk().findOne({ _id: first }))!;
+    const replay = await collections.spk().findOne({ uploadId: doc.uploadId });
+    ok(replay?._id === first, 'a replayed submission is the same document, not a second one');
+
+    const cg1 = await pushOne(first, stub);
+    ok(cg1.turboly.mergedInto?.spkId === spk._id, 'it merges into the SPK order');
+
+    // 2. A genuinely NEW second Check & Go for the same car (staff re-entered it).
+    const second = await queuedCheckGo('B9501ZZ');
+    const cg2 = await pushOne(second, stub);
+    ok(stub.created.length === 1, 'STILL one Service Order for the car — no third order appears');
+    ok(cg2.turboly.mergedInto?.spkId === spk._id, 'the second Check & Go lands on the same order too');
+    ok(stub.appends.length === 2, 'both were appended onto it');
+
+    // 3. Pushing an already-merged document again changes nothing.
+    stub.appendResult = { ok: true, serviceOrderNo: spk.turboly.serviceOrderNo, alreadyAppended: true };
+    await collections.spk().updateOne({ _id: first }, { $set: { state: 'queued', 'push.nextAttemptAt': null } });
+    const again = await pushOne(first, stub);
+    ok(stub.created.length === 1, 'a re-push creates nothing');
+    ok(again.turboly.mergedInto?.spkId === spk._id, 'and the document still points at the same order');
+    config.mergeIntoCheckGo = true;
+  }
+
   await close();
   await mongod.stop();
   console.log(`\n${passed} passed, ${failed} failed`);
