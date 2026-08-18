@@ -169,6 +169,12 @@ jobs:
           # The pusher only creates the SO; auto-clicking Approve skipped the
           # one review point staff asked to keep.
           PUSH_APPROVE: 'false'
+          # ONE CAR, ONE SERVICE ORDER (Jane, Turboly, 2026-08-18): an SPK for a
+          # car whose Check & Go was already pushed inside the window has its
+          # lines APPENDED to that order instead of opening a second one. Set
+          # 'false' to return to one order per document.
+          MERGE_INTO_CHECKGO_SO: 'true'
+          MERGE_WINDOW_HOURS: '24'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
         run: node --import tsx apps/worker/src/push-once.ts
 

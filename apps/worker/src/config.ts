@@ -27,6 +27,16 @@ export const config = {
   /** DRAFT → APPROVED after save (fully-automatic). Set false to leave DRAFT for human approve. */
   approveAfterSave: (process.env.PUSH_APPROVE ?? 'true') === 'true',
 
+  /**
+   * One car, one Service Order (Jane, Turboly, 2026-08-18). When an SPK arrives
+   * for a car whose Check & Go was already pushed within the window, its lines
+   * are APPENDED to that order instead of opening a second one. Off = the old
+   * behaviour: every document is its own order.
+   */
+  mergeIntoCheckGo: (process.env.MERGE_INTO_CHECKGO_SO ?? 'true') === 'true',
+  /** How long after the Check & Go a same-car SPK still counts as the same visit. */
+  mergeWindowHours: num(process.env.MERGE_WINDOW_HOURS, 24),
+
   // Concurrency
   maxBrowserWorkers: num(process.env.MAX_BROWSER_WORKERS, 6),
   /** For RPA this MUST be 1 per branch account (one session, page concurrency 1). */

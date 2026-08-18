@@ -2,7 +2,7 @@ import type { Page } from 'playwright';
 import { SELECTOR_MAP as S } from './selmap.js';
 import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControls } from './locators.js';
 import { TurbolySession, AuthChallengeError, TenantOutageError } from './session.js';
-import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload } from './sink.js';
+import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload, AppendTarget, AppendResult } from './sink.js';
 import type { SpkDoc } from '../types.js';
 import { jaroWinkler, canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
 
@@ -48,6 +48,243 @@ export class RpaSink implements ServiceOrderSink {
     }
 
     return this.runPush(payload, ctx, 0);
+  }
+
+  /**
+   * Append this SPK's lines to the SAME CAR's existing Check & Go Service Order
+   * (Jane, Turboly, 2026-08-18: "if same car then should be 1 SRO").
+   *
+   * How Turboly lets an existing order grow: its EDIT page renders the same
+   * "Packages, Spareparts & Services" pane as the create form, with the same
+   * "Add Service Item" / "Add Sparepart" links and the same nested row fields
+   * (VERIFIED on sandbox SO 249185, 2026-08-18 — an APPROVED order; the header
+   * is not even rendered there, only the line panes). So the line routine the
+   * create path already trusts is reused as-is, on that page.
+   *
+   * SAFETY, in the order it is enforced:
+   *   1. The order is opened by URL and must SHOW the expected plate. A wrong
+   *      target is refused before anything is typed.
+   *   2. If the SPK's token is already on the page, a previous attempt appended
+   *      and died before recording it: nothing is typed, the order is adopted.
+   *   3. Every failure BEFORE the Save click returns fallbackToCreate=true —
+   *      nothing irreversible happened, and the caller may create a separate
+   *      order exactly as it did before this method existed.
+   *   4. After Save the page is re-read and the token must be visible. Any doubt
+   *      after Save is reported as a structural failure WITHOUT fallback: the
+   *      caller must never create a second order on "unknown".
+   *
+   * Never approves. Never touches the header. Never throws.
+   */
+  async appendLinesToServiceOrder(target: AppendTarget, payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<AppendResult> {
+    this.notesExtra = [];
+    let page: Page;
+    try {
+      await this.session.ensureLoggedIn();
+      page = this.session.page_();
+    } catch (e) {
+      if (e instanceof TenantOutageError) return { ok: false, serviceOrderNo: null, failureClass: 'transient', error: e.message };
+      if (e instanceof AuthChallengeError) return { ok: false, serviceOrderNo: null, failureClass: 'auth', error: e.message };
+      return { ok: false, serviceOrderNo: null, failureClass: 'infra', error: errMsg(e) };
+    }
+    const soPath = /(\/service_orders\/\d+)/.exec(target.serviceOrderUrl)?.[1];
+    if (!soPath) return { ok: false, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'data', error: `URL Service Order Check & Go tidak dikenali: ${target.serviceOrderUrl}` };
+    // The token rides on the first SERVICE line's description — the one place
+    // the order page renders afterwards. A goods-only payload has nowhere to
+    // carry it, so a retry could never tell "already appended" from "not yet":
+    // that SPK gets its own order, exactly as before.
+    if (!payload.serviceLines.length) {
+      return { ok: false, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'data', error: 'SPK tanpa baris jasa (hanya sparepart) tidak digabung — tidak ada tempat menaruh token identitas' };
+    }
+    const detailUrl = `${this.baseUrl}${soPath}`;
+    const plateWanted = target.expectedPlate.replace(/\s/g, '').toUpperCase();
+    const spaced = (t: string) => t.replace(/\s/g, '').toUpperCase();
+
+    // ── pre-flight on the DETAIL page: nothing typed until all of it passes ──
+    let serviceOrderNo: string | null = null;
+    let wasApproved = false;
+    try {
+      await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForTimeout(1500);
+      await this.dismissModals();
+      if (!new RegExp(`${soPath.replace(/\//g, '\\/')}(?![\\d])`).test(page.url())) {
+        return { ok: false, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'data', error: `halaman Service Order Check & Go tidak terbuka (${page.url()})` };
+      }
+      const body = (await page.textContent('body').catch(() => '')) ?? '';
+      // 1. Same car, proven on the page — the plate is a link to /vehicles/<id>.
+      const plateOnPage = await page
+        .evaluate(() => Array.from(document.querySelectorAll('a[href*="/vehicles/"]')).map((a) => (a.textContent ?? '').trim()).filter(Boolean))
+        .catch(() => [] as string[]);
+      // The fallback used to be `includes`, which has no right-hand boundary:
+      // an order for B1743BKA would satisfy an SPK for B1743BK and take another
+      // car's work. The plate must end where the page's plate ends.
+      const plateOk =
+        plateOnPage.some((t) => spaced(t) === plateWanted) ||
+        new RegExp(`REGISTRATIONNO:${plateWanted}(?![A-Z0-9])`).test(spaced(body));
+      if (!plateOk) {
+        return { ok: false, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'data', error: `plat di SO Check & Go (${plateOnPage.join(',') || '?'}) bukan ${plateWanted} — tidak digabung` };
+      }
+      serviceOrderNo = await this.captureDocNumber(page);
+      wasApproved = /\bAPPROVED\b/.test(body) && !/\bPENDING APPROVAL\b/.test(body);
+      // 2. Already appended by a previous attempt that died before recording it.
+      if (body.includes(target.spkToken)) {
+        return { ok: true, serviceOrderNo, alreadyAppended: true };
+      }
+      // The order must still be editable. Turboly shows the Edit action only
+      // while it is (draft/approved); a cancelled or closed order has none.
+      const editLink = page.locator('a[href$="/edit"]').filter({ hasText: /^\s*edit\s*$/i }).first();
+      const editable = (await editLink.count().catch(() => 0)) > 0;
+      if (!editable) {
+        return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'data', error: `SO Check & Go ${serviceOrderNo ?? soPath} tidak punya tombol Edit (sudah ditutup/dibatalkan?) — dibuat SO terpisah` };
+      }
+      await editLink.click({ timeout: 8000 }).catch(async () => {
+        await page.goto(`${detailUrl}/edit`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      });
+      await page.waitForTimeout(2500);
+      await this.dismissModals();
+      if (!/\/service_orders\/\d+\/edit/.test(page.url())) {
+        return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'data', error: `form edit SO tidak terbuka (${page.url()})` };
+      }
+      // The pane and its add-links must be there before a single row is added.
+      const addSvc = await page.locator('a.btn-add-item', { hasText: /add service item/i }).count().catch(() => 0);
+      if (addSvc === 0) {
+        return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'structural', error: 'form edit SO tidak menampilkan "Add Service Item" — struktur Turboly berbeda dari yang diverifikasi; dibuat SO terpisah' };
+      }
+    } catch (e) {
+      const c = await this.classifyFailure(e, payload.spkId);
+      // Nothing was typed: safe to fall back for data/structural; a kicked or
+      // outage session is retried as such (a fallback now would fail the same).
+      const retryable = c.failureClass === 'transient' || c.failureClass === 'auth' || c.failureClass === 'infra';
+      return { ok: false, serviceOrderNo, fallbackToCreate: !retryable, failureClass: c.failureClass, error: c.error, screenshotRef: c.screenshotRef };
+    }
+
+    // ── fill: rows are typed but NOTHING is saved yet ─────────────────────
+    try {
+      await this.addLinesOnOpenForm(page, payload, target.spkToken);
+    } catch (e) {
+      const c = await this.classifyFailure(e, payload.spkId);
+      const retryable = c.failureClass === 'transient' || c.failureClass === 'auth' || c.failureClass === 'infra';
+      // Unsaved form: navigating away discards it, so a fallback creates from a
+      // clean slate. A DataError here (no Turboly match for a SKU) would fail
+      // the create path identically, which then parks the doc as data — same
+      // outcome as today, and honest.
+      return { ok: false, serviceOrderNo, fallbackToCreate: !retryable, failureClass: c.failureClass, error: `gabung ke SO Check & Go gagal sebelum simpan: ${c.error ?? ''}`, screenshotRef: c.screenshotRef };
+    }
+    // A DRAFT order's edit page renders the header (VERIFIED sandbox SO 249112);
+    // an APPROVED one does not. Turboly refuses a Service Order whose Plan
+    // Service Time is not in the future, and a Check & Go planned "now + 30" is
+    // in the past by the time the customer has decided on repairs — so, only
+    // when the fields exist and only when the plan has already passed, move it
+    // to this SPK's own plan (already a future WIB time, same format the
+    // create path writes). Nothing else in the header is touched: the store is
+    // disabled, and no reload runs to blank the advisor/salesperson selects.
+    try {
+      await this.replanIfPast(page, payload.planServiceDate, payload.planServiceTime);
+    } catch {
+      /* best effort — a refused Save is caught below and nothing is lost */
+    }
+    // The SPK's notes (complaint, custom job lines with no SKU, kondisi ban…)
+    // are APPENDED to the order's notes when the textarea is rendered — it is
+    // on a DRAFT order's edit page, which is the state production Check & Go
+    // orders are in until a human approves. Appended, never replaced: the
+    // Check & Go's own notes stay. The token goes in too, as a second, more
+    // robust identity marker next to the line description. On an APPROVED
+    // order the header is not rendered and the notes cannot be carried; the
+    // runner is told so it can say so.
+    const notesCarried = await page.evaluate(({ extra }) => {
+      const el = document.querySelector('#service_order_notes') as HTMLTextAreaElement | null;
+      if (!el) return false;
+      const cur = el.value ?? '';
+      el.value = cur ? `${cur}\n${extra}` : extra;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, { extra: [payload.notes, ...this.notesExtra, `[${target.spkToken}]`].filter(Boolean).join('\n') }).catch(() => false);
+    // Not fatal when it did not fit — the lines are the order; the notes were a
+    // courtesy. Reported on the result so the runner can say so in its log.
+    const screenshotRef = await this.snapshot(page, `${payload.spkId}-append-presave`);
+
+    // ── Save: the one irreversible click ─────────────────────────────────
+    try {
+      this.assertLease(ctx);
+    } catch (e) {
+      return { ok: false, serviceOrderNo, fallbackToCreate: false, failureClass: 'transient', error: errMsg(e), screenshotRef };
+    }
+    await this.dismissModals();
+    // The button is checked BEFORE the click, and that check is the last point
+    // at which a fallback is allowed. Playwright's click() also waits for the
+    // navigation it started, so a TimeoutError can surface AFTER the click has
+    // been dispatched — treating any exception from click() as "not clicked"
+    // is precisely how a second order gets created. noWaitAfter makes click()
+    // return the moment the click is dispatched; the settle is done by hand.
+    const saveBtn = page.getByRole('button', { name: /^save$/i }).first();
+    const canClick = (await saveBtn.isVisible().catch(() => false)) && (await saveBtn.isEnabled().catch(() => false));
+    if (!canClick) {
+      return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'structural', error: 'tombol Save form edit tidak terlihat/aktif — tidak ada yang disimpan', screenshotRef };
+    }
+    try {
+      await saveBtn.click({ timeout: 15000, noWaitAfter: true });
+    } catch {
+      // Dispatch itself is in doubt: unknown outcome → no fallback, ever.
+    }
+    await page.waitForTimeout(1500);
+    await this.confirmModals().catch(() => {});
+    await page.waitForTimeout(3500);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await this.snapshot(page, `${payload.spkId}-append-aftersave`);
+
+    // ── post-save: a REFUSED save re-renders the edit form (Rails does that at
+    // the non-/edit URL, so the URL proves nothing) with an inline error. Only
+    // the FORM still being there + an error is treated as "not saved" — and
+    // even then the order is re-read first: a fallback is allowed only once
+    // the token is provably absent from it.
+    const inlineErr = await this.readInlineError(page).catch(() => null);
+    const formStillThere = (await page.locator('#service-order-form, form[action*="/service_orders/"] input[name="_method"][value="patch"]').count().catch(() => 0)) > 0;
+    const refused = Boolean(inlineErr) && formStillThere;
+    if (inlineErr && /you have been logged out|please login again|you need to sign in|sign in or sign up/i.test(inlineErr)) {
+      return { ok: false, serviceOrderNo, fallbackToCreate: false, failureClass: 'transient', error: 'sesi Turboly ter-kick saat simpan gabungan — dicoba ulang otomatis', screenshotRef };
+    }
+
+    // ── prove it: fresh read of the detail page must now carry the token ────
+    let tokenSeen = false;
+    for (let i = 0; i < 3 && !tokenSeen; i++) {
+      try {
+        await page.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForTimeout(1500);
+        const after = (await page.textContent('body').catch(() => '')) ?? '';
+        tokenSeen = after.includes(target.spkToken);
+        serviceOrderNo = (await this.captureDocNumber(page)) ?? serviceOrderNo;
+      } catch {
+        await page.waitForTimeout(1500);
+      }
+    }
+    if (!tokenSeen && refused) {
+      // Turboly refused the edit (form re-rendered with its error) AND the
+      // order provably does not carry our token: nothing changed on it. A
+      // separate order is what would have happened before this feature.
+      return { ok: false, serviceOrderNo, fallbackToCreate: true, failureClass: 'data', error: `Turboly menolak simpan gabungan: ${inlineErr}`, screenshotRef };
+    }
+    if (!tokenSeen) {
+      // Save was clicked and did not visibly fail, but the order does not show
+      // our token: unknown outcome. The caller parks this for a human — a
+      // second order created on top of a possibly-successful append is the one
+      // outcome this method exists to prevent.
+      return {
+        ok: false,
+        serviceOrderNo,
+        fallbackToCreate: false,
+        failureClass: 'structural',
+        error: `simpan gabungan ke SO ${serviceOrderNo ?? soPath} tidak terkonfirmasi (token ${target.spkToken} tidak terbaca di halaman) — CEK MANUAL, jangan buat SO baru`,
+        screenshotRef,
+      };
+    }
+    try { await this.session.noteJobDone(); } catch { /* best effort */ }
+    // VERIFIED in sandbox 2026-08-18 (SO 249185): editing an APPROVED Service
+    // Order moves it back to PENDING APPROVAL — Turboly wants a human to
+    // re-approve the bigger order. Production Check & Go orders are DRAFT
+    // (PUSH_APPROVE=false), so this is the exception, not the rule; when it
+    // does happen somebody has to press Approve, and only this method can see it.
+    const approvalReset = wasApproved && /PENDING\s*APPROVAL/i.test(((await page.textContent('body').catch(() => '')) ?? '').toUpperCase());
+    return { ok: true, serviceOrderNo, screenshotRef, notesCarried: notesCarried || !payload.notes, approvalReset };
   }
 
   /**
@@ -193,96 +430,7 @@ export class RpaSink implements ServiceOrderSink {
     const notesCombined = [payload.notes, ...this.notesExtra].filter(Boolean).join('\n');
     if (notesCombined) await page.fill('#service_order_notes', notesCombined).catch(() => {});
 
-    // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
-    // Each add must create a NEW row before we search it — otherwise a fast loop
-    // silently drops a line (search lands on a stale/last row). Wait for the row
-    // count to grow, then verify at the end that every line made it.
-    await this.dismissModals();
-    await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click();
-    await page.waitForTimeout(700);
-    const rowSel = '.select2-container.input-service-product';
-    for (const line of payload.serviceLines) {
-      const before = await page.locator(rowSel).count();
-      await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
-      for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
-      if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
-      await page.waitForTimeout(400);
-      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
-      await page.waitForTimeout(600);
-      await this.setLastServiceRow(page, line.qty, line.description || line.serviceName, line.priceIncTax);
-    }
-    const rowCount = await page.locator(rowSel).count();
-    if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
-    /**
-     * 5b. Sparepart lines — a DIFFERENT row shape from a service item, on the same tab.
-     *
-     * A Service Order carries goods as well as work, and some SPK rows are goods:
-     * "Pentil Karet" is AKS-NAW-PEKA, which the service catalogue has never heard of
-     * (VERIFIED: service search → 0 results, product search → "Pentil Karet"). Sent as
-     * a service line it failed for good with `no Turboly match`, so the line used to
-     * throw here instead — loud, but the SPK still never reached Turboly.
-     *
-     * VERIFIED 2026-08-11 by driving the live form: the pane offers "Add Package
-     * Service", "Add Sparepart" and "Add Service Item". A sparepart row is
-     * service_order_lines_attributes (product_id / quantity / original_price /
-     * product_notes) where a service row is service_order_additional_lines_attributes
-     * (input-service-product / input-quantity / description). Same add-link class,
-     * different table — hence a separate row selector and a separate setter.
-     *
-     * Unlike a service line, the sparepart PRICE is editable, so the quoted price is
-     * written when the SPK carries one and Turboly's own pricelist stands when it does
-     * not — the same rule setLastServiceRow already follows.
-     */
-    if (payload.sparepartLines.length) {
-      for (const line of payload.sparepartLines) {
-        const want = line.expectedSku || line.productName;
-        const before = await page.locator('tr:has(input[name*="[product_id]"])').count();
-        await page.locator('a.btn-add-item', { hasText: /add sparepart/i }).first().click();
-        for (let i = 0; i < 25 && (await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before; i++) {
-          await page.waitForTimeout(200);
-        }
-        if ((await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before) {
-          throw new DataError(`sparepart row did not appear for "${want}"`);
-        }
-        await page.waitForTimeout(400);
-        /**
-         * Open the PRODUCT picker specifically.
-         *
-         * A sparepart row holds several select2 widgets — product, tax, other tax —
-         * and taking the last one picked a TAX instead: the row saved with "PPN" set,
-         * the product blank, and Turboly silently discarded the line while the push
-         * reported success (SRO/PMLNP/26080101). So the container is resolved from the
-         * hidden input that actually carries product_id, and stamped with an id so the
-         * click cannot land anywhere else.
-         */
-        const pickerId = (await page.evaluate(() => {
-          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
-          const row = rows[rows.length - 1];
-          const hidden = row?.querySelector('input[name*="[product_id]"]') as HTMLElement | null;
-          if (!hidden) return '';
-          const container = (hidden.previousElementSibling?.classList?.contains('select2-container')
-            ? hidden.previousElementSibling
-            : hidden.nextElementSibling?.classList?.contains('select2-container')
-              ? hidden.nextElementSibling
-              : row?.querySelector('.select2-container')) as HTMLElement | null;
-          if (!container) return '';
-          if (!container.id) container.id = 'spk-part-picker';
-          return container.id;
-        })) as string;
-        if (!pickerId) throw new DataError(`sparepart product picker not found for "${want}"`);
-        await this.pickSelect2Locator(page.locator(`#${pickerId}`), want);
-        await page.waitForTimeout(600);
-        // The line only counts once Turboly holds a product id. Without this the row
-        // saves blank and vanishes — which is exactly how the first attempt "passed".
-        const chosen = (await page.evaluate(() => {
-          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
-          const hidden = rows[rows.length - 1]?.querySelector('input[name*="[product_id]"]') as HTMLInputElement | null;
-          return (hidden?.value ?? '').trim();
-        })) as string;
-        if (!chosen) throw new DataError(`sparepart "${want}" was not selected — Turboly would drop the line`);
-        await this.setLastSparepartRow(page, line.qty, line.productName, line.priceIncTax);
-      }
-    }
+    await this.addLinesOnOpenForm(page, payload);
 
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
 
@@ -1275,6 +1423,41 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
+  /**
+   * On an order's edit page: if the plan date/time inputs are rendered and the
+   * plan is not in the future (WIB), set them to `date`/`time` (ISO date, HH:MM
+   * — formatDateWib/formatTimeWib output, which is exactly what the edit page
+   * shows: "2026-08-12" / "18:36" on sandbox SO 249112). Returns true if moved.
+   */
+  private async replanIfPast(page: Page, date: string, time: string): Promise<boolean> {
+    const cur = await page.evaluate(() => ({
+      d: (document.querySelector('#service-date') as HTMLInputElement | null)?.value ?? null,
+      t: (document.querySelector('#service-time') as HTMLInputElement | null)?.value ?? null,
+    })).catch(() => ({ d: null, t: null }));
+    if (!cur.d || !cur.t) return false;
+    // Accept "YYYY-MM-DD" and "DD-MM-YYYY"; anything else is left alone.
+    let y = 0, mo = 0, d = 0;
+    let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cur.d.trim());
+    if (m) { y = +m[1]!; mo = +m[2]!; d = +m[3]!; }
+    else if ((m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(cur.d.trim()))) { d = +m[1]!; mo = +m[2]!; y = +m[3]!; }
+    else return false;
+    const tm = /^(\d{1,2}):(\d{2})/.exec(cur.t.trim());
+    if (!tm) return false;
+    const planWibMs = Date.UTC(y, mo - 1, d, +tm[1]!, +tm[2]!) - 7 * 3600 * 1000;
+    if (planWibMs > Date.now() + 5 * 60_000) return false; // still in the future: leave it
+    for (let i = 0; i < 2; i++) {
+      await this.setPickerValue('#service-date', date);
+      await this.setPickerValue('#service-time', time);
+      await page.waitForTimeout(300);
+      const got = await page.evaluate(() => ({
+        d: (document.querySelector('#service-date') as HTMLInputElement | null)?.value,
+        t: (document.querySelector('#service-time') as HTMLInputElement | null)?.value,
+      }));
+      if (got.d === date && got.t === time) return true;
+    }
+    return true;
+  }
+
   /** Set a datepicker/timepicker input by value + dispatch change (typed fill mangles it).
    *  Also updates the jQuery datepicker's INTERNAL state — otherwise a later widget
    *  re-render (e.g. after the new-customer modal saves) writes its stale "today"
@@ -1312,6 +1495,137 @@ export class RpaSink implements ServiceOrderSink {
         if (price) fire(price, String(priceIncTax));
       }
     }, { qty, notes, priceIncTax: priceIncTax ?? null });
+  }
+
+
+  /**
+   * Add every service + sparepart line of the payload to the Service Order
+   * form currently open on `page` — the create form OR the edit form of an
+   * existing order, which render the same pane, the same "Add Service Item" /
+   * "Add Sparepart" links, and the same nested row fields (VERIFIED on the
+   * sandbox edit page of approved SO 249185, 2026-08-18: existing saved rows do
+   * NOT match the new-row selectors below, so the before/after counts and the
+   * "last row" targeting keep meaning "the row we just added").
+   *
+   * @param markerToken when set, appended in brackets to the FIRST service
+   *   line's description; see appendLinesToServiceOrder for why.
+   */
+  private async addLinesOnOpenForm(page: Page, payload: TurbolyServiceOrderPayload, markerToken: string | null = null): Promise<void> {
+    // 5. Service lines (tab → Add Service Item → row Select2 + qty + description).
+    // Each add must create a NEW row before we search it — otherwise a fast loop
+    // silently drops a line (search lands on a stale/last row). Wait for the row
+    // count to grow, then verify at the end that every line made it.
+    await this.dismissModals();
+    // Open the pane. On the create form and on an APPROVED order's edit page it
+    // is the active pane already; on a DRAFT order's edit page the active pane
+    // is Inspections (VERIFIED sandbox SO 249112, 2026-08-18) and the add-links
+    // sit hidden until this tab is clicked. So the click may no-op, but the
+    // link we are about to press must be VISIBLE before any row is added —
+    // otherwise the loop would wait 30 s per line on a hidden element.
+    await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    const addServiceLink = page.locator('a.btn-add-item', { hasText: /add service item/i }).first();
+    if (!(await addServiceLink.isVisible().catch(() => false))) {
+      await page.locator('.nav-tabs a', { hasText: /packages, spareparts/i }).first().click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(700);
+    }
+    if (!(await addServiceLink.isVisible().catch(() => false))) {
+      // Deliberately NOT a DataError: a pane that will not open is a kicked
+      // session or a maintenance page far more often than a real form change,
+      // and classifyFailure knows how to tell those apart — a DataError would
+      // park the doc for a human over a vendor blip.
+      throw new Error('panel "Packages, Spareparts & Services" tidak terbuka — tombol Add Service Item tidak terlihat');
+    }
+    const rowSel = '.select2-container.input-service-product';
+    let firstService = true;
+    for (const line of payload.serviceLines) {
+      const before = await page.locator(rowSel).count();
+      await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
+      for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
+      if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
+      await page.waitForTimeout(400);
+      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
+      await page.waitForTimeout(600);
+      // The append path stamps the SPK token onto its FIRST service line so the
+      // Service Order page carries it afterwards — the same identity read-back
+      // uses, and the only thing that lets a retry see "already appended".
+      const desc = line.description || line.serviceName;
+      await this.setLastServiceRow(page, line.qty, firstService && markerToken ? `${desc} [${markerToken}]` : desc, line.priceIncTax);
+      firstService = false;
+    }
+    const rowCount = await page.locator(rowSel).count();
+    if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
+    /**
+     * 5b. Sparepart lines — a DIFFERENT row shape from a service item, on the same tab.
+     *
+     * A Service Order carries goods as well as work, and some SPK rows are goods:
+     * "Pentil Karet" is AKS-NAW-PEKA, which the service catalogue has never heard of
+     * (VERIFIED: service search → 0 results, product search → "Pentil Karet"). Sent as
+     * a service line it failed for good with `no Turboly match`, so the line used to
+     * throw here instead — loud, but the SPK still never reached Turboly.
+     *
+     * VERIFIED 2026-08-11 by driving the live form: the pane offers "Add Package
+     * Service", "Add Sparepart" and "Add Service Item". A sparepart row is
+     * service_order_lines_attributes (product_id / quantity / original_price /
+     * product_notes) where a service row is service_order_additional_lines_attributes
+     * (input-service-product / input-quantity / description). Same add-link class,
+     * different table — hence a separate row selector and a separate setter.
+     *
+     * Unlike a service line, the sparepart PRICE is editable, so the quoted price is
+     * written when the SPK carries one and Turboly's own pricelist stands when it does
+     * not — the same rule setLastServiceRow already follows.
+     */
+    if (payload.sparepartLines.length) {
+      for (const line of payload.sparepartLines) {
+        const want = line.expectedSku || line.productName;
+        const before = await page.locator('tr:has(input[name*="[product_id]"])').count();
+        await page.locator('a.btn-add-item', { hasText: /add sparepart/i }).first().click();
+        for (let i = 0; i < 25 && (await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before; i++) {
+          await page.waitForTimeout(200);
+        }
+        if ((await page.locator('tr:has(input[name*="[product_id]"])').count()) <= before) {
+          throw new DataError(`sparepart row did not appear for "${want}"`);
+        }
+        await page.waitForTimeout(400);
+        /**
+         * Open the PRODUCT picker specifically.
+         *
+         * A sparepart row holds several select2 widgets — product, tax, other tax —
+         * and taking the last one picked a TAX instead: the row saved with "PPN" set,
+         * the product blank, and Turboly silently discarded the line while the push
+         * reported success (SRO/PMLNP/26080101). So the container is resolved from the
+         * hidden input that actually carries product_id, and stamped with an id so the
+         * click cannot land anywhere else.
+         */
+        const pickerId = (await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
+          const row = rows[rows.length - 1];
+          const hidden = row?.querySelector('input[name*="[product_id]"]') as HTMLElement | null;
+          if (!hidden) return '';
+          const container = (hidden.previousElementSibling?.classList?.contains('select2-container')
+            ? hidden.previousElementSibling
+            : hidden.nextElementSibling?.classList?.contains('select2-container')
+              ? hidden.nextElementSibling
+              : row?.querySelector('.select2-container')) as HTMLElement | null;
+          if (!container) return '';
+          if (!container.id) container.id = 'spk-part-picker';
+          return container.id;
+        })) as string;
+        if (!pickerId) throw new DataError(`sparepart product picker not found for "${want}"`);
+        await this.pickSelect2Locator(page.locator(`#${pickerId}`), want);
+        await page.waitForTimeout(600);
+        // The line only counts once Turboly holds a product id. Without this the row
+        // saves blank and vanishes — which is exactly how the first attempt "passed".
+        const chosen = (await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll('tr')).filter((r) => r.querySelector('input[name*="[product_id]"]'));
+          const hidden = rows[rows.length - 1]?.querySelector('input[name*="[product_id]"]') as HTMLInputElement | null;
+          return (hidden?.value ?? '').trim();
+        })) as string;
+        if (!chosen) throw new DataError(`sparepart "${want}" was not selected — Turboly would drop the line`);
+        await this.setLastSparepartRow(page, line.qty, line.productName, line.priceIncTax);
+      }
+    }
+
   }
 
   private async setLastServiceRow(page: Page, qty: number, description: string, priceIncTax?: number | null): Promise<void> {
@@ -1405,6 +1719,7 @@ export class RpaSink implements ServiceOrderSink {
     return {
       found: tokenMatches,
       serviceOrderNo: savedNo ?? doc.turboly.serviceOrderNo,
+      serviceOrderUrl: /\/service_orders\/\d+/.test(page.url()) ? page.url().replace(/[#?].*$/, '').replace(/\/edit$/, '') : null,
       store: null,
       lineCount: lineSkus.length || null,
       lineSkus,

@@ -97,7 +97,7 @@ export async function GET(req: Request): Promise<Response> {
         // checkGo.inspectionItems (27.6 KB) were 52% — and the board reads
         // NEITHER, only checkGo.alert.mode. Same for turboly, where the card
         // shows four document numbers and the read-back blob rode along.
-        'turboly.serviceOrderNo': 1, 'turboly.serviceOrderUrl': 1, 'turboly.workOrderNo': 1,
+        'turboly.serviceOrderNo': 1, 'turboly.serviceOrderUrl': 1, 'turboly.workOrderNo': 1, 'turboly.mergedInto': 1,
         'checkGo.alert': 1, 'checkGo.harga': 1,
         'push.lastError': 1, 'push.failureClass': 1,
         createdAt: 1, updatedAt: 1,
@@ -156,6 +156,9 @@ export async function GET(req: Request): Promise<Response> {
     const next = activeJob ? null : nextFlowAction(f);
     const isCheckGo = String(d.docType) === 'CHECK_AND_GO';
     const pushBlocked = d.state === 'failed' || d.state === 'manual_intervention';
+    // Lines appended onto the same car's Check & Go order: this card has no
+    // order of its own and no steps to offer — its work is that card's work.
+    const mergedInto = d.turboly?.mergedInto ?? null;
 
     return {
       spkId: d._id,
@@ -178,15 +181,17 @@ export async function GET(req: Request): Promise<Response> {
       flow: f,
       turboly: {
         serviceOrderNo: d.turboly?.serviceOrderNo ?? null,
-        serviceOrderUrl: d.turboly?.serviceOrderUrl ?? null,
+        // A merged SPK links to the Check & Go's order so the card still opens the right page.
+        serviceOrderUrl: d.turboly?.serviceOrderUrl ?? mergedInto?.serviceOrderUrl ?? null,
         workOrderNo: f.workOrderNo ?? d.turboly?.workOrderNo ?? null,
         invoiceNo: f.invoiceNo ?? null,
       },
+      mergedInto,
 
-      column: boardColumn(f),
-      stageLabel: stageLabel(f),
-      nextAction: next,
-      nextActionLabel: next ? FLOW_ACTION_LABELS[next] : null,
+      column: mergedInto ? 'done' : boardColumn(f),
+      stageLabel: mergedInto ? `Digabung ke SO ${mergedInto.serviceOrderNo ?? ''} (Check & Go)`.trim() : stageLabel(f),
+      nextAction: mergedInto ? null : next,
+      nextActionLabel: !mergedInto && next ? FLOW_ACTION_LABELS[next] : null,
 
       checkGo: d.checkGo ?? null,
 

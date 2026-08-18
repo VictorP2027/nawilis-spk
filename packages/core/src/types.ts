@@ -225,6 +225,14 @@ export interface PushInfo {
   storeSwitch: { expected: string; observed: string | null; verifiedFrom: string };
   failureClass?: FailureClass | null;
   lastError?: string | null;
+  /**
+   * Last attempt to APPEND this SPK onto the same car's Check & Go order
+   * instead of creating one (see pushRunner). fellBack=true means nothing
+   * irreversible had happened and a separate order was created as before.
+   */
+  mergeAttempt?: { at: string; targetSpkId: string; error: string | null; failureClass: FailureClass | null; fellBack: boolean } | null;
+  /** When this SPK FIRST held for its car's Check & Go. The cap is measured from here — never from the Check & Go's own updatedAt, which every retry rewrites. */
+  mergeHoldSince?: string | null;
 }
 
 export type FailureClass = 'transient' | 'auth' | 'data' | 'structural' | 'infra';
@@ -234,6 +242,22 @@ export interface TurbolyReadback {
   workOrderNo: string | null;
   /** Absolute URL of the created SO detail page, captured on save for direct read-back. */
   serviceOrderUrl?: string | null;
+  /**
+   * Set when this SPK's lines were APPENDED to an existing Check & Go Service
+   * Order instead of creating one of its own (Jane, Turboly, 2026-08-18: "if
+   * same car then should be 1 SRO"). serviceOrderNo above then holds the
+   * Check & Go's number; serviceOrderUrl stays null on purpose — the URL is
+   * unique per doc (uq_turboly_so_url) and belongs to the Check & Go doc.
+   */
+  mergedInto?: {
+    /** The Check & Go doc whose Service Order received the lines. */
+    spkId: string;
+    serviceOrderUrl: string;
+    serviceOrderNo: string | null;
+    at: string;
+    /** What a human still has to do about this merge (WO already made, notes not carried, approval reset). Shown on the board. */
+    warnings?: string[];
+  } | null;
   readback: {
     matchedOn: string[];
     lineCount: number | null;
@@ -332,6 +356,8 @@ export interface CheckGo {
   stayCheckOnlyAt?: string;
   /** Set by the worker once the checklist has been pushed onto the Turboly SO. */
   inspectionsPushedAt?: string;
+  /** SPK docs whose lines were appended onto this Check & Go's Service Order. */
+  mergedSpkIds?: string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -542,6 +568,8 @@ export interface ReconRun {
   extraWithOurToken: string[];
   extraNoToken: number;
   stuck: number;
+  /** SPKs whose lines live on the car's Check & Go order — counted, never alerted (optional: older runs predate the merge). */
+  mergedIntoCheckGo?: number;
   alertsFired: string[];
 }
 

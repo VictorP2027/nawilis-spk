@@ -62,7 +62,15 @@ async function main(): Promise<void> {
     let until = Date.now() + GRACE_MS;
     while (Date.now() < until && left() > 0) {
       await sleep(GRACE_POLL_MS);
-      if ((await collections.spk().countDocuments({ state: 'queued' }, { limit: 1 })) === 0) continue;
+      // Same "due now" rule as pushQueued's fetchBatch: a queued SPK holding for
+      // its car's Check & Go carries a future nextAttemptAt and must not keep
+      // this loop — and the shared turboly-push concurrency group — alive.
+      const nowIso = new Date().toISOString();
+      const due = await collections.spk().countDocuments(
+        { state: 'queued', $or: [{ 'push.nextAttemptAt': null }, { 'push.nextAttemptAt': { $exists: false } }, { 'push.nextAttemptAt': { $lte: nowIso } }] },
+        { limit: 1 },
+      );
+      if (due === 0) continue;
       const r = await pushQueued(branchSinks, { workerId: 'push-once', budgetMs: left(), log });
       if (r.candidates > 0) {
         add(r);

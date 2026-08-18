@@ -89,16 +89,76 @@ export interface PushResult {
 export interface VerifyResult {
   found: boolean;
   serviceOrderNo: string | null;
+  /**
+   * The order page the token was found on. A doc reclaimed after its runner
+   * died mid-push knows its number but not its URL, and without the URL the
+   * next SPK for that car cannot merge into it — the feature would fail open
+   * and create the second order it exists to prevent.
+   */
+  serviceOrderUrl?: string | null;
   store: string | null;
   lineCount: number | null;
   lineSkus: string[];
   km: number | null;
 }
 
+/**
+ * Where an SPK's lines should land when the same car already has an open
+ * Check & Go Service Order (Jane, Turboly, 2026-08-18: "if same car then
+ * should be 1 SRO").
+ */
+export interface AppendTarget {
+  /** Absolute URL of the Check & Go's SO detail page. */
+  serviceOrderUrl: string;
+  /** No-space plate the SO must show, e.g. "B1234SZA" — proven on the page before anything is typed. */
+  expectedPlate: string;
+  /**
+   * This SPK's correlation token. Written into the first appended service line's
+   * description so the SO page carries it afterwards — that is what makes a
+   * retry able to see "already appended" instead of appending twice.
+   */
+  spkToken: string;
+}
+
+export interface AppendResult {
+  ok: boolean;
+  /** The Check & Go SO's number, read off the page. */
+  serviceOrderNo: string | null;
+  /**
+   * true when the token was already on the SO before we touched anything: a
+   * previous attempt appended and died before recording it. Nothing was typed.
+   */
+  alreadyAppended?: boolean;
+  /**
+   * The append could not even START (SO not found, plate mismatch, controls
+   * missing, SO closed): nothing irreversible happened, so the caller may fall
+   * back to creating a separate SO exactly as before this feature existed.
+   * NEVER set after Save was clicked.
+   */
+  fallbackToCreate?: boolean;
+  failureClass?: 'transient' | 'auth' | 'data' | 'structural' | 'infra';
+  error?: string;
+  screenshotRef?: string | null;
+  /**
+   * false when the SPK's notes (complaint, custom lines) could not be written
+   * because the order's edit page renders no notes field (an APPROVED order).
+   * The lines still landed; only the free text did not travel.
+   */
+  notesCarried?: boolean;
+  /** The order was APPROVED and the edit sent it back to PENDING APPROVAL — a human must re-approve. */
+  approvalReset?: boolean;
+}
+
 export interface ServiceOrderSink {
   readonly mode: 'rpa' | 'api' | 'manual';
   /** Create (and optionally approve) the Service Order from a resolved payload. */
   pushServiceOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult>;
+  /**
+   * OPTIONAL. Append the payload's service + sparepart lines to an EXISTING
+   * Service Order (the same car's Check & Go). Sinks that cannot edit an
+   * existing order simply omit it and the runner creates a separate SO.
+   */
+  appendLinesToServiceOrder?(target: AppendTarget, payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<AppendResult>;
   /**
    * Independent read-back by correlation token — MUST run in a fresh context,
    * never reusing the write session. Sets `confirmed`, nothing else may.

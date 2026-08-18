@@ -40,11 +40,18 @@ export async function reconcile(harvest: () => Promise<HarvestedSo[]>): Promise<
   }
 
   // Our side: everything we believe reached Turboly.
+  // A MERGED SPK's token is not in any Service Order's Reference Number: its
+  // lines (and the token with them) sit inside the car's Check & Go order,
+  // which carries the Check & Go's own reference. Counting those as "missing"
+  // would make this control read non-zero every single day, and a control that
+  // always reads non-zero is a control nobody reads. They are listed on their
+  // own instead, so the merge stays visible without drowning the real signal.
   const confirmed = await collections
     .spk()
-    .find({ state: { $in: ['pushed', 'confirmed', 'amend_pending'] } }, { projection: { _id: 1, 'push.correlationToken': 1 } })
+    .find({ state: { $in: ['pushed', 'confirmed', 'amend_pending'] } }, { projection: { _id: 1, 'push.correlationToken': 1, 'turboly.mergedInto': 1 } })
     .toArray();
-  const ourTokens = new Set(confirmed.map((d) => d.push.correlationToken));
+  const mergedTokens = new Set(confirmed.filter((d) => d.turboly?.mergedInto).map((d) => d.push.correlationToken));
+  const ourTokens = new Set(confirmed.filter((d) => !d.turboly?.mergedInto).map((d) => d.push.correlationToken));
 
   const missingInTurboly = [...ourTokens].filter((t) => !turbolyTokens.has(t));
   const extraWithOurToken: string[] = [];
@@ -81,8 +88,9 @@ export async function reconcile(harvest: () => Promise<HarvestedSo[]>): Promise<
     extraWithOurToken,
     extraNoToken,
     stuck,
+    mergedIntoCheckGo: mergedTokens.size,
     alertsFired,
   });
 
-  console.log(`[recon] ${ranAt} missing=${missingInTurboly.length} double=${extraWithOurToken.length} noToken=${extraNoToken} stuck=${stuck}`);
+  console.log(`[recon] ${ranAt} missing=${missingInTurboly.length} double=${extraWithOurToken.length} noToken=${extraNoToken} stuck=${stuck} merged=${mergedTokens.size}`);
 }

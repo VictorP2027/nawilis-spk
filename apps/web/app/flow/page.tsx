@@ -47,6 +47,10 @@ interface FlowRow {
   total: number;
   /** Check & Go WhatsApp stamp: null | 'requested' | 'live' | 'failed' | 'manual'. */
   waAlert: string | null;
+  /** Set when this SPK's lines were added to the car's Check & Go order instead of a second one. */
+  mergedIntoNo: string | null;
+  /** What a human still has to do about that merge (WO already made, notes not carried, re-approval). */
+  mergeWarnings: string[];
 }
 
 interface Mechanic { code: string; name: string; role: string | null }
@@ -102,6 +106,7 @@ function nextActionFor(row: FlowRow): ActionDef | null {
 
 /** Small status chip text on the card. */
 function stageChip(row: FlowRow): { text: string; cls: string } {
+  if (row.mergedIntoNo) return { text: `Digabung ke SO ${row.mergedIntoNo}`, cls: 'gray' };
   switch (row.column) {
     case 'intake': return { text: 'Menunggu SO', cls: 'gray' };
     case 'so': return row.so?.approved ? { text: 'SO approved', cls: 'green' } : { text: 'SO dibuat', cls: 'blue' };
@@ -190,6 +195,15 @@ function normRow(raw: unknown): FlowRow | null {
     pendingJob,
     total: typeof r.quotedTotal === 'number' && Number.isFinite(r.quotedTotal) ? r.quotedTotal : 0,
     waAlert: (() => { const a = obj(obj(r.checkGo)?.alert); return a ? str(a.mode) : null; })(),
+    // A merged SPK is NOT a finished job: its work sits on the Check & Go's
+    // order and still has to be approved, worked and invoiced from THAT card.
+    // Without this the card showed a green "Selesai" and staff counted it as done.
+    mergedIntoNo: (() => { const m = obj(r.mergedInto); return m ? str(m.serviceOrderNo) ?? '—' : null; })(),
+    mergeWarnings: (() => {
+      const m = obj(r.mergedInto);
+      const w = m?.warnings;
+      return Array.isArray(w) ? w.filter((x): x is string => typeof x === 'string' && x !== '') : [];
+    })(),
   };
 }
 
@@ -809,6 +823,18 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
           onClick={() => onArchive(row)}
         >🗄</button>
       </div>
+
+      {/* Merged into the car's Check & Go order: say where the work went, and
+          say what a human still has to do about it. These warnings used to live
+          only in the worker's log, which nobody at the branch reads. */}
+      {row.mergedIntoNo && (
+        <div className="fb-meta" style={{ marginTop: 6 }}>
+          ↪ Baris masuk ke SO Check & Go {row.mergedIntoNo} — lanjutkan dari kartu Check & Go mobil ini.
+          {row.mergeWarnings.map((w) => (
+            <div key={w} style={{ marginTop: 4, color: '#b45309' }}>⚠ {w}</div>
+          ))}
+        </div>
+      )}
 
       {/* Check & Go only: nothing reaches the customer's WhatsApp without this
           button — the drainer sends solely docs the modal stamped 'requested'. */}

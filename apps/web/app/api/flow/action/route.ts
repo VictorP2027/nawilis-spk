@@ -122,6 +122,21 @@ export async function POST(req: Request): Promise<Response> {
     if (!doc) {
       return NextResponse.json({ error: 'not_found', message: `Dokumen ${spkId} tidak ditemukan` }, { status: 404 });
     }
+    // An SPK whose lines were appended onto the same car's Check & Go order has
+    // no Service Order of its own; every flow step (approve, work order,
+    // invoice) belongs to that Check & Go's card. Acting here would run the RPA
+    // against a URL this doc does not have.
+    const mergedInto = doc.turboly?.mergedInto;
+    if (mergedInto) {
+      return NextResponse.json(
+        {
+          error: 'merged_into_checkgo',
+          message: `SPK ini sudah digabung ke Service Order ${mergedInto.serviceOrderNo ?? ''} milik Check & Go ${mergedInto.spkId} — jalankan langkah alur dari kartu Check & Go itu.`,
+          mergedInto,
+        },
+        { status: 409 },
+      );
+    }
 
     // Stage guard: the board derives its ONE primary button from the same flow
     // helpers, so an illegal action here is a stale card — refuse loudly rather

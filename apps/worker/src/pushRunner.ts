@@ -1,5 +1,5 @@
-import { collections, transition, loadMirror } from '@spk/core';
-import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib, fillServiceOrderInspection, inspectionRowsFromCheckGo } from '@spk/core/turboly';
+import { collections, transition, loadMirror, type SpkDoc } from '@spk/core';
+import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib, fillServiceOrderInspection, inspectionRowsFromCheckGo, type AppendTarget } from '@spk/core/turboly';
 import type { BranchSinks } from './sessions.js';
 import { config } from './config.js';
 
@@ -33,6 +33,100 @@ const DEFAULT_BUDGET_MS = 50 * 60_000;
 
 type Mirror = Awaited<ReturnType<typeof loadMirror>>;
 
+/** How long a same-car Check & Go may sit in queued/pushing before an SPK stops waiting for it. */
+const MERGE_HOLD_MAX_MS = 30 * 60_000;
+/** A held SPK is looked at again after this long (one cron tick). */
+const MERGE_HOLD_RECHECK_MS = 5 * 60_000;
+
+export interface MergeDecision {
+  /** Append onto this Check & Go's Service Order. */
+  target: { spkId: string; serviceOrderUrl: string; serviceOrderNo: string | null } | null;
+  /** The same car's Check & Go is still being pushed: come back next pass rather than race it into two orders. */
+  hold: { spkId: string; state: string } | null;
+  /** Why neither, when a Check & Go for the plate did exist. */
+  note: string | null;
+}
+
+/**
+ * ONE CAR, ONE SERVICE ORDER (Jane, Turboly, 2026-08-18: "if same car then
+ * should be 1 SRO"). Find the Check & Go this SPK belongs to, if any.
+ *
+ * "Same car" is the exact no-space plate at the same branch, inside the merge
+ * window. plateVariants is only the INDEX key: OCR variants of two different
+ * plates can share one, so the decision is made on vehicle.noPolisi.full and
+ * never on the variant hit alone. Only a Check & Go that has actually reached
+ * Turboly (pushed/confirmed, with the order URL) is a target; one still queued
+ * or pushing is a HOLD — pushing the SPK now would race it into two orders,
+ * which is the exact thing this exists to prevent. A Check & Go that already
+ * has an invoice is a closed visit and gets no lines.
+ */
+/** A plate that can identify one physical car: area + number + optional suffix. Placeholders ("BARU", "XXX", "-") never merge. */
+const REAL_PLATE = /^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/;
+
+export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, now = Date.now()): Promise<MergeDecision> {
+  const none: MergeDecision = { target: null, hold: null, note: null };
+  const full = doc.vehicle?.noPolisi?.full ?? '';
+  if (!full || !REAL_PLATE.test(full)) return none;
+  // The window is anchored on THIS SPK's own capture, not on the clock at push
+  // time. An SPK captured Monday that only pushes Tuesday (a day-long outage,
+  // or a human requeue) must not land on the Check & Go of Tuesday's visit:
+  // that would put Monday's repair on a brand-new order and leave Monday's own
+  // order empty. Only a Check & Go from at-or-before this SPK can be its visit.
+  const anchor = Date.parse(doc.createdAt) || now;
+  const since = new Date(anchor - windowHours * 3600_000).toISOString();
+  const keys = doc.vehicle.plateVariants?.length ? doc.vehicle.plateVariants : [full];
+  const cands = (await collections
+    .spk()
+    .find(
+      {
+        docType: 'CHECK_AND_GO',
+        branchCode: doc.branchCode,
+        'vehicle.plateVariants': { $in: keys },
+        createdAt: { $gte: since, $lte: doc.createdAt },
+        _id: { $ne: doc._id },
+      },
+      { sort: { createdAt: -1 }, limit: 8 },
+    )
+    .toArray()) as SpkDoc[];
+  const same = cands.filter((c) => (c.vehicle?.noPolisi?.full ?? '') === full);
+  if (!same.length) return none;
+
+  // Newest first — the newest Check & Go for the car is the visit this SPK
+  // belongs to, and an older finished one must never beat a newer one still in
+  // flight. But a newest candidate that can never carry lines (its own push
+  // died for good) must not VETO an older one whose order is open and waiting:
+  // that veto is how one car quietly ends up with two orders.
+  let note: string | null = null;
+  for (const c of same) {
+    const url = c.turboly?.serviceOrderUrl ?? null;
+    if ((c.state === 'confirmed' || c.state === 'pushed') && url && /\/service_orders\/\d+/.test(url)) {
+      if (c.flow?.invoice) {
+        note ??= `Check & Go ${c._id} sudah berinvoice — kunjungan itu sudah ditutup`;
+        continue; // a closed visit is not this SPK's order; an older open one still might be
+      }
+      // A Work Order already made from that SO was made from the lines it had
+      // at that moment. Merging is still right — one car, one SRO, and a second
+      // SRO could never be deleted — but the WO will not grow a line by itself,
+      // so this has to be said out loud.
+      const woNote = c.flow?.wo
+        ? `SO Check & Go ${c._id} sudah punya Work Order ${c.flow.workOrderNo ?? ''} — baris SPK masuk ke SO, minta cabang menambahkannya juga ke WO`.trim()
+        : null;
+      return { target: { spkId: c._id, serviceOrderUrl: url, serviceOrderNo: c.turboly?.serviceOrderNo ?? null }, hold: null, note: woNote ?? note };
+    }
+    if (c.state === 'queued' || c.state === 'pushing' || (c.state === 'failed' && c.push?.failureClass === 'transient')) {
+      // In flight, or between two automatic retries of a vendor blip: wait for
+      // it. How long this SPK has been waiting is tracked on the SPK itself
+      // (push.mergeHoldSince) — the candidate's updatedAt is rewritten by every
+      // retry, so a Check & Go that keeps failing would be "fresh" forever.
+      return { target: null, hold: { spkId: c._id, state: c.state }, note };
+    }
+    // Data-failed, parked for a human, voided: this candidate will never carry
+    // lines. Say so once and keep looking at the older ones.
+    note ??= `Check & Go ${c._id} berstatus ${c.state}${c.turboly?.serviceOrderUrl ? '' : ' tanpa URL SO'} — tidak bisa digabung`;
+  }
+  return { target: null, hold: null, note };
+}
+
 /** Process every `queued` SPK (or a single `onlyId`). Returns per-run counts. */
 export async function pushQueued(
   branchSinks: BranchSinks,
@@ -44,10 +138,17 @@ export async function pushQueued(
   const pageSize = opts.limit ?? 25;
   const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
 
+  // A queued doc whose push.nextAttemptAt is in the FUTURE is a doc that asked
+  // to be left alone for a while — an SPK holding for its car's Check & Go to
+  // finish (see the merge branch). Fresh docs carry nextAttemptAt=now or null,
+  // so this changes nothing for them. Same $or shape as the flow queue.
+  const dueNow = () => ({
+    $or: [{ 'push.nextAttemptAt': null }, { 'push.nextAttemptAt': { $exists: false } }, { 'push.nextAttemptAt': { $lte: new Date().toISOString() } }],
+  });
   const fetchBatch = () =>
     collections
       .spk()
-      .find(opts.onlyId ? { _id: opts.onlyId } : { state: 'queued' as const })
+      .find(opts.onlyId ? { _id: opts.onlyId } : { state: 'queued' as const, ...dueNow() })
       .limit(pageSize)
       .toArray();
 
@@ -200,12 +301,50 @@ export async function pushQueued(
         // SPK, the worst outcome this pipeline has. The correlation token is on
         // the order, so ask first; only a doc on its first attempt may skip this.
         const wasReclaimed = (claimed.push as { reclaimed?: boolean }).reclaimed === true;
-        if (claimed.push.attempt > 1 || wasReclaimed) {
+        // A merge attempt that did NOT fall back had already typed into — and
+        // possibly saved onto — the Check & Go's order. Its transient failure
+        // refunds the attempt, so `attempt > 1` would never become true and the
+        // check below would be skipped on precisely the doc that most needs it.
+        const triedMerge = Boolean(claimed.push.mergeAttempt) && claimed.push.mergeAttempt?.fellBack !== true;
+        if (claimed.push.attempt > 1 || wasReclaimed || triedMerge) {
           const prior = await branchSinks
             .withSink(claimed.branchCode, (sink) => sink.verifyByToken(claimed))
             .catch(() => null);
           if (prior?.found) {
-            const adopted = { ...claimed.turboly, serviceOrderNo: prior.serviceOrderNo ?? claimed.turboly.serviceOrderNo };
+            // The order that carries our token may be the same car's Check &
+            // Go order (an append that committed and died before recording):
+            // then this doc is a merged one and must say so, or the board would
+            // offer it flow steps against an order URL it does not hold.
+            // Which order is it? If the token turned up on the same car's Check
+            // & Go order, this doc is a MERGED one and must say so, or the board
+            // would offer it flow steps against an order it does not hold.
+            //
+            // Matched on the order URL, never on the document number: mongo.ts
+            // says in as many words that SRO/… numbers are recycled by tenant
+            // renumbering and sandbox resets, which is why the unique index is
+            // on the URL. Matching on the number could null out the real
+            // serviceOrderUrl of a doc that owns its own order.
+            const priorUrl = (prior.serviceOrderUrl ?? '').replace(/[#?].*$/, '') || null;
+            const owner =
+              config.mergeIntoCheckGo && priorUrl
+                ? await collections.spk().findOne(
+                    { _id: { $ne: doc._id }, docType: 'CHECK_AND_GO', branchCode: claimed.branchCode, 'turboly.serviceOrderUrl': priorUrl },
+                    { projection: { _id: 1, 'turboly.serviceOrderUrl': 1 } },
+                  )
+                : null;
+            const adopted = {
+              ...claimed.turboly,
+              serviceOrderNo: prior.serviceOrderNo ?? claimed.turboly.serviceOrderNo,
+              ...(owner?.turboly?.serviceOrderUrl
+                ? { serviceOrderUrl: null, mergedInto: { spkId: owner._id, serviceOrderUrl: owner.turboly.serviceOrderUrl, serviceOrderNo: prior.serviceOrderNo ?? null, at: new Date().toISOString() } }
+                : // Not a merge: keep (or recover) this doc's OWN order URL, so
+                  // the next SPK for this car can still merge into it instead of
+                  // opening the second order.
+                  priorUrl && !claimed.turboly.serviceOrderUrl
+                  ? { serviceOrderUrl: priorUrl }
+                  : {}),
+            };
+            if (owner) await collections.spk().updateOne({ _id: owner._id }, { $addToSet: { 'checkGo.mergedSpkIds': doc._id } }).catch(() => {});
             await transition(doc._id, 'pushing', 'pushed', { turboly: adopted }).catch(() => {});
             await transition(doc._id, 'pushed', 'confirmed', {
               turboly: { ...adopted, readback: { matchedOn: ['reference_token'], lineCount: prior.lineCount, lineSkus: prior.lineSkus, km: prior.km } },
@@ -233,6 +372,155 @@ export async function pushQueued(
             out.failed++;
             log(`⚠ ${doc._id}: orphan tidak bisa diverifikasi — dipindah ke manual_intervention (hindari order dobel)`);
             continue;
+          }
+        }
+
+        // ── ONE CAR, ONE SERVICE ORDER ───────────────────────────────────
+        // A Check & Go already opened this car's order today; the SPK's lines
+        // belong on it, not on a second one. Every exit below that is not a
+        // clean append either continues to the create path — ONLY when the
+        // sink says nothing irreversible happened — or parks the doc.
+        // A booked FUTURE appointment is a visit of its own, and a goods-only
+        // payload has no service line to carry the identity token — neither
+        // is merged; both get their own order exactly as before.
+        const mergeEligible = String(claimed.docType) !== 'CHECK_AND_GO' && !sched && payload.serviceLines.length > 0;
+        if (config.mergeIntoCheckGo && mergeEligible) {
+          const decision = await findCheckGoMergeTarget(claimed, config.mergeWindowHours);
+          // How long has THIS SPK been waiting? Measured from its own first
+          // hold: a Check & Go that keeps failing transiently is requeued every
+          // few minutes, and its updatedAt is rewritten each time, so anything
+          // measured on the candidate would read "fresh" forever and the SPK
+          // would wait for a car that never arrives.
+          const heldSince = claimed.push.mergeHoldSince ?? null;
+          const heldForMs = heldSince ? Date.now() - Date.parse(heldSince) : 0;
+          if (decision.hold && heldForMs >= MERGE_HOLD_MAX_MS) {
+            log(
+              `· ${doc._id} sudah menunggu Check & Go ${decision.hold.spkId} ${Math.round(heldForMs / 60_000)} menit — tidak ditunggu lagi, SPK dibuat SO sendiri`,
+            );
+            await collections.spk().updateOne({ _id: doc._id }, { $unset: { 'push.mergeHoldSince': '' } }).catch(() => {});
+            decision.hold = null;
+          }
+          if (decision.hold) {
+            // Release the claim (attempt refunded) and ask to be left alone for
+            // a few minutes: fetchBatch skips a queued doc whose nextAttemptAt
+            // is in the future, so this run's grace loop and the next cron do
+            // not re-claim it every 3 s. Racing the Check & Go now is how one
+            // car becomes two orders; the next pass finds it confirmed and
+            // appends.
+            await transition(doc._id, 'pushing', 'queued', {
+              push: {
+                ...claimed.push,
+                attempt: Math.max(0, claimed.push.attempt - 1),
+                lease: doc.push.lease,
+                nextAttemptAt: new Date(Date.now() + MERGE_HOLD_RECHECK_MS).toISOString(),
+                mergeHoldSince: heldSince ?? new Date().toISOString(),
+                lastError: `menunggu Check & Go ${decision.hold.spkId} (${decision.hold.state}) selesai — satu mobil satu SRO`,
+              },
+            }).catch(() => {});
+            log(`· ${doc._id} menunggu Check & Go ${decision.hold.spkId} (${decision.hold.state}) selesai dulu — supaya satu mobil satu SRO (dicek lagi ${MERGE_HOLD_RECHECK_MS / 60_000} menit)`);
+            continue;
+          }
+          if (decision.note) log(`  · gabung: ${decision.note}`);
+          if (!decision.target && triedMerge) {
+            // An earlier attempt got as far as the Check & Go's edit form and
+            // did NOT report a clean fallback; the read-back above could not
+            // find our token, but "cannot see it" is not "it is not there"
+            // (a kicked session reads nothing). The target is gone now — the
+            // visit was invoiced, or a newer Check & Go took its place — so
+            // there is nothing left to merge into and creating would risk the
+            // duplicate this whole path exists to prevent.
+            await transition(doc._id, 'pushing', 'manual_intervention', {
+              push: {
+                ...claimed.push,
+                failureClass: 'structural',
+                lastError: `Percobaan gabung ke SO Check & Go ${claimed.push.mergeAttempt?.targetSpkId ?? '?'} terputus dan SO itu sudah tidak bisa dipakai — CEK MANUAL di Turboly apakah baris SPK ini sudah masuk. Jangan buat SO baru sebelum yakin.`,
+              },
+            }).catch(() => {});
+            out.failed++;
+            log(`⚠ ${doc._id}: gabung terputus dan target hilang — manual_intervention (jangan buat SO baru)`);
+            continue;
+          }
+          if (decision.target) {
+            const target: AppendTarget = {
+              serviceOrderUrl: decision.target.serviceOrderUrl,
+              expectedPlate: (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, ''),
+              spkToken: claimed.push.correlationToken,
+            };
+            const ap = await branchSinks.withSink(claimed.branchCode, (sink) =>
+              sink.appendLinesToServiceOrder
+                ? sink.appendLinesToServiceOrder(target, payload, { workerId, epoch, approve: false, leaseExpiresAt })
+                : Promise.resolve({ ok: false as const, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'structural' as const, error: 'sink ini tidak bisa mengedit Service Order yang sudah ada' }),
+            );
+            if (ap.ok) {
+              const at = new Date().toISOString();
+              // What a HUMAN still has to do lives on the document, not only in
+              // a CI log nobody at the branch reads: the board shows these.
+              const warnings = [
+                decision.note,
+                ap.notesCarried === false
+                  ? 'Catatan SPK (keluhan / pekerjaan lain / kondisi) tidak ikut — SO Check & Go sudah APPROVED sehingga kolom catatan tidak ada. Baris jasa & sparepart tetap masuk.'
+                  : null,
+                ap.approvalReset === true
+                  ? 'SO Check & Go tadinya APPROVED; setelah ditambah baris Turboly mengembalikannya ke PENDING APPROVAL — minta approval ulang.'
+                  : null,
+              ].filter((x): x is string => Boolean(x));
+              const merged = {
+                ...claimed.turboly,
+                serviceOrderNo: ap.serviceOrderNo ?? decision.target.serviceOrderNo,
+                // The URL is the Check & Go doc's (unique per doc); this doc points at it via mergedInto.
+                serviceOrderUrl: null,
+                mergedInto: { spkId: decision.target.spkId, serviceOrderUrl: decision.target.serviceOrderUrl, serviceOrderNo: ap.serviceOrderNo ?? decision.target.serviceOrderNo, at, ...(warnings.length ? { warnings } : {}) },
+              };
+              await transition(doc._id, 'pushing', 'pushed', { turboly: merged, push: { ...claimed.push, mergeHoldSince: null } });
+              await collections.spk().updateOne({ _id: decision.target.spkId }, { $addToSet: { 'checkGo.mergedSpkIds': doc._id } }).catch(() => {});
+              out.pushed++;
+              log(`✓ ${doc._id} → digabung ke SO ${merged.serviceOrderNo ?? '?'} milik Check & Go ${decision.target.spkId}${ap.alreadyAppended ? ' (sudah ada dari percobaan sebelumnya — diadopsi)' : ''}`);
+              for (const w of warnings) log(`  ⚠ ${w}`);
+              // Read-back on the Check & Go's order: our token must be visible there.
+              const v = await branchSinks
+                .withSink(claimed.branchCode, (sink) => sink.verifyByToken({ ...claimed, turboly: { ...merged, serviceOrderUrl: decision.target!.serviceOrderUrl } }))
+                .catch(() => null);
+              if (v?.found) {
+                await transition(doc._id, 'pushed', 'confirmed', {
+                  turboly: { ...merged, serviceOrderNo: v.serviceOrderNo ?? merged.serviceOrderNo, readback: { matchedOn: ['reference_token', 'merged_into_checkgo'], lineCount: v.lineCount, lineSkus: v.lineSkus, km: v.km } },
+                });
+                out.confirmed++;
+                log(`  ✓ verified on Check & Go order → confirmed`);
+              } else {
+                log(`  ⚠ not verified (left in 'pushed')`);
+              }
+              continue;
+            }
+            // Append did not happen cleanly.
+            const stamp = { mergeAttempt: { at: new Date().toISOString(), targetSpkId: decision.target.spkId, error: ap.error ?? null, failureClass: ap.failureClass ?? null, fellBack: ap.fallbackToCreate === true } };
+            if (!ap.fallbackToCreate) {
+              const transient = ap.failureClass === 'transient' || ap.failureClass === 'auth' || ap.failureClass === 'infra';
+              if (transient) {
+                await transition(doc._id, 'pushing', 'failed', {
+                  push: { ...claimed.push, ...stamp, attempt: Math.max(0, claimed.push.attempt - 1), failureClass: ap.failureClass ?? 'transient', lastError: ap.error ?? 'gabung gagal (sementara)', nextAttemptAt: new Date(Date.now() + 10 * 60_000).toISOString() },
+                }).catch(() => {});
+                out.failed++;
+                log(`✗ ${doc._id}: gabung ke SO Check & Go gagal sementara — ${ap.error ?? ''}`);
+                continue;
+              }
+              // Save was clicked and the outcome is unknown: a human looks, and
+              // NOTHING may create a second order for this SPK meanwhile.
+              await transition(doc._id, 'pushing', 'manual_intervention', {
+                push: { ...claimed.push, ...stamp, failureClass: 'structural', lastError: ap.error ?? 'gabung ke SO Check & Go tidak terkonfirmasi — CEK MANUAL' },
+              }).catch(() => {});
+              out.failed++;
+              log(`⚠ ${doc._id}: ${ap.error ?? 'gabung tidak terkonfirmasi'} — dipindah ke manual_intervention (jangan buat SO baru)`);
+              continue;
+            }
+            // Nothing irreversible happened on the Check & Go's order: create a
+            // separate one, exactly as before this feature — loudly, and stamped.
+            // Carried in `claimed` too: the create-failure handler below writes
+            // `push` as a whole object built from this snapshot, so a stamp that
+            // lived only in Mongo would be erased on exactly the document a
+            // human has to debug.
+            claimed.push = { ...claimed.push, ...stamp };
+            await collections.spk().updateOne({ _id: doc._id }, { $set: { 'push.mergeAttempt': stamp.mergeAttempt } }).catch(() => {});
+            log(`  ⚠ gabung ke SO Check & Go ${decision.target.spkId} tidak bisa (${ap.error ?? '?'}) — dibuat SO terpisah seperti biasa`);
           }
         }
 
