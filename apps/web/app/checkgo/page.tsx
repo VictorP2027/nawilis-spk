@@ -364,7 +364,19 @@ export default function CheckGoIntake() {
 
   // ENFORCED Indonesian WA format: identity key of the customer.
   const waNat = waDigits.replace(/^62/, '').replace(/^0/, '');
-  const waOk = /^8\d{8,11}$/.test(waNat);
+  /**
+   * Same rule as the SPK form: a mobile (starts 8, 9-12 national digits) OR a
+   * geographic area code 2-7 — "021…", the office line that is often the only
+   * contact a fleet or company customer has. The server has accepted both since
+   * yesterday (parseWa in @spk/core); this form was still refusing the office
+   * numbers, so a counter could enter one on an SPK and not on a Cek n Go.
+   *
+   * A landline cannot receive the WhatsApp result — the card says so rather
+   * than the send failing silently — but the number's job here is identity and
+   * callback, and refusing it outright is the worse answer.
+   */
+  const waOk = /^8\d{8,11}$/.test(waNat) || /^[2-7]\d{7,10}$/.test(waNat);
+  const waIsLandline = waOk && /^[2-7]/.test(waNat);
   const waE164Preview = waOk ? `+62${waNat}` : null;
   const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
   const ownerMismatch = !!plateOwner?.wa && canonK(wa).length >= 8 && canonK(plateOwner.wa) !== canonK(wa);
@@ -590,8 +602,9 @@ export default function CheckGoIntake() {
           <div>
           <div className="label">Nomor WhatsApp — ketik dulu</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
-          {!waOk && <div className="req-note">⚠ wajib — format Indonesia 08… / +62 8…, contoh 08123456789</div>}
+          {!waOk && <div className="req-note">⚠ wajib — HP 08… / +62 8…, atau nomor kantor 021… (contoh 08123456789 / 02155512345)</div>}
           {waOk && <div className="ok-sm">✓ {waE164Preview}{custHint ? ` · ↩ ${custHint}` : ''}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}</div>}
+          {waIsLandline && <div className="req-note" style={{ color: '#b45309' }}>ℹ nomor kantor — hasil Cek n Go tidak bisa dikirim lewat WhatsApp ke nomor ini</div>}
           {custVehicles.length > 1 && (
             <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
               {custVehicles.map((v) => (
