@@ -137,10 +137,24 @@ async function queuedSpk(plate = 'B1743BKA', branch = 'NWL-BKS'): Promise<string
   return id;
 }
 
-/** A Check & Go for `plate`: same doc shape the /api/checkgo route stores. */
+/**
+ * A Check & Go for `plate`: same doc shape the /api/checkgo route stores —
+ * INCLUDING `scheduledAt = now + 30 min`, which that route stamps on every
+ * single Check & Go (PLAN_OFFSET_MINUTES). Leaving it out is how the tests
+ * missed that the "booked appointment" rule was suppressing every merge.
+ */
 async function queuedCheckGo(plate = 'B1743BKA', branch = 'NWL-BKS'): Promise<string> {
   const id = await queuedSpk(plate, branch);
-  await collections.spk().updateOne({ _id: id }, { $set: { docType: 'CHECK_AND_GO', checkGo: { harga: 100000, inspectionItems: [], report: null } } });
+  await collections.spk().updateOne(
+    { _id: id },
+    {
+      $set: {
+        docType: 'CHECK_AND_GO',
+        scheduledAt: new Date(Date.now() + 30 * 60_000).toISOString(),
+        checkGo: { harga: 100000, inspectionItems: [], report: null },
+      },
+    },
+  );
   return id;
 }
 
@@ -613,6 +627,29 @@ async function main(): Promise<void> {
     const spk = await pushOne(await queuedSpk('B9203AB'), stub);
     ok(stub.appends.length === 0, 'the SPK did NOT append — it behaves exactly as before');
     ok(stub.created.length === 2 && spk.turboly.serviceOrderUrl != null && !spk.turboly.mergedInto, 'it made its own Service Order');
+    config.mergeIntoCheckGo = true;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  section('W. The real /checkgo document merges — its +30 min plan time is not an appointment');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // as shipped
+    const spk = await pushOne(await queuedSpk('B9301AB'), stub);
+    const cgId = await queuedCheckGo('B9301AB');
+    const cgDoc = (await collections.spk().findOne({ _id: cgId }))!;
+    ok(Date.parse(cgDoc.scheduledAt!) > Date.now() + 5 * 60_000, 'this Check & Go carries the same future plan time the live form stamps');
+    const cg = await pushOne(cgId, stub);
+    ok(stub.created.length === 1 && stub.appends.length === 1, 'it still merges: ONE Service Order for the car');
+    ok(cg.turboly.mergedInto?.spkId === spk._id, 'joined the SPK order');
+
+    // A visit booked for ANOTHER DAY is still its own order.
+    const laterId = await queuedCheckGo('B9302AB');
+    const spk2 = await pushOne(await queuedSpk('B9302AB'), stub);
+    await collections.spk().updateOne({ _id: laterId }, { $set: { scheduledAt: new Date(Date.now() + 3 * 86400_000).toISOString() } });
+    const later = await pushOne(laterId, stub);
+    ok(!later.turboly.mergedInto && later.turboly.serviceOrderUrl != null, 'a Check & Go booked for next week gets its own order');
+    ok(spk2.turboly.serviceOrderUrl != null, '(and the SPK kept its own, as always)');
     config.mergeIntoCheckGo = true;
   }
 

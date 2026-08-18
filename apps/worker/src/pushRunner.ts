@@ -455,7 +455,15 @@ export async function pushQueued(
         // is turned on.)
         const isCheckGoDoc = String(claimed.docType) === 'CHECK_AND_GO';
         const directionAllowed = isCheckGoDoc ? config.mergeCheckGoIntoSpk : config.mergeIntoCheckGo;
-        const mergeEligible = !sched && payload.serviceLines.length > 0;
+        // "A booked appointment is its own visit" means ANOTHER DAY, not the
+        // routine half-hour of plan time every document carries: /api/checkgo
+        // stamps scheduledAt = now + 30 min on EVERY Check & Go, and the `sched`
+        // test above fires at 5 minutes. Excluding on `sched` alone would have
+        // meant no Check & Go ever merged — the feature would have shipped and
+        // quietly done nothing. The car is at the counter now; a visit booked
+        // for a different day is the real exception.
+        const bookedAnotherDay = Boolean(sched) && formatDateWib(sched!) !== formatDateWib(new Date().toISOString());
+        const mergeEligible = !bookedAnotherDay && payload.serviceLines.length > 0;
         if (directionAllowed && mergeEligible) {
           const decision = await findCheckGoMergeTarget(claimed, config.mergeWindowHours);
           // How long has THIS SPK been waiting? Measured from its own first
