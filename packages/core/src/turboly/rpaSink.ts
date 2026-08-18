@@ -1589,7 +1589,6 @@ export class RpaSink implements ServiceOrderSink {
       throw new Error('panel "Packages, Spareparts & Services" tidak terbuka — tombol Add Service Item tidak terlihat');
     }
     const rowSel = '.select2-container.input-service-product';
-    let firstService = true;
     for (const line of payload.serviceLines) {
       const before = await page.locator(rowSel).count();
       await page.locator('a.btn-add-item', { hasText: /add service item/i }).first().click();
@@ -1607,7 +1606,6 @@ export class RpaSink implements ServiceOrderSink {
       // is the belt to this pair of braces.
       const desc = line.description || line.serviceName;
       await this.setLastServiceRow(page, line.qty, markerToken ? `${desc} [${markerToken}]` : desc, line.priceIncTax);
-      firstService = false;
     }
     const rowCount = await page.locator(rowSel).count();
     if (rowCount < payload.serviceLines.length) throw new DataError(`only ${rowCount}/${payload.serviceLines.length} service lines added`);
