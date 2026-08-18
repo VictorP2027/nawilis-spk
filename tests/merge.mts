@@ -709,6 +709,37 @@ async function main(): Promise<void> {
     config.mergeIntoCheckGo = true;
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  section('Y. Both submitted together → ONE pass, no five-minute wait');
+  {
+    // Turboly's CSA measured a visit going from ~2 minutes to ~7: the Cek n Go
+    // was reached while its SPK was still queued, so it held and came back a
+    // cron tick later. Taking the SPK first in the same pass removes the wait.
+    await collections.spk().deleteMany({ state: 'queued' });
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // as shipped
+    // Submitted seconds apart, both still queued — the real counter sequence.
+    const spkId = await queuedSpk('B9401XY');
+    const cgId = await queuedCheckGo('B9401XY');
+    await collections.spk().updateOne({ _id: cgId }, { $set: { 'checkGo.inspectionItems': [{ item: 'Oli Mesin', hasil: 'Bagus', catatan: null, feedback: null, inspected: true }] } });
+
+    const log: string[] = [];
+    const sinks = new BranchSinks(async () => stub);
+    await pushQueued(sinks, { workerId: 'w-test', log: (m) => log.push(m) });
+
+    const spk = (await collections.spk().findOne({ _id: spkId }))!;
+    const cg = (await collections.spk().findOne({ _id: cgId }))!;
+    ok(spk.state === 'confirmed' && !!spk.turboly.serviceOrderUrl, 'the SPK was pushed first and got the order');
+    ok(cg.state === 'confirmed' && cg.turboly.mergedInto?.spkId === spkId, 'the Cek n Go merged into it in the SAME pass');
+    // Scoped to THIS car: the same pass legitimately picks up whatever else is
+    // due (an earlier section's transient failure gets requeued here).
+    const mine = stub.created.filter((p) => (p.vehiclePlateFull || p.vehicleRegistration || '').replace(/\s/g, '') === 'B9401XY');
+    ok(mine.length === 1 && stub.appends.length === 1, `one Service Order for this car, one append (created=${mine.length}, appended=${stub.appends.length})`);
+    ok(!log.some((l) => /menunggu/.test(l)), 'nothing waited — no five-minute hold');
+    ok(cg.push.mergeHoldSince == null, 'and no waiting stamp was left behind');
+    config.mergeIntoCheckGo = true;
+  }
+
   await close();
   await mongod.stop();
   console.log(`\n${passed} passed, ${failed} failed`);

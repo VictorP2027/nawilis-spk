@@ -35,8 +35,15 @@ type Mirror = Awaited<ReturnType<typeof loadMirror>>;
 
 /** How long a same-car Check & Go may sit in queued/pushing before an SPK stops waiting for it. */
 const MERGE_HOLD_MAX_MS = 30 * 60_000;
-/** A held SPK is looked at again after this long (one cron tick). */
-const MERGE_HOLD_RECHECK_MS = 5 * 60_000;
+/**
+ * How long a held document waits before it is looked at again.
+ *
+ * Was one cron tick (5 min). That is the whole visit's latency when it fires,
+ * and the ordering above means it now only fires when the other half is in a
+ * DIFFERENT pass — so it should be short enough to catch the next dispatch
+ * rather than the next cron.
+ */
+const MERGE_HOLD_RECHECK_MS = 90_000;
 
 export interface MergeDecision {
   /** Append onto this Check & Go's Service Order. */
@@ -272,6 +279,21 @@ export async function pushQueued(
     ]);
     for (const m of revived) if (m) log(m);
     docs = revived.some(Boolean) ? await fetchBatch() : queuedNow;
+    /**
+     * SPK first, Check & Go last — within the same pass.
+     *
+     * A counter submits the SPK and the Cek n Go seconds apart, so both are
+     * usually queued together. Taking them in arrival order meant the Cek n Go
+     * was reached while its SPK was still `queued`, which made it HOLD and come
+     * back five minutes later: Turboly's CSA measured the visit going from ~2
+     * minutes to ~7. Pushing the SPK first in this same pass means its order
+     * exists by the time the Cek n Go is looked at, so the merge happens
+     * immediately and the wait disappears.
+     *
+     * Only an ordering — nothing is skipped, and a Cek n Go with no SPK behaves
+     * exactly as before.
+     */
+    docs.sort((a, b) => Number(String(a.docType) === 'CHECK_AND_GO') - Number(String(b.docType) === 'CHECK_AND_GO'));
   }
 
   /**
