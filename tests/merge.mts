@@ -773,6 +773,52 @@ async function main(): Promise<void> {
     config.mergeIntoCheckGo = true;
   }
 
+  // ───────────────────────────────────────────────────────────────────────
+  section('AA. The checker inspects BEFORE the advisor writes the SPK');
+  {
+    // The counter does not always write the SPK first: the checker often has
+    // the car on arrival. A backward-only window meant that visit could never
+    // merge — it opened the two Service Orders this whole feature prevents.
+    await collections.spk().deleteMany({ state: 'queued' });
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false; // as shipped
+    const cgId = await queuedCheckGo('B9601AA');           // captured FIRST
+    const spkId = await queuedSpk('B9601AA');              // SPK written after
+    const cgDoc = (await collections.spk().findOne({ _id: cgId }))!;
+    const spkDoc = (await collections.spk().findOne({ _id: spkId }))!;
+    ok(Date.parse(spkDoc.createdAt) > Date.parse(cgDoc.createdAt), 'the SPK really was captured after the Check & Go');
+
+    const log: string[] = [];
+    const sinks = new BranchSinks(async () => stub);
+    await pushQueued(sinks, { workerId: 'w-test', log: (m) => log.push(m) });
+
+    const spk = (await collections.spk().findOne({ _id: spkId }))!;
+    const cg = (await collections.spk().findOne({ _id: cgId }))!;
+    const mine = stub.created.filter((p) => (p.vehiclePlateFull || p.vehicleRegistration || '').replace(/\s/g, '') === 'B9601AA');
+    ok(mine.length === 1, `ONE Service Order for the car (got ${mine.length})`);
+    ok(spk.turboly.serviceOrderUrl != null, 'the SPK still made the order, as always');
+    ok(cg.turboly.mergedInto?.spkId === spkId, 'and the earlier Check & Go joined it instead of opening a second');
+    config.mergeIntoCheckGo = true;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  section('AB. A merge that already landed is never re-created, even with no readable token');
+  {
+    const stub = new StubSink();
+    config.mergeIntoCheckGo = false;
+    const spk = await pushOne(await queuedSpk('B9602AB'), stub);
+    const cgId = await queuedCheckGo('B9602AB');
+    // The sink reports "everything of mine is already on the order" — which is
+    // what it now does when the SKUs are present but the token cannot be read
+    // (an APPROVED order has no notes field, and Turboly overwrites the
+    // General Check description). This must NOT become a second order.
+    stub.appendResult = { ok: true, serviceOrderNo: spk.turboly.serviceOrderNo, alreadyAppended: true };
+    const cg = await pushOne(cgId, stub);
+    ok(stub.created.length === 1, 'no second Service Order was created');
+    ok(cg.turboly.mergedInto?.spkId === spk._id && cg.state === 'confirmed', 'it is recorded as merged and confirmed');
+    config.mergeIntoCheckGo = true;
+  }
+
   await close();
   await mongod.stop();
   console.log(`\n${passed} passed, ${failed} failed`);

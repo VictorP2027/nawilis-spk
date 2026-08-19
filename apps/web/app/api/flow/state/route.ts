@@ -189,7 +189,9 @@ export async function GET(req: Request): Promise<Response> {
       mergedInto,
 
       column: mergedInto ? 'done' : boardColumn(f),
-      stageLabel: mergedInto ? `Digabung ke SO ${mergedInto.serviceOrderNo ?? ''} (Check & Go)`.trim() : stageLabel(f),
+      stageLabel: mergedInto
+        ? `Digabung ke SO ${mergedInto.serviceOrderNo ?? ''} (${String(d.docType) === 'CHECK_AND_GO' ? 'SPK' : 'Check & Go'})`.trim()
+        : stageLabel(f),
       nextAction: mergedInto ? null : next,
       nextActionLabel: !mergedInto && next ? FLOW_ACTION_LABELS[next] : null,
 

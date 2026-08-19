@@ -35,6 +35,8 @@ type Mirror = Awaited<ReturnType<typeof loadMirror>>;
 
 /** How long a same-car Check & Go may sit in queued/pushing before an SPK stops waiting for it. */
 const MERGE_HOLD_MAX_MS = 30 * 60_000;
+/** The other half of a visit may be captured up to this long AFTER this document — the counter writes them minutes apart, in either order. */
+const FORWARD_WINDOW_MS = 4 * 3600_000;
 /**
  * How long a held document waits before it is looked at again.
  *
@@ -88,6 +90,18 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
   // order empty. Only a Check & Go from at-or-before this SPK can be its visit.
   const anchor = Date.parse(doc.createdAt) || now;
   const since = new Date(anchor - windowHours * 3600_000).toISOString();
+  /**
+   * How far FORWARD may the other half of the visit have been captured?
+   *
+   * The backward bound stops Monday's document landing on Tuesday's visit. But
+   * the two halves are written minutes apart in either order — the checker
+   * often inspects the car on arrival, before the advisor has written the SPK —
+   * and a backward-only window meant a Check & Go captured first could never
+   * find its SPK, so that visit opened the two Service Orders this feature
+   * exists to prevent. A short forward reach covers the counter's real
+   * sequence without letting a later visit qualify.
+   */
+  const until = new Date(anchor + FORWARD_WINDOW_MS).toISOString();
   const keys = doc.vehicle.plateVariants?.length ? doc.vehicle.plateVariants : [full];
   const cands = (await collections
     .spk()
@@ -96,7 +110,7 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
         ...otherKind,
         branchCode: doc.branchCode,
         'vehicle.plateVariants': { $in: keys },
-        createdAt: { $gte: since, $lte: doc.createdAt },
+        createdAt: { $gte: since, $lte: until },
         _id: { $ne: doc._id },
       },
       { sort: { createdAt: -1 }, limit: 8 },
@@ -128,6 +142,20 @@ export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, n
       return { target: { spkId: c._id, serviceOrderUrl: url, serviceOrderNo: c.turboly?.serviceOrderNo ?? null }, hold: null, note: woNote ?? note };
     }
     if (c.state === 'queued' || c.state === 'pushing' || (c.state === 'failed' && c.push?.failureClass === 'transient')) {
+      /**
+       * DEADLOCK GUARD. Now that the window reaches forward as well as back,
+       * two documents of one visit can each see the other in flight — and if
+       * both waited, neither would ever create the order and the car would end
+       * the day with none at all.
+       *
+       * The EARLIER document always wins: it goes ahead and creates the order,
+       * and the later one joins it. Deterministic, needs no coordination, and
+       * matches what the counter means — the first thing written opens the visit.
+       */
+      if ((Date.parse(doc.createdAt) || 0) <= (Date.parse(c.createdAt) || 0)) {
+        note ??= `${kindLabel} ${c._id} juga sedang jalan tapi dibuat belakangan — dokumen ini yang membuka SO, dia yang menyusul`;
+        continue;
+      }
       // In flight, or between two automatic retries of a vendor blip: wait for
       // it. How long this SPK has been waiting is tracked on the SPK itself
       // (push.mergeHoldSince) — the candidate's updatedAt is rewritten by every
@@ -182,6 +210,11 @@ async function fillInspectionsFor(doc: SpkDoc, serviceOrderUrl: string | null, l
     await collections.spk().updateOne({ _id: doc._id }, { $set: { 'checkGo.inspectionError': msg } }).catch(() => {});
     log(`  ⚠ inspection list gagal diisi (SO tetap utuh): ${msg}`);
   }
+}
+
+/** SPK documents before Check & Go documents, so the order exists before the Cek n Go looks for it. */
+function orderForMerge<T extends { docType?: unknown }>(docs: T[]): T[] {
+  return [...docs].sort((a, b) => Number(String(a.docType) === 'CHECK_AND_GO') - Number(String(b.docType) === 'CHECK_AND_GO'));
 }
 
 /** Process every `queued` SPK (or a single `onlyId`). Returns per-run counts. */
@@ -278,7 +311,7 @@ export async function pushQueued(
       ),
     ]);
     for (const m of revived) if (m) log(m);
-    docs = revived.some(Boolean) ? await fetchBatch() : queuedNow;
+    docs = orderForMerge(revived.some(Boolean) ? await fetchBatch() : queuedNow);
     /**
      * SPK first, Check & Go last — within the same pass.
      *
@@ -293,7 +326,7 @@ export async function pushQueued(
      * Only an ordering — nothing is skipped, and a Cek n Go with no SPK behaves
      * exactly as before.
      */
-    docs.sort((a, b) => Number(String(a.docType) === 'CHECK_AND_GO') - Number(String(b.docType) === 'CHECK_AND_GO'));
+
   }
 
   /**
@@ -397,13 +430,20 @@ export async function pushQueued(
             // on the URL. Matching on the number could null out the real
             // serviceOrderUrl of a doc that owns its own order.
             const priorUrl = (prior.serviceOrderUrl ?? '').replace(/[#?].*$/, '') || null;
-            const owner =
-              config.mergeIntoCheckGo && priorUrl
-                ? await collections.spk().findOne(
-                    { _id: { $ne: doc._id }, docType: 'CHECK_AND_GO', branchCode: claimed.branchCode, 'turboly.serviceOrderUrl': priorUrl },
-                    { projection: { _id: 1, 'turboly.serviceOrderUrl': 1 } },
-                  )
-                : null;
+            // WHO owns this order? Whoever already holds the URL — regardless of
+            // which document kind that is and of which merge direction is
+            // switched on. Asking only for a CHECK_AND_GO, and only while the
+            // OFF direction was enabled, meant that in the shipped direction
+            // (a Check & Go joining an SPK) the owner was never found: the doc
+            // then claimed the SPK's own URL, the unique index rejected the
+            // write, the rejection was swallowed, and the document sat in
+            // `pushing` being reclaimed every 15 minutes forever.
+            const owner = priorUrl
+              ? await collections.spk().findOne(
+                  { _id: { $ne: doc._id }, branchCode: claimed.branchCode, 'turboly.serviceOrderUrl': priorUrl },
+                  { projection: { _id: 1, 'turboly.serviceOrderUrl': 1 } },
+                )
+              : null;
             const adopted = {
               ...claimed.turboly,
               serviceOrderNo: prior.serviceOrderNo ?? claimed.turboly.serviceOrderNo,
@@ -417,7 +457,22 @@ export async function pushQueued(
                   : {}),
             };
             if (owner) await collections.spk().updateOne({ _id: owner._id }, { $addToSet: { 'checkGo.mergedSpkIds': doc._id } }).catch(() => {});
-            await transition(doc._id, 'pushing', 'pushed', { turboly: adopted }).catch(() => {});
+            // NOT swallowed: if this write is rejected (the unique index on
+            // turboly.serviceOrderUrl is the one that would), the document must
+            // land somewhere a human looks — never stay in `pushing`, which no
+            // path exits on its own.
+            const adoptedOk = await transition(doc._id, 'pushing', 'pushed', { turboly: adopted }).catch((e: unknown) => {
+              log(`  ⚠ ${doc._id}: gagal mencatat adopsi — ${(e as Error).message ?? e}`);
+              return null;
+            });
+            if (!adoptedOk) {
+              await transition(doc._id, 'pushing', 'manual_intervention', {
+                push: { ...claimed.push, failureClass: 'structural', lastError: `Order ${prior.serviceOrderNo ?? '?'} sudah ada di Turboly tapi catatannya gagal disimpan — CEK MANUAL, jangan push ulang` },
+              }).catch(() => {});
+              out.failed++;
+              log(`⚠ ${doc._id}: adopsi tidak tercatat — dipindah ke manual_intervention`);
+              continue;
+            }
             await transition(doc._id, 'pushed', 'confirmed', {
               turboly: { ...adopted, readback: { matchedOn: ['reference_token'], lineCount: prior.lineCount, lineSkus: prior.lineSkus, km: prior.km } },
             }).catch(() => {});
@@ -604,13 +659,20 @@ export async function pushQueued(
               }
               // The checklist: written in the same save when the form allowed
               // it, otherwise through the HTTP writer as a fallback.
-              if (typeof ap.inspectionsWritten === 'number' && ap.inspectionsWritten > 0) {
+              if (ap.inspectionsWritten === 0) {
+                // Every row was already on the order (a retry, or a second
+                // Check & Go). Nothing to do — and above all do NOT hand this to
+                // the HTTP writer, which replaces the list by index and marks
+                // every row beyond its own count _destroy: a shorter checklist
+                // would delete the customer's inspection results.
+                log('  · daftar inspeksi sudah ada di SO — tidak ditulis ulang');
+              } else if (typeof ap.inspectionsWritten === 'number' && ap.inspectionsWritten > 0) {
                 await collections
                   .spk()
                   .updateOne({ _id: doc._id }, { $set: { 'checkGo.inspectionsFilledAt': new Date().toISOString() }, $unset: { 'checkGo.inspectionError': '' } })
                   .catch(() => {});
                 log(`  ✓ inspection list terisi (${ap.inspectionsWritten} baris) lewat form gabungan`);
-              } else if (isCheckGoDoc && cgItems.length) {
+              } else if (ap.inspectionsWritten === null && isCheckGoDoc && cgItems.length) {
                 log(`  · form gabungan tidak bisa menerima daftar inspeksi — dicoba lewat jalur HTTP`);
                 await fillInspectionsFor(claimed, decision.target.serviceOrderUrl, log);
               }
@@ -735,7 +797,10 @@ export async function pushQueued(
     // already logged in, so re-ask before letting it die. Terminates on the
     // `seen` filter above (and the budget).
     if (Date.now() >= deadline) break;
-    docs = await fetchBatch();
+    // Ordered here too: a counter submitting an SPK and its Cek n Go while this
+    // run is already draining lands both in THIS re-read, and taking the Cek n
+    // Go first would put it back to waiting for an order that does not exist yet.
+    docs = orderForMerge(await fetchBatch());
   }
 
   return out;

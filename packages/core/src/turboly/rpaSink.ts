@@ -130,6 +130,11 @@ export class RpaSink implements ServiceOrderSink {
       if (!plateOk) {
         return { ok: false, serviceOrderNo: null, fallbackToCreate: true, failureClass: 'data', error: `plat di SO Check & Go (${plateOnPage.join(',') || '?'}) bukan ${plateWanted} — tidak digabung` };
       }
+      // How many lines does this order already carry? Counted HERE, on the
+      // detail page, because the after-count reads the same page — counting the
+      // edit form instead compared two different DOMs, and if the edit form
+      // does not render those panes the guard silently became dead code.
+      linesBefore = await this.countOrderLines(page);
       serviceOrderNo = await this.captureDocNumber(page);
       wasApproved = /\bAPPROVED\b/.test(body) && !/\bPENDING APPROVAL\b/.test(body);
       // 2. What of this document is ALREADY on the order? Judged line by line,
@@ -137,10 +142,20 @@ export class RpaSink implements ServiceOrderSink {
       //    in its notes while the General Check line it was supposed to bring
       //    had been dropped, and a token-only test called that "already done".
       const flat = body.replace(/\s+/g, ' ');
-      const present = (sku: string): boolean => Boolean(sku) && flat.includes(sku);
+      // Bounded: the catalogue has prefix siblings (SER-NAW-SR and
+      // SER-NAW-SRTB), and a bare substring test would call the shorter one
+      // "already on the order" the moment the longer one is there — the line
+      // would then never be typed and never be missed.
+      const present = (sku: string): boolean =>
+        Boolean(sku) && new RegExp(`(^|[^A-Z0-9-])${sku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9-]|$)`).test(flat);
       missingServices = payload.serviceLines.filter((l) => !present(l.expectedSku));
       missingParts = payload.sparepartLines.filter((l) => !present(l.expectedSku));
-      if (!missingServices.length && !missingParts.length && body.includes(target.spkToken)) {
+      if (!missingServices.length && !missingParts.length) {
+        // Every line this document owes the order is already on it. The token
+        // is a nice-to-have second signal, but it is NOT required here: on an
+        // APPROVED order there is no notes field to hold it and Turboly
+        // overwrites some line descriptions, so demanding it would send an
+        // already-completed merge to the create path and open a second SRO.
         return { ok: true, serviceOrderNo, alreadyAppended: true };
       }
       if (body.includes(target.spkToken) && (missingServices.length || missingParts.length)) {
@@ -171,11 +186,6 @@ export class RpaSink implements ServiceOrderSink {
       // resubmits them unchanged, so they survive. Counted anyway: it is the
       // customer's inspection record, and "it should survive" is not the same
       // as knowing it did.
-      // How many lines does this order already carry? The merge re-saves the
-      // whole edit form, so the lines that were there BEFORE — a repair
-      // order's spareparts and labour — have to still be there after. Nothing
-      // else in this method would notice if they were not.
-      linesBefore = await this.countOrderLines(page);
       // counted on the DETAIL/edit form BEFORE anything is typed
       inspectionsBefore = await page
         .locator('[name*="service_order_inspection_lines_attributes"][name$="[id]"]')
@@ -420,7 +430,11 @@ export class RpaSink implements ServiceOrderSink {
       // SRO/TA17/26080160 went wrong. Re-read the order and demand the SKUs.
       const after = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\s+/g, ' ');
       const linesAfter = await this.countOrderLines(page);
-      if (linesBefore > 0 && linesAfter < linesBefore) {
+      const added = missingServices.length + missingParts.length;
+      // Expected: what was there, PLUS what we just added. Comparing against
+      // linesBefore alone hid a one-for-one swap — Turboly silently dropping a
+      // sparepart while our line landed — because the total came out unchanged.
+      if (linesBefore > 0 && linesAfter < linesBefore + added) {
         // The order came back with FEWER lines than it had. Nothing in this
         // method removes a line, so this is Turboly dropping rows on save —
         // the same silent discard that lost a General Check line, but this time
@@ -430,7 +444,7 @@ export class RpaSink implements ServiceOrderSink {
           serviceOrderNo,
           fallbackToCreate: false,
           failureClass: 'structural',
-          error: `SO ${serviceOrderNo ?? soPath} kehilangan baris setelah digabung (${linesBefore} → ${linesAfter}) — CEK MANUAL SEGERA, jangan buat SO baru`,
+          error: `SO ${serviceOrderNo ?? soPath} kehilangan baris setelah digabung (sebelum ${linesBefore} + ditambah ${added} → seharusnya ${linesBefore + added}, terbaca ${linesAfter}) — CEK MANUAL SEGERA, jangan buat SO baru`,
           screenshotRef,
         };
       }

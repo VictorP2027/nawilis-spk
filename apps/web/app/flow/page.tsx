@@ -829,7 +829,7 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
           only in the worker's log, which nobody at the branch reads. */}
       {row.mergedIntoNo && (
         <div className="fb-meta" style={{ marginTop: 6 }}>
-          ↪ Baris masuk ke SO Check & Go {row.mergedIntoNo} — lanjutkan dari kartu Check & Go mobil ini.
+          ↪ Baris masuk ke SO {row.mergedIntoNo} — lanjutkan dari kartu {row.docType === 'CHECK_AND_GO' ? 'SPK' : 'Check & Go'} mobil ini.
           {row.mergeWarnings.map((w) => (
             <div key={w} style={{ marginTop: 4, color: '#b45309' }}>⚠ {w}</div>
           ))}

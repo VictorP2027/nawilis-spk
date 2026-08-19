@@ -31,13 +31,17 @@ async function main(): Promise<void> {
     return;
   }
   await connect(config.mongoUri, config.mongoDb);
+  let sinks: BranchSinks | undefined;
   try {
     const doc = (await collections.spk().findOne({ _id: id })) as SpkDoc | null;
     if (!doc) throw new Error(`dokumen ${id} tidak ada`);
     const url = doc.turboly?.mergedInto?.serviceOrderUrl ?? null;
     if (!url) throw new Error(`dokumen ${id} tidak digabung ke SO manapun (turboly.mergedInto kosong) — tidak ada yang diperbaiki`);
 
-    const mirror = await loadMirror(doc.branchCode);
+    // withProductSkus: without it every goods SKU looks like a service, and the
+    // repair would type a sparepart into the SERVICE picker — which finds
+    // nothing, leaves the row blank, and Turboly discards it silently.
+    const mirror = await loadMirror(doc.branchCode, { withProductSkus: true });
     if (!mirror.store) throw new Error(`store ${doc.branchCode} tidak ada di mirror`);
     const norm = (s: string): string => s.trim().toLowerCase();
     const typedAdvisor = (doc.signatures?.menerima?.namaJelas ?? '').trim();
@@ -66,7 +70,7 @@ async function main(): Promise<void> {
     console.log(`  baris yang seharusnya ada: ${[...payload.serviceLines, ...payload.sparepartLines].map((l) => l.expectedSku).join(', ') || '(tidak ada)'}`);
     console.log(`  daftar inspeksi: ${target.inspections?.rows.length ?? 0} baris`);
 
-    const sinks = new BranchSinks();
+    sinks = new BranchSinks();
     const res = await sinks.withSink(doc.branchCode, (sink) =>
       sink.appendLinesToServiceOrder
         ? sink.appendLinesToServiceOrder(target, payload, { workerId: 'merge-repair', epoch: doc.push.lease.epoch, approve: false, leaseExpiresAt: Date.now() + config.leaseTtlMs })
@@ -83,10 +87,17 @@ async function main(): Promise<void> {
       console.log(`  ✓ daftar inspeksi terisi (${res.inspectionsWritten} baris)`);
     }
     console.log(`merge-repair: SELESAI — SO ${res.serviceOrderNo ?? '?'}${res.alreadyAppended ? ' (semua baris memang sudah ada)' : ''}`);
+    await sinks.dispose().catch(() => {});
+    await close();
+    // Explicit: the live Playwright browser keeps the event loop alive, so a
+    // SUCCESSFUL repair would otherwise hold the turboly-push lane — and every
+    // customer order behind it — until the 60-minute job timeout.
+    process.exit(0);
   } catch (e) {
     console.error(`merge-repair: ${(e as Error).message ?? e}`);
     process.exitCode = 1;
   } finally {
+    await sinks?.dispose().catch(() => {});
     await close();
   }
 }
