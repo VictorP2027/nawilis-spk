@@ -1,0 +1,55 @@
+name: data-fix
+
+# MANUAL ONLY. Small, reversible edits to reference data that the forms read
+# from Mongo — nothing here touches Turboly, so it takes no browser and does NOT
+# join the turboly-push lane: it can never delay a customer's order.
+on:
+  workflow_dispatch:
+    inputs:
+      make:
+        description: 'Merk kendaraan, mis. JAECOO (harus sudah ada di daftar)'
+        type: string
+        required: true
+      model:
+        description: 'Tipe yang mau ditambahkan ke pilihan TIPE, mis. J7'
+        type: string
+        required: true
+      kind:
+        description: 'Masuk ke daftar mobil, motor, atau keduanya'
+        type: choice
+        options: [car, motorcycle, both]
+        default: car
+
+jobs:
+  add-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Cache node_modules
+        id: modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+            tools/*/node_modules
+          key: v1-modules-${{ runner.os }}-${{ runner.arch }}-node22-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        if: steps.modules.outputs.cache-hit != 'true'
+        env:
+          MONGOMS_DISABLE_POSTINSTALL: '1'
+        run: npm ci
+      - name: Build core
+        run: npm run build -w @spk/core
+      - name: Add vehicle model
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+        run: |
+          node --import tsx apps/worker/src/vehicle-model-add.ts \
+            --make="${{ inputs.make }}" --model="${{ inputs.model }}" --kind="${{ inputs.kind }}"
