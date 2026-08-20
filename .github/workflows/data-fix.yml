@@ -19,6 +19,14 @@ on:
         type: choice
         options: [car, motorcycle, both]
         default: car
+      product_sku:
+        description: 'KATALOG JASA — SKU yang mau dikenalkan ke mirror, mis. HSB-NAW-HSB'
+        type: string
+        default: ''
+      product_name:
+        description: 'KATALOG JASA — nama persis seperti di Turboly, mis. High Speed Balance'
+        type: string
+        default: ''
       service_code:
         description: 'VARIAN JASA — kode jasa, mis. BALANCING_ON_CAR (kosongkan kalau mau tambah tipe kendaraan)'
         type: string
@@ -70,6 +78,15 @@ jobs:
         run: |
           node --import tsx apps/worker/src/vehicle-model-add.ts \
             --make="${{ inputs.make }}" --model="${{ inputs.model }}" --kind="${{ inputs.kind }}"
+
+      - name: Teach the catalogue mirror a SKU
+        if: inputs.product_sku != '' && inputs.product_name != ''
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+        run: |
+          node --import tsx apps/worker/src/service-product-add.ts \
+            --sku="${{ inputs.product_sku }}" --name="${{ inputs.product_name }}"
 
       - name: Set service variants
         if: inputs.service_code != ''
