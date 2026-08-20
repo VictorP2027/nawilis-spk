@@ -58,8 +58,19 @@ async function main(): Promise<void> {
     if (!options.some((o) => o.sku.toUpperCase() === defaultSku.toUpperCase())) {
       throw new Error(`default ${defaultSku} tidak ada di daftar pilihan — tambahkan dulu dengan --add`);
     }
-    // Default first: the dropdown reads top-down and the counter picks fast.
-    options.sort((a, b) => Number(b.sku.toUpperCase() === defaultSku.toUpperCase()) - Number(a.sku.toUpperCase() === defaultSku.toUpperCase()));
+    /**
+     * Order matters: the counter reads this dropdown top-down under time
+     * pressure, so the variants that belong together should sit together.
+     * `--order=A,B` puts those SKUs first, in that sequence; everything else
+     * keeps its existing order below. With no --order, the default goes first.
+     */
+    const wanted = (arg('order') ?? '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean);
+    const rank = (sku: string): number => {
+      const i = wanted.indexOf(sku.toUpperCase());
+      if (i >= 0) return i;
+      return wanted.length + (sku.toUpperCase() === defaultSku.toUpperCase() ? -0.5 : 0.5);
+    };
+    options.sort((a, b) => rank(a.sku) - rank(b.sku));
 
     await col.updateOne({ _id: code }, { $set: { defaultSku, options } });
     console.log(`\n✓ ${code}: default ${row.defaultSku} → ${defaultSku}`);

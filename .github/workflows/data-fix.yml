@@ -27,6 +27,10 @@ on:
         description: 'VARIAN JASA — SKU yang jadi pilihan default, mis. HSB-NAW-HSB'
         type: string
         default: ''
+      order_skus:
+        description: 'VARIAN JASA — urutan tampil, dipisah koma: "HSB-NAW-HSB,HSB-NAW-VIP" (sisanya menyusul di bawah)'
+        type: string
+        default: ''
       add_skus:
         description: 'VARIAN JASA — SKU baru, dipisah koma: "HSB-NAW-HSB=High Speed Balance,HSB-NAW-VIP=High Speed Balance VIP"'
         type: string
@@ -80,4 +84,5 @@ jobs:
           node --import tsx apps/worker/src/service-option-set.ts \
             --code="${{ inputs.service_code }}" \
             ${{ inputs.default_sku && format('--default={0}', inputs.default_sku) || '' }} \
+            ${{ inputs.order_skus && format('--order={0}', inputs.order_skus) || '' }} \
             "${args[@]}"

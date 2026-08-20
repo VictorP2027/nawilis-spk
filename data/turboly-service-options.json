@@ -77,6 +77,10 @@
         "label": "HSB-NAW-HSB High Speed Balance"
       },
       {
+        "sku": "HSB-NAW-VIP",
+        "label": "HSB-NAW-VIP High Speed Balance VIP"
+      },
+      {
         "sku": "OTL-NAW-BOTCL",
         "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
       },
@@ -115,10 +119,6 @@
       {
         "sku": "OTL-NAW-BOTLVIP",
         "label": "OTL-NAW-BOTLVIP Balancing OTC Langsung VIP"
-      },
-      {
-        "sku": "HSB-NAW-VIP",
-        "label": "HSB-NAW-VIP High Speed Balance VIP"
       }
     ]
   },
