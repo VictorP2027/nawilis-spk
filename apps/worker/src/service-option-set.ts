@@ -76,11 +76,28 @@ async function main(): Promise<void> {
     console.log(`\n✓ ${code}: default ${row.defaultSku} → ${defaultSku}`);
     for (const o of options) console.log(`   ${o.sku === defaultSku ? '●' : '·'} ${o.label}`);
 
-    // Does the push know these SKUs? Not fatal — the RPA searches Turboly by SKU
-    // when the mirror has no name — but worth knowing before the first car.
-    for (const o of adds) {
-      const known = await collections.tbServiceProducts().findOne({ _id: o.sku });
-      console.log(`   ${known ? '✓' : '⚠'} ${o.sku} ${known ? `ada di katalog (${known.name})` : 'BELUM ada di mirror katalog — jalankan sync kalau push-nya gagal'}`);
+    /**
+     * Is this SKU in the catalogue mirror — and does that matter TODAY?
+     *
+     * validateLayer2 looks the SKU up in the mirror keyed by its `sku` FIELD
+     * (mirror.ts:37), not by _id. If it is missing AND the mirror is fresh
+     * (< 24h old) the finding is BLOCK: the SPK is refused at the counter. If
+     * the mirror is older than that, the same miss degrades to WARN and the SPK
+     * goes through. So the answer to "is this default safe" is both facts
+     * together, and neither is guessable from here.
+     */
+    const newest = await collections
+      .tbServiceProducts()
+      .find({}, { projection: { syncedAt: 1 }, sort: { syncedAt: -1 }, limit: 1 })
+      .toArray();
+    const newestSync = Date.parse(newest[0]?.syncedAt ?? '') || 0;
+    const ageH = newestSync ? Math.round((Date.now() - newestSync) / 3600_000) : -1;
+    const stale = newestSync === 0 || Date.now() - newestSync > 24 * 3600_000;
+    console.log(`\n   katalog jasa terakhir diperbarui: ${newestSync ? `${ageH} jam lalu` : 'TIDAK PERNAH'} → SKU asing = ${stale ? 'WARN (SPK tetap jalan)' : 'BLOCK (SPK ditolak di counter)'}`);
+    for (const o of [...adds, { sku: defaultSku, label: '' }]) {
+      const known = await collections.tbServiceProducts().findOne({ $or: [{ sku: o.sku }, { _id: o.sku }] });
+      const verdict = known ? `ada di katalog (${known.name})` : stale ? 'tidak ada di mirror — hanya WARN, SPK tetap jalan' : 'TIDAK ADA di mirror dan mirror masih baru → SPK AKAN DITOLAK';
+      console.log(`   ${known ? '✓' : stale ? '⚠' : '✗'} ${o.sku} ${verdict}`);
     }
   } catch (e) {
     console.error(`✗ ${(e as Error).message ?? e}`);
