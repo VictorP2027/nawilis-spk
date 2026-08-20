@@ -70,8 +70,12 @@
     ]
   },
   "BALANCING_ON_CAR": {
-    "defaultSku": "OTL-NAW-BOTCL",
+    "defaultSku": "HSB-NAW-HSB",
     "options": [
+      {
+        "sku": "HSB-NAW-HSB",
+        "label": "HSB-NAW-HSB High Speed Balance"
+      },
       {
         "sku": "OTL-NAW-BOTCL",
         "label": "OTL-NAW-BOTCL Balancing OTC Langsung"
@@ -111,6 +115,10 @@
       {
         "sku": "OTL-NAW-BOTLVIP",
         "label": "OTL-NAW-BOTLVIP Balancing OTC Langsung VIP"
+      },
+      {
+        "sku": "HSB-NAW-VIP",
+        "label": "HSB-NAW-VIP High Speed Balance VIP"
       }
     ]
   },

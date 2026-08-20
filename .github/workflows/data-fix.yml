@@ -7,18 +7,30 @@ on:
   workflow_dispatch:
     inputs:
       make:
-        description: 'Merk kendaraan, mis. JAECOO (harus sudah ada di daftar)'
+        description: 'TIPE KENDARAAN — merk, mis. JAECOO (kosongkan kalau mau ubah varian jasa)'
         type: string
-        required: true
+        default: ''
       model:
-        description: 'Tipe yang mau ditambahkan ke pilihan TIPE, mis. J7'
+        description: 'TIPE KENDARAAN — tipe yang ditambahkan, mis. J7'
         type: string
-        required: true
+        default: ''
       kind:
-        description: 'Masuk ke daftar mobil, motor, atau keduanya'
+        description: 'TIPE KENDARAAN — masuk ke daftar mobil, motor, atau keduanya'
         type: choice
         options: [car, motorcycle, both]
         default: car
+      service_code:
+        description: 'VARIAN JASA — kode jasa, mis. BALANCING_ON_CAR (kosongkan kalau mau tambah tipe kendaraan)'
+        type: string
+        default: ''
+      default_sku:
+        description: 'VARIAN JASA — SKU yang jadi pilihan default, mis. HSB-NAW-HSB'
+        type: string
+        default: ''
+      add_skus:
+        description: 'VARIAN JASA — SKU baru, dipisah koma: "HSB-NAW-HSB=High Speed Balance,HSB-NAW-VIP=High Speed Balance VIP"'
+        type: string
+        default: ''
 
 jobs:
   add-model:
@@ -47,9 +59,25 @@ jobs:
       - name: Build core
         run: npm run build -w @spk/core
       - name: Add vehicle model
+        if: inputs.make != '' && inputs.model != ''
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
         run: |
           node --import tsx apps/worker/src/vehicle-model-add.ts \
             --make="${{ inputs.make }}" --model="${{ inputs.model }}" --kind="${{ inputs.kind }}"
+
+      - name: Set service variants
+        if: inputs.service_code != ''
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DB: spk
+          ADD_SKUS: ${{ inputs.add_skus }}
+        run: |
+          args=()
+          IFS=',' read -ra pairs <<< "$ADD_SKUS"
+          for p in "${pairs[@]}"; do [ -n "$p" ] && args+=(--add="$p"); done
+          node --import tsx apps/worker/src/service-option-set.ts \
+            --code="${{ inputs.service_code }}" \
+            ${{ inputs.default_sku && format('--default={0}', inputs.default_sku) || '' }} \
+            "${args[@]}"
