@@ -12,7 +12,7 @@
  *   npx tsx tests/forms.mts
  */
 import { readFileSync } from 'node:fs';
-import { parseWa } from '@spk/core';
+import { parseWa, parsePlate } from '@spk/core';
 
 let passed = 0;
 let failed = 0;
@@ -96,6 +96,27 @@ console.log('\n── Aturan yang ada di KEDUA form harus persis sama ──');
   }
   console.log(`     (hanya di SPK: ${[...spk.keys()].filter((k) => !cng.has(k)).join(', ') || '-'})`);
   console.log(`     (hanya di Cek n Go: ${[...cng.keys()].filter((k) => !spk.has(k)).join(', ') || '-'})`);
+}
+
+console.log('\n── Plat: apa pun boleh masuk, yang aneh cuma diperingatkan ──');
+{
+  // A red official/service plate. It has no area letter, so every civilian
+  // reading has to invent one — and the corrector used to do exactly that.
+  const dinas = parsePlate('43562-00');
+  ok(dinas.display === '43562-00', `ditulis apa adanya: ${dinas.display}`);
+  ok(dinas.full === '4356200', 'kuncinya angka saja, jadi 43562-00 dan 43562 00 satu mobil');
+  ok(dinas.correctionsApplied.length === 0, 'tidak ada huruf yang dikarang');
+  ok(dinas.ok === false, 'ditandai tidak baku → peringatan, bukan penolakan');
+
+  const flipped = parsePlate('00-43562');
+  ok(!/[A-Z]/.test(flipped.full), `ditulis terbalik pun tetap angka (dulu jadi O0435GZ): ${flipped.full}`);
+  ok(flipped.display === '00-43562', 'dan tampilannya utuh');
+
+  // Civilian plates must be untouched by all of this.
+  const civil = parsePlate('B 1234 SZA');
+  ok(civil.ok && civil.full === 'B1234SZA' && civil.area === 'B', 'plat biasa tidak berubah');
+  const spaced = parsePlate('b1234sza');
+  ok(spaced.full === 'B1234SZA', 'huruf kecil tetap sama mobilnya');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

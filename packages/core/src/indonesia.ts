@@ -80,6 +80,34 @@ interface Candidate {
  */
 export function parsePlate(raw: string): PlateParse {
   const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  /**
+   * A plate with NO letters at all is kept exactly as it was typed.
+   *
+   * Indonesian official/service plates are numeric — "43562-00" on a red plate.
+   * They have no area letter, so every reading below has to CORRECT a digit
+   * into one, and the corrector duly did: "00-43562" came back as "O0435GZ"
+   * (0→O, 6→G, 2→Z), a civilian plate that does not exist, attached to a real
+   * customer's car. The other spelling lost its dash and was stored as
+   * "4356200", which is why the counter could not enter the number in its
+   * official format at all.
+   *
+   * So: no letters in, no letters invented. `full` stays the digits (a stable
+   * key, so "43562-00" and "43562 00" are the same car), `display` keeps the
+   * separators the counter typed, and `ok` is false — which is a WARNING on the
+   * form and in Layer 1, never a refusal.
+   */
+  if (cleaned && !/[A-Z]/.test(cleaned)) {
+    return {
+      ok: false,
+      full: cleaned,
+      display: raw.toUpperCase().trim().replace(/\s+/g, ' '),
+      area: '',
+      number: cleaned,
+      suffix: '',
+      areaKnown: false,
+      correctionsApplied: [],
+    };
+  }
   const candidates: Candidate[] = [];
 
   for (const areaLen of [1, 2]) {

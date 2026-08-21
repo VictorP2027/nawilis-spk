@@ -69,8 +69,15 @@ export interface MergeDecision {
  * which is the exact thing this exists to prevent. A Check & Go that already
  * has an invoice is a closed visit and gets no lines.
  */
-/** A plate that can identify one physical car: area + number + optional suffix. Placeholders ("BARU", "XXX", "-") never merge. */
-const REAL_PLATE = /^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/;
+/**
+ * A plate that can identify ONE physical car.
+ *
+ * Two shapes count: the civilian one (area letters + number + optional suffix)
+ * and the numeric official/service plate ("43562-00" → 4356200), which is a
+ * real identity even though it carries no letters. Placeholders — "BARU",
+ * "XXX", "-", a stray digit or two — match neither and never merge.
+ */
+const REAL_PLATE = /^([A-Z]{1,2}\d{1,4}[A-Z]{0,3}|\d{5,8})$/;
 
 export async function findCheckGoMergeTarget(doc: SpkDoc, windowHours: number, now = Date.now()): Promise<MergeDecision> {
   const none: MergeDecision = { target: null, hold: null, note: null };
