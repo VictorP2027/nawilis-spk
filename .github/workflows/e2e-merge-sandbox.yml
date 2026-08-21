@@ -19,6 +19,10 @@ on:
         description: 'Nama service advisor di sandbox'
         type: string
         default: 'MARCEL ZAKARIA'
+      plate:
+        description: 'Nomor polisi untuk uji ini (kosongkan = plat uji acak). Isi mis. 43562-00 untuk menguji plat dinas.'
+        type: string
+        default: ''
       phone:
         description: 'Nomor customer. Isi nomor kantor (mis. +622155512345) untuk menguji apakah Turboly menerima nomor kantor untuk customer BARU.'
         type: string
@@ -138,4 +142,5 @@ jobs:
         run: |
           node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
             --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}" \
-            ${{ inputs.phone && format('--phone={0}', inputs.phone) || '' }}
+            ${{ inputs.phone && format('--phone={0}', inputs.phone) || '' }} \
+            ${{ inputs.plate && format('--plate={0}', inputs.plate) || '' }}
