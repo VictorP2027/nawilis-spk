@@ -5,6 +5,7 @@ import { TurbolySession, AuthChallengeError, TenantOutageError } from './session
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload, AppendTarget, AppendResult } from './sink.js';
 import type { SpkDoc } from '../types.js';
 import { jaroWinkler, canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
+import { matchPersonLabel } from '../personMatch.js';
 
 /**
  * W2 — browser automation against the real Turboly Service Order UI.
@@ -680,7 +681,10 @@ export class RpaSink implements ServiceOrderSink {
           return { v: el?.value ?? '', t: el?.selectedOptions?.[0]?.textContent?.trim() ?? '' };
         }, sel)
         .catch(() => ({ v: '', t: '' }));
-      const normEq = (a: string, b: string) => a.trim().toUpperCase().replace(/\s+/g, ' ') === b.trim().toUpperCase().replace(/\s+/g, ' ');
+      // "WIDYA SARI" IS the intended selection for a SPK that says "WIDYA":
+      // compare through the same word-level matcher used to pick it, or this
+      // check would call every resolved name a wrong person and re-select it.
+      const normEq = (a: string, b: string) => Boolean(a.trim()) && matchPersonLabel([a], b).text === a;
       // Blank OR a different person than intended (a reload can restore the
       // list with a stale default) — re-run the POLLING selector, which waits
       // out an in-flight reload instead of one-shot no-op'ing past it.
@@ -974,23 +978,38 @@ export class RpaSink implements ServiceOrderSink {
    * store's actual list (kills the mystery) — never submit blank, and never
    * auto-pick, because the wrong name takes someone's sales credit.
    */
-  private async selectPersonExact(sel: string, label: string, role: string): Promise<void> {
-    if (!label.trim()) return;
+  private async selectPersonExact(sel: string, label: string, role: string): Promise<string | null> {
+    if (!label.trim()) return null;
     const page = this.session.page_();
-    const norm = (s: string) => s.trim().toUpperCase().replace(/\s+/g, ' ');
     let opts: Array<{ v: string; t: string }> = [];
+    let ambiguous: string[] = [];
     const deadline = Date.now() + 12_000;
     for (;;) {
       opts = await page
         .$$eval(`${sel} option`, (els) => els.map((e) => ({ v: (e as HTMLOptionElement).value, t: (e.textContent ?? '').trim() })).filter((o) => o.v))
         .catch(() => []);
-      const hit = opts.find((o) => norm(o.t) === norm(label));
+      // Word-level match: intake types "WIDYA", Turboly registers "WIDYA SARI".
+      // Only ever resolves when exactly one option can be meant.
+      const m = matchPersonLabel(opts.map((o) => o.t), label);
+      ambiguous = m.ambiguous;
+      const hit = m.text ? opts.find((o) => o.t === m.text) : undefined;
       if (hit) {
         await page.selectOption(sel, { value: hit.v }).catch(() => {});
-        return;
+        if (m.how !== 'exact') {
+          console.log(`  \u00b7 ${role} "${label}" dicocokkan ke "${hit.t}" (${m.how}) dari daftar user store`);
+        }
+        return hit.t;
       }
+      // Several people fit the typed name: waiting cannot make that clearer,
+      // and picking one would hand the sales credit to the wrong person.
+      if (ambiguous.length) break;
       if (Date.now() >= deadline) break;
       await page.waitForTimeout(600);
+    }
+    if (ambiguous.length) {
+      throw new DataError(
+        `${role} "${label}" cocok dengan lebih dari satu orang di store ini (${ambiguous.join(', ')}) \u2014 tulis nama lengkapnya di SPK lalu ulangi.`,
+      );
     }
     if (!opts.length) {
       // A list still empty after 12s with a live session is a slow/failed AJAX

@@ -2,6 +2,7 @@ import { collections, transition, loadMirror, type SpkDoc } from '@spk/core';
 import { buildTurbolyPayload, planFromNowWib, formatDateWib, formatTimeWib, fillServiceOrderInspection, inspectionRowsFromCheckGo, type AppendTarget } from '@spk/core/turboly';
 import type { BranchSinks } from './sessions.js';
 import { config } from './config.js';
+import { lookupPerson } from '@spk/core';
 
 /**
  * The proven, Redis-free push path — drains `queued` SPKs until the queue is
@@ -386,9 +387,9 @@ export async function pushQueued(
         // (misattributed sales credit is worse than an unfilled field).
         const typedAdvisor = (claimed.signatures.menerima.namaJelas ?? '').trim();
         const advisor =
-          mirror.advisorByName.get(norm(typedAdvisor)) ??
+          lookupPerson(mirror.advisorByName, typedAdvisor) ??
           { _id: 'unmatched', mechanicCode: 'unmatched', name: typedAdvisor, storeCode: null, role: 'advisor', syncedAt: '' };
-        if (!mirror.advisorByName.get(norm(typedAdvisor))) {
+        if (!lookupPerson(mirror.advisorByName, typedAdvisor)) {
           log(`  · advisor "${typedAdvisor || '(kosong)'}" not matched — leaving Turboly's advisor field untouched`);
         }
         // Plan Service Date/Time: a FUTURE appointment (scheduledAt) wins; else
@@ -402,7 +403,7 @@ export async function pushQueued(
         // auto-pick (same policy as advisor).
         const typedSales = (claimed.salespersonName ?? '').trim() || typedAdvisor;
         const salesperson =
-          mirror.salespersonByName.get(norm(typedSales)) ??
+          lookupPerson(mirror.salespersonByName, typedSales) ??
           { _id: 'unmatched', mechanicCode: 'unmatched', name: typedSales, storeCode: null, role: 'salesperson', syncedAt: '' };
         const payload = buildTurbolyPayload({ doc: claimed, store: mirror.store, serviceProducts: mirror.serviceProducts, productSkus: mirror.productSkus, serviceAdvisor: advisor, salesperson, planServiceDate: plan.date, planServiceTime: plan.time });
 

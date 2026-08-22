@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './states.js';
 export * from './ids.js';
 export * from './indonesia.js';
+export * from './personMatch.js';
 export * from './refdata.js';
 export * from './schema.js';
 export * from './validation.js';

@@ -1,5 +1,6 @@
 import type { SpkDoc, TbServiceProduct, TbStore, TbMechanic, VehicleDoc } from './types.js';
 import { parseKm, parseWa } from './indonesia.js';
+import { lookupPerson } from './personMatch.js';
 
 /**
  * Three-layer validation.
@@ -220,7 +221,7 @@ export function validateLayer2(doc: SpkDoc, ctx: Layer2Context): ValidationResul
   // SERVICE ADVISOR required by the form — must map to a real Turboly advisor.
   if (!ctx.serviceAdvisorName) {
     f.push({ rule: 'ADVISOR_REQUIRED', severity: 'BLOCK', path: 'serviceAdvisor', message: 'SERVICE ADVISOR wajib (form Turboly).' });
-  } else if (!m.advisorByName.has(norm(ctx.serviceAdvisorName))) {
+  } else if (!lookupPerson(m.advisorByName, ctx.serviceAdvisorName)) {
     f.push({
       rule: 'ADVISOR_UNMAPPED',
       severity: 'BLOCK',
@@ -232,7 +233,7 @@ export function validateLayer2(doc: SpkDoc, ctx: Layer2Context): ValidationResul
   // SALESPERSON required by the form.
   if (!ctx.salespersonName) {
     f.push({ rule: 'SALESPERSON_REQUIRED', severity: 'BLOCK', path: 'salesperson', message: 'SALESPERSON wajib (form Turboly).' });
-  } else if (!m.salespersonByName.has(norm(ctx.salespersonName))) {
+  } else if (!lookupPerson(m.salespersonByName, ctx.salespersonName)) {
     f.push({
       rule: 'SALESPERSON_UNMAPPED',
       severity: 'BLOCK',

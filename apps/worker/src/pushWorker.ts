@@ -8,6 +8,7 @@ import { DegradationController } from './degradation.js';
 import { BranchSinks } from './sessions.js';
 import { enqueueVerify, type PushJob } from './queue.js';
 import { fireAlert } from './alerts.js';
+import { lookupPerson } from '@spk/core';
 
 const SUPPORTED_SCHEMA = { min: 1, max: 1 };
 
@@ -268,5 +269,5 @@ export class PushWorker {
 
 function resolveMechanic(mirror: Awaited<ReturnType<typeof loadMirror>>, name: string | null | undefined) {
   if (!name) return null;
-  return mirror.advisorByName.get(name.trim().toUpperCase().replace(/\s+/g, ' ')) ?? null;
+  return lookupPerson(mirror.advisorByName, name);
 }

@@ -5,6 +5,7 @@ import {
 } from '@spk/core/turboly';
 import { BranchSinks } from './sessions.js';
 import { config } from './config.js';
+import { lookupPerson } from '@spk/core';
 
 /**
  * REPAIR ONE MERGE — `--id=<spkId>`.
@@ -46,11 +47,11 @@ async function main(): Promise<void> {
     const norm = (s: string): string => s.trim().toLowerCase();
     const typedAdvisor = (doc.signatures?.menerima?.namaJelas ?? '').trim();
     const advisor =
-      mirror.advisorByName.get(norm(typedAdvisor)) ??
+      lookupPerson(mirror.advisorByName, typedAdvisor) ??
       { _id: 'unmatched', mechanicCode: 'unmatched', name: typedAdvisor, storeCode: null, role: 'advisor' as const, syncedAt: '' };
     const typedSales = (doc.salespersonName ?? '').trim() || typedAdvisor;
     const salesperson =
-      mirror.salespersonByName.get(norm(typedSales)) ??
+      lookupPerson(mirror.salespersonByName, typedSales) ??
       { _id: 'unmatched', mechanicCode: 'unmatched', name: typedSales, storeCode: null, role: 'salesperson' as const, syncedAt: '' };
     const sched = doc.scheduledAt && Date.parse(doc.scheduledAt) > Date.now() + 5 * 60_000 ? doc.scheduledAt : null;
     const plan = sched ? { date: formatDateWib(sched), time: formatTimeWib(sched) } : planFromNowWib(30);
