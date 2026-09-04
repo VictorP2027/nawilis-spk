@@ -145,11 +145,26 @@ jobs:
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           GITHUB_ACTOR: ${{ github.actor }}
+          # The inputs arrive as ENV, never spliced into the script text.
+          # `${{ }}` is substituted BEFORE the shell parses the line, so a
+          # quote or a newline in a value used to escape the argument and run
+          # as a command — with MONGODB_URI and the Turboly password sitting
+          # right there in this step's env. Reading them as "$IN_NAME" hands
+          # the shell a value instead of source code, which is the only form
+          # of this that stays safe no matter who can reach the dispatch.
+          IN_CODE: ${{ inputs.code }}
+          IN_NAME: ${{ inputs.name }}
+          IN_STORE: ${{ inputs.store }}
+          IN_TYPE: ${{ inputs.type }}
+          IN_ABBREV: ${{ inputs.abbrev }}
+          IN_NO_TURBOLY: ${{ inputs.no_turboly }}
         run: |
+          FLAG=""
+          if [ "$IN_NO_TURBOLY" = "true" ]; then FLAG="--no-turboly"; fi
           node --import tsx apps/worker/src/branch-add.ts \
-            --code="${{ inputs.code }}" \
-            --name="${{ inputs.name }}" \
-            --store="${{ inputs.store }}" \
-            --type="${{ inputs.type }}" \
-            --abbrev="${{ inputs.abbrev }}" \
-            ${{ inputs.no_turboly && '--no-turboly' || '' }}
+            --code="$IN_CODE" \
+            --name="$IN_NAME" \
+            --store="$IN_STORE" \
+            --type="$IN_TYPE" \
+            --abbrev="$IN_ABBREV" \
+            $FLAG
