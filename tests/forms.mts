@@ -120,4 +120,27 @@ console.log('\n── Plat: apa pun boleh masuk, yang aneh cuma diperingatkan �
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
+
+console.log('H. carwash-only: a job picked in "Pekerjaan lain" counts');
+// Jane, live: a customer who only comes for a carwash had no tile to tap and
+// the form refused to submit at all. A picked SKU is what becomes a real
+// service line, so it is what may satisfy the minimum — prose still cannot.
+{
+  const files = ['apps/web/app/page.tsx', 'apps/web/app/sheet/page.tsx'];
+  for (const f of files) {
+    const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+    const m = /const jobFromText = \(t: string\): boolean =>\s*([^;]+);/.exec(src);
+    ok(Boolean(m), `${f}: aturan jobFromText ada`);
+    if (!m) continue;
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('t', `return ${m[1]};`) as (t: string) => boolean;
+    ok(fn('CWS-NAW-CWS1 Carwash'), `${f}: "CWS-NAW-CWS1 Carwash" dihitung pekerjaan`);
+    ok(fn('TPI-NAWJAS-PM Periodic Maintenance'), `${f}: Periodic Maintenance juga`);
+    ok(!fn('cuci mobil'), `${f}: tulisan bebas TANPA SKU tidak dihitung (Turboly menolak)`);
+    ok(!fn(''), `${f}: kosong tidak dihitung`);
+    ok(!fn('CWS 123'), `${f}: bukan bentuk SKU tidak dihitung`);
+  }
+}
+
+console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);

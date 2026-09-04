@@ -286,7 +286,16 @@ export default function Sheet() {
     if (!menerima.trim()) { setResult({ ok: false, text: 'Yang menerima (Service Advisor) wajib diisi — Turboly menolak order tanpa advisor.' }); setSubmitting(false); return; }
     if (!effSalesperson) { setResult({ ok: false, text: 'Salesperson wajib dipilih — Turboly menolak order tanpa salesperson.' }); setSubmitting(false); return; }
     if (!alamat.trim()) { setResult({ ok: false, text: 'Alamat wajib diisi (terisi otomatis untuk customer terdaftar).' }); setSubmitting(false); return; }
-    if (!SERVICES.some((sv) => pk[sv.code]?.order)) { setResult({ ok: false, text: 'Pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item.' }); setSubmitting(false); return; }
+    // Same rule as the tile form: a job picked in "Pekerjaan lain" counts, as
+    // long as it carries a SKU — that is what becomes a real service line on
+    // the order (payload.ts `leadingSku`). A carwash has no tile of its own.
+    const jobFromText = (t: string): boolean =>
+      /^[A-Z]{3}-[A-Z0-9]+-[A-Z0-9]+$/i.test((t ?? '').trim().split(/\s+/)[0] ?? '');
+    if (!SERVICES.some((sv) => pk[sv.code]?.order) && ![extra1, extra2].some(jobFromText)) {
+      setResult({ ok: false, text: 'Pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item. Kalau tidak ada tombolnya (mis. cuci mobil), pilih dari "Pekerjaan lain".' });
+      setSubmitting(false);
+      return;
+    }
     const requiredSheet: Array<[string, string]> = [[tanggal, 'Tanggal'], [noPol, 'Nomor Polisi'], [nama, 'Nama Customer'], [merk, 'Merek Mobil'], [tipe, 'Tipe'], [warna, 'Warna Mobil'], [km, 'KM'], [tahun, 'Tahun'], [estimasi, 'Estimasi waktu pekerjaan'], [menyerahkan, 'Yang menyerahkan (nama customer)']];
     const missing = requiredSheet.filter(([v]) => !String(v).trim()).map(([, label]) => label);
     if (missing.length) { setResult({ ok: false, text: `Wajib diisi: ${missing.join(', ')}.` }); setSubmitting(false); return; }

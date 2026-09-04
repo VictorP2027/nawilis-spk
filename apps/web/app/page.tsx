@@ -466,7 +466,26 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
     && Number(tahun) >= 1950
     && Number(tahun) <= new Date().getFullYear() + 1;
   const tipeOk = tipe.trim() !== '';
-  const jobsOk = Object.keys(jobs).length > 0; // an SO with zero service items is impossible
+  /**
+   * At least one JASA — from a tile, or from "Pekerjaan lain".
+   *
+   * A customer who only comes for a carwash has no tile to tap, and the form
+   * refused to submit at all: real work, turned away at the counter. It is
+   * enough to pick the job from "Pekerjaan lain" instead (CWS-NAW-CWS1 for a
+   * carwash) — the push lifts the leading SKU out of that text and it becomes
+   * a genuine service line on the order.
+   *
+   * The SKU is what makes it count, and this test is deliberately the SAME one
+   * the payload builder applies (packages/core/src/turboly/payload.ts,
+   * `leadingSku`). Free prose still does not count: it rides in the Notes and
+   * leaves Turboly's Services tab empty, which Turboly refuses — better to say
+   * so here, to the person who can still fix it, than to fail in a queue an
+   * hour later.
+   */
+  const jobFromText = (t: string): boolean =>
+    /^[A-Z]{3}-[A-Z0-9]+-[A-Z0-9]+$/i.test((t ?? '').trim().split(/\s+/)[0] ?? '');
+  const extraIsJob = [extra1, extra2].some(jobFromText);
+  const jobsOk = Object.keys(jobs).length > 0 || extraIsJob; // an SO with zero service items is impossible
   /**
    * An SPK of nothing but spareparts cannot become a Turboly order: Turboly
    * refuses one whose Services tab is empty ("Service Items can't be blank"),
@@ -713,7 +732,13 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Pekerjaan</div>
-          {!jobsOk && <div className="req-note">⚠ pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item</div>}
+          {!jobsOk && (
+            <div className="req-note">
+              ⚠ pilih minimal satu pekerjaan — order Turboly tidak bisa dibuat tanpa service item.
+              Kalau pekerjaannya tidak ada tombolnya (mis. cuci mobil), pilih dari
+              &quot;Pekerjaan lain&quot; di bawah.
+            </div>
+          )}
           {partsOnly && (
             <div className="req-note">
               ⚠ SPK ini hanya berisi sparepart. Tambahkan minimal satu pekerjaan (jasa) —
