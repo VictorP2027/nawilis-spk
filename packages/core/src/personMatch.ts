@@ -1,3 +1,5 @@
+import { jaroWinkler } from './indonesia.js';
+
 /**
  * Matching a typed person name against Turboly's own list.
  *
@@ -14,7 +16,7 @@
  * weaker rule that happens to single one out.
  */
 
-export type PersonMatchHow = 'exact' | 'starts-with' | 'typed-longer' | 'contains';
+export type PersonMatchHow = 'exact' | 'starts-with' | 'typed-longer' | 'contains' | 'typo';
 
 export type PersonMatchResult = {
   /** The option text to select, verbatim as Turboly rendered it; null when unresolved. */
@@ -78,6 +80,41 @@ export function matchPersonLabel(options: readonly string[], label: string): Per
     // Several people fit this reading — stop here and report them. Falling
     // through to a looser rule that singles one out would be guessing.
     if (hits.length > 1) return { text: null, how: null, ambiguous: hits };
+  }
+
+  /**
+   * A MISSPELLING, last of all.
+   *
+   * Every rule above compares whole words, so "SIITI ANISA" — one duplicated
+   * letter — matches nobody, and a live SPK at NWL-BGR stopped on a name the
+   * store plainly has. Nobody at the counter can see that a doubled I is the
+   * whole problem, and the error even hid the right person: it lists only the
+   * first 40 users, and SITI comes after RATNASARI.
+   *
+   * Typo tolerance is the loosest thing this file does, so it is also the
+   * strictest about being sure. A near-miss only wins when it is very close
+   * AND clearly closer than anyone else: a wrong pick here quietly credits
+   * another person's sale, and two people with similar names is exactly the
+   * situation where a machine should stop rather than choose. Below the
+   * margin, both names are reported and the counter decides.
+   */
+  // Measured, not guessed. On this jaroWinkler a single inserted letter costs
+  // more than it looks: "SIITI ANISA" vs "SITI ANISA" is 0.8958, while the
+  // nearest real colleague at that branch is 0.6976. So the absolute bar sits
+  // just under the real typo, and the MARGIN does the actual protecting —
+  // INDAH AFRIANI vs INDAH APRILIANI are two different people scoring 0.9196
+  // against each other, and no threshold can separate a pair like that. A
+  // near-miss must be clearly nearer than the runner-up or nobody is picked.
+  const NEAR = 0.87;
+  const MARGIN = 0.05;
+  const scored = cands
+    .map((o) => ({ o, s: jaroWinkler(normPerson(o), normPerson(label)) }))
+    .sort((a, b) => b.s - a.s);
+  const best = scored[0];
+  if (best && best.s >= NEAR) {
+    const runnerUp = scored[1];
+    if (!runnerUp || best.s - runnerUp.s >= MARGIN) return { text: best.o, how: 'typo', ambiguous: [] };
+    return { text: null, how: null, ambiguous: [best.o, runnerUp.o] };
   }
   return none;
 }

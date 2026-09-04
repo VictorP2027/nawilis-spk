@@ -71,5 +71,33 @@ for (const n of STORE) {
 }
 ok(true, 'mirror: ke-8 nama lengkap cocok dengan dirinya sendiri');
 
+console.log('F. a misspelled name (live: NWL-BGR)');
+// "SIITI ANISA" — one doubled letter — matched nobody, and the error even hid
+// the right person because it lists only the first 40 users and SITI comes
+// after RATNASARI. Word rules cannot help; this is the last resort.
+const BGR = [
+  'ADE PUTRI ANGLIKA', 'ALIANA PRATIWI', 'AYU TIA SAVITRI', 'CITRA RETLANI',
+  'DEVI FITRIANI', 'DITA BUDIARTI', 'INDAH AFRIANI', 'INDAH APRILIANI',
+  'SITI ANISA', 'NELY SHINTIA', 'MARCEL ZAKARIA', 'Dyah Setyarini',
+];
+const typo = matchPersonLabel(BGR, 'SIITI ANISA');
+ok(typo.text === 'SITI ANISA', `"SIITI ANISA" -> ${typo.text} (dulu gagal push)`);
+ok(typo.how === 'typo', `cara cocok = ${typo.how}`);
+ok(matchPersonLabel(BGR, 'SITI ANISA').how === 'exact', 'ejaan benar tetap lewat jalur persis');
+ok(matchPersonLabel(BGR, 'DEVI FITRAINI').text === 'DEVI FITRIANI', 'huruf tertukar juga tertolong');
+ok(matchPersonLabel(BGR, 'ADE PUTRI ANGLIKAA').text === 'ADE PUTRI ANGLIKA', 'huruf kelebihan di akhir');
+
+console.log('G. and it still refuses when two names are close');
+// The dangerous shape: a typo that sits between two real people. INDAH AFRIANI
+// and INDAH APRILIANI are one store, one letter apart in the middle.
+const near = matchPersonLabel(['INDAH AFRIANI', 'INDAH APRIANI'], 'INDAH APRIANI');
+ok(near.text === 'INDAH APRIANI', 'yang persis tetap menang atas tetangga yang mirip');
+const between = matchPersonLabel(['SITI ANISA', 'SITI ANISAH'], 'SIITI ANISA');
+ok(between.text === null, 'salah ketik di antara dua nama mirip -> tidak menebak');
+ok(between.ambiguous.length === 2, `dan menyebut keduanya: ${between.ambiguous.join(', ')}`);
+ok(matchPersonLabel(BGR, 'BUDI SANTOSO').text === null, 'orang yang memang tidak ada tetap ditolak');
+ok(matchPersonLabel(BGR, 'ANISA').text === null || matchPersonLabel(BGR, 'ANISA').text === 'SITI ANISA',
+   `"ANISA" (nama belakang saja) -> ${matchPersonLabel(BGR, 'ANISA').text ?? 'ditolak'}`);
+
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);
