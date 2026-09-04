@@ -7,7 +7,7 @@
 //
 // One Turboly session (one login). In CI this runs in the same concurrency
 // group as the pusher so the two can never fight over the single session.
-import { connect, close, collections } from '../packages/core/dist/index.js';
+import { connect, close, collections, branchForNewStore } from '../packages/core/dist/index.js';
 import { TurbolySession } from '../packages/core/dist/turboly/index.js';
 import { getDb } from '../packages/core/dist/mongo.js';
 
@@ -212,10 +212,49 @@ async function syncOneStore(st, ls) {
   return 'ok';
 }
 
+
+/**
+ * A branch that opened since the last sync.
+ *
+ * Turboly's store dropdown is read every run, so a new outlet is SEEN the day
+ * it is created — it just used to stop at a warning nobody could act on
+ * without knowing Turboly's internal store id. Adding the branch to
+ * REF_BRANCHES is now the only manual step: the row below is written from the
+ * store Turboly itself reports, and the same run then harvests that branch's
+ * advisors, so the first SPK from a new counter can push.
+ *
+ * Deliberately narrow, because a wrong mapping silently sends one branch's
+ * orders to another store:
+ *   - the live store NAME must equal the branch's turbolyStoreNameGuess
+ *     exactly (case/punctuation-insensitive),
+ *   - exactly ONE branch may match — never a guess between two,
+ *   - the branch must have NO tb_stores row yet, so an existing branch can
+ *     never be re-pointed at a different store,
+ *   - ignored stores (the PT holding companies) are never considered.
+ * Anything else keeps today's behaviour: a warning, and no write.
+ */
+async function autoMapNewStore(ls) {
+  const b = branchForNewStore(ls.t, new Set(known.map((s) => String(s._id))));
+  if (!b) return null;
+  await collections.tbStores().updateOne(
+    { _id: b.code },
+    { $set: { _id: b.code, turbolyStoreId: String(ls.v), turbolyStoreName: ls.t, syncedAt: now } },
+    { upsert: true },
+  );
+  const row = { _id: b.code, turbolyStoreId: String(ls.v), turbolyStoreName: ls.t };
+  known.push(row);
+  byTurbolyId.set(String(ls.v), row);
+  autoMapped.push(`${b.code} → "${ls.t}" (id ${ls.v})`);
+  console.log(`  + cabang baru dipetakan otomatis: ${b.code} → "${ls.t}" (id ${ls.v})`);
+  return row;
+}
+
+const autoMapped = [];
 for (const ls of liveStores) {
-  const st = byTurbolyId.get(String(ls.v));
+  let st = byTurbolyId.get(String(ls.v));
+  if (!st && !ignoredStoreIds.has(String(ls.v))) st = await autoMapNewStore(ls);
   if (!st) {
-    if (!ignoredStoreIds.has(String(ls.v))) newStores.push(`${ls.t} (id ${ls.v})`); // needs a manual branchCode mapping
+    if (!ignoredStoreIds.has(String(ls.v))) newStores.push(`${ls.t} (id ${ls.v})`); // no unique branch match — still manual
     continue;
   }
   await collections.tbStores().updateOne({ _id: st._id }, { $set: { turbolyStoreName: ls.t, syncedAt: now } });
@@ -235,6 +274,7 @@ for (const ls of liveStores) {
 // prune advisors that vanished — ONLY for stores whose list we read successfully
 const pruned = await collections.tbMechanics().deleteMany({ role: { $in: ['advisor', 'salesperson'] }, storeCode: { $in: okStores }, syncedAt: { $lt: now } });
 console.log(`stores: ${liveStores.length} live (${newStores.length} unmapped) | advisors synced: ${advTotal}, pruned: ${pruned.deletedCount} | mechanics synced: ${mechTotal} across ${mechOk.length} branches`);
+if (autoMapped.length) console.log(`  + ${autoMapped.length} cabang baru dipetakan otomatis: ${autoMapped.join('; ')}`);
 if (newStores.length) console.log(`  ⚠ NEW stores need branchCode mapping: ${newStores.join('; ')}`);
 // The two ways a branch ends up unable to staff a Work Order, kept apart on
 // purpose: the first needs someone to fix Turboly, the second needs someone to

@@ -1,3 +1,4 @@
+import { REF_BRANCHES } from '@spk/core/refdata';
 /**
  * Client-safe reference data — a small static mirror of the 12 SPK services and
  * 23 branches, so the intake PWA doesn't have to import @spk/core (which pulls
@@ -143,37 +144,21 @@ export const DAMAGE_ZONES: ReadonlyArray<DamageZone> = [
   { code: 'BUMPER_BELAKANG', label: 'Bumper Belakang', abbr: 'BUMPER', x: 80, y: 486, w: 200, h: 16 },
 ];
 
-export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILIS' | 'QUICKSERV' | 'COMPANY' }> = [
-  { code: 'NWL-TA17', name: 'Tanah Abang 17', type: 'NAWILIS' },
-  { code: 'NWL-TA12', name: 'Tanah Abang 12', type: 'NAWILIS' },
-  { code: 'NWL-RD', name: 'Radio Dalam', type: 'NAWILIS' },
-  { code: 'NWL-BGR', name: 'Bogor', type: 'NAWILIS' },
-  { code: 'NWL-PML', name: 'Pamulang (NKM)', type: 'NAWILIS' },
-  { code: 'NWL-CLG', name: 'Cilegon', type: 'NAWILIS' },
-  { code: 'NWL-BKS', name: 'Bekasi', type: 'NAWILIS' },
-  { code: 'NWL-PRG', name: 'Parung', type: 'NAWILIS' },
-  { code: 'NWL-CPT', name: 'Ciputat', type: 'NAWILIS' },
-  { code: 'NWL-CBB', name: 'Cibubur', type: 'NAWILIS' },
-  { code: 'NWL-BSD', name: 'BSD', type: 'NAWILIS' },
-  { code: 'NWL-LB', name: 'Lebak Bulus', type: 'NAWILIS' },
-  { code: 'NWL-JTW', name: 'Jatiwarna', type: 'NAWILIS' },
-  { code: 'QS-ANT', name: 'QS Antasari', type: 'QUICKSERV' },
-  { code: 'QS-SRP', name: 'QS Serpong', type: 'QUICKSERV' },
-  { code: 'QS-CBB1', name: 'QS Cibubur 1', type: 'QUICKSERV' },
-  { code: 'QS-CBB2', name: 'QS Cibubur 2', type: 'QUICKSERV' },
-  { code: 'QS-DPK', name: 'QS Depok', type: 'QUICKSERV' },
-  { code: 'QS-JGL', name: 'QS Joglo', type: 'QUICKSERV' },
-  { code: 'QS-KG', name: 'QS Kelapa Gading', type: 'QUICKSERV' },
-  { code: 'QS-PIK2', name: 'QS PIK 2', type: 'QUICKSERV' },
-  { code: 'QS-DAGO', name: 'QS Dago Bandung', type: 'QUICKSERV' },
-  { code: 'QS-GR', name: 'QS Graha Raya Tangsel', type: 'QUICKSERV' },
-  // The rest of Turboly's store dropdown, orderable on request (2026-08-06):
-  // the second Pamulang entity and the three PT holding companies.
-  { code: 'NWL-PML2', name: 'Pamulang (NMS)', type: 'NAWILIS' },
-  { code: 'PT-NMB', name: 'PT. Nawilis Maju Bersama', type: 'COMPANY' },
-  { code: 'PT-NMS', name: 'PT. Nawilis Maju Sejahtera', type: 'COMPANY' },
-  { code: 'PT-NWL', name: 'PT. Nawilis Waskita Lestari', type: 'COMPANY' },
-];
+/**
+ * The branches, derived — not a second copy.
+ *
+ * This list used to be typed out again here, beside the one in
+ * packages/core/src/refdata.ts, and the two had to be edited together every
+ * time a branch opened. (apps/web-supabase still carries a third copy, four
+ * entries behind.) One list means opening a branch is one edit, and the
+ * picker cannot silently disagree with the pusher about which branches exist.
+ *
+ * Imported from the "./refdata" subpath, not "@spk/core": refdata.ts imports
+ * only a TYPE, so this reaches the browser as a plain array, with none of the
+ * Mongo/Playwright weight the package index would drag in.
+ */
+export const BRANCHES: ReadonlyArray<{ code: string; name: string; type: 'NAWILIS' | 'QUICKSERV' | 'COMPANY' }> =
+  REF_BRANCHES.map((b) => ({ code: b.code, name: b.name, type: b.type }));
 
 /* ── "CHECK and GO REPORT" (final 3) — the printed sheet, as data ───────────
  *

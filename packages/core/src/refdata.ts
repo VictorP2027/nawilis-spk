@@ -131,3 +131,36 @@ export const CAR_BRANDS: readonly string[] = [
   'BYD', 'VINFAST', 'NETA', 'ORA', 'GWM', 'HAVAL', 'GEELY', 'PROTON', 'SSANGYONG', 'CITROEN',
   'FIAT', 'SKODA', 'SMART', 'OPEL', 'SEAT', 'MITSUBISHI FUSO', 'HINO',
 ];
+
+/**
+ * Which branch a newly-appeared Turboly store belongs to — or nobody.
+ *
+ * Turboly's store dropdown is read on every catalogue sync, so an outlet that
+ * opened yesterday is already visible; what was missing was permission to act
+ * on it without a person looking up Turboly's internal store id. This decides
+ * that, and it is deliberately unwilling: a wrong answer silently routes one
+ * branch's orders into another branch's store, which nobody would notice until
+ * the month's numbers were already wrong.
+ *
+ * So it answers only when the answer is beyond doubt:
+ *   - the store name must equal the branch's turbolyStoreNameGuess, compared
+ *     without case or punctuation ("Nawilis QS PIK 2" = "NAWILIS QS PIK2"),
+ *   - exactly one branch may match — a tie is never broken,
+ *   - the branch must be unmapped, so an existing branch can never be moved
+ *     to a different store.
+ * Every other case returns null and leaves the run's existing warning to it.
+ */
+const normStoreName = (s: string): string => (s ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+
+export function branchForNewStore(
+  liveStoreName: string,
+  mappedBranchCodes: ReadonlySet<string>,
+  branches: readonly RefBranch[] = REF_BRANCHES,
+): RefBranch | null {
+  const want = normStoreName(liveStoreName);
+  if (!want) return null;
+  const hits = branches.filter(
+    (b) => !mappedBranchCodes.has(b.code) && normStoreName(b.turbolyStoreNameGuess) === want,
+  );
+  return hits.length === 1 ? hits[0]! : null;
+}
