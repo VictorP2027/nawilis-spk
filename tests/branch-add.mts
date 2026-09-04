@@ -121,6 +121,16 @@ try {
     }
   }
 
+  // The acceptance run writes for real, so its whole safety story is the two
+  // lines below: a scratch database name in the workflow, and a script that
+  // refuses production even if someone edits that name.
+  const e2eYml = await readFile(new URL('e2e-branch-add.yml', wfDir), 'utf8');
+  const e2eDb = e2eYml.match(/^\s*MONGODB_DB:\s*(\S+)/m)?.[1];
+  ok(e2eDb !== undefined && e2eDb !== 'spk', `e2e-branch-add.yml pakai database bukan produksi (${e2eDb})`);
+  const e2eSrc = await readFile(new URL('../apps/worker/src/e2e-branch-add.ts', import.meta.url), 'utf8');
+  ok(/config\.mongoDb === 'spk'/.test(e2eSrc), 'e2e-branch-add.ts menolak database produksi');
+  ok(e2eSrc.indexOf("config.mongoDb === 'spk'") < e2eSrc.indexOf('dropDatabase'), 'dan menolaknya SEBELUM menghapus database apa pun');
+
   // And the guard that turns a bad value into a sentence a human can act on.
   const src = await readFile(new URL('../apps/worker/src/branch-add.ts', import.meta.url), 'utf8');
   const guardAt = src.indexOf('TURBOLY_BASE_URL tidak sah');
