@@ -29,6 +29,12 @@ import { config } from './config.js';
  * accidental one: /api/admin/branch-add refuses a branch that is already
  * complete, and refuses outright when it cannot check.
  *
+ * --dry-run does everything EXCEPT write: it validates, logs in, reads
+ * Turboly's store dropdown, matches the store and reads that store's advisors,
+ * then prints what it WOULD have written. It exists because a branch code is
+ * permanent and there is no delete — so the only other way to find out whether
+ * this works is to leave a junk branch in every counter's picker forever.
+ *
  * --no-turboly writes only the picker row (steps 2 and 3 skipped), for the case
  * where the store does not exist in Turboly yet. The branch is then selectable
  * but its SPKs will hold at "belum terpetakan ke Store Turboly" until this is
@@ -48,6 +54,7 @@ async function main(): Promise<void> {
   const type = (arg('type') ?? 'NAWILIS').trim().toUpperCase() as 'NAWILIS' | 'QUICKSERV' | 'COMPANY';
   const abbrev = (arg('abbrev') ?? '').trim().toUpperCase() || null;
   const skipTurboly = has('no-turboly');
+  const dryRun = has('dry-run');
 
   if (!code || !name) {
     console.error('butuh --code=NWL-XXX --name="Cabang Baru" [--store="Nama Store di Turboly"]');
@@ -85,7 +92,11 @@ async function main(): Promise<void> {
     const existingStore = await collections.tbStores().findOne({ _id: code });
     if (existing) console.log(`· ${code} sudah terdaftar sebagai "${existing.name}" — data picker diperbarui`);
 
-    await collections.branches().updateOne(
+    if (dryRun) {
+      console.log(`\n— UJI COBA (--dry-run): tidak ada yang ditulis —`);
+      console.log(`  akan ditambahkan ke picker: ${code} "${name}" (${type}${abbrev ? `, singkatan ${abbrev}` : ''})`);
+    }
+    if (!dryRun) await collections.branches().updateOne(
       { _id: code },
       {
         $set: { _id: code, name, type, docAbbrev: abbrev, turbolyStoreNameGuess: storeName || name },
@@ -93,7 +104,7 @@ async function main(): Promise<void> {
       },
       { upsert: true },
     );
-    console.log(`✓ cabang "${name}" (${code}) masuk daftar picker — muncul di form tanpa deploy`);
+    if (!dryRun) console.log(`✓ cabang "${name}" (${code}) masuk daftar picker — muncul di form tanpa deploy`);
 
     if (skipTurboly) {
       console.log('· dilewati: pemetaan store Turboly + advisor (--no-turboly). SPK cabang ini akan tertahan sampai dijalankan lagi tanpa flag itu.');
@@ -134,12 +145,13 @@ async function main(): Promise<void> {
       }
       const store = hits[0]!;
       const now = new Date().toISOString();
-      await collections.tbStores().updateOne(
+      if (dryRun) console.log(`  akan dipetakan ke store Turboly "${store.t}" (id ${store.v})`);
+      if (!dryRun) await collections.tbStores().updateOne(
         { _id: code },
         { $set: { _id: code, turbolyStoreId: String(store.v), turbolyStoreName: store.t, syncedAt: now } },
         { upsert: true },
       );
-      console.log(`✓ dipetakan ke store Turboly "${store.t}" (id ${store.v})`);
+      if (!dryRun) console.log(`✓ dipetakan ke store Turboly "${store.t}" (id ${store.v})`);
 
       // Advisors, from the same form — an SPK whose advisor is unknown is
       // refused at push, so a branch without them is a branch that cannot work.
@@ -149,7 +161,7 @@ async function main(): Promise<void> {
       const sales = await read('#salesperson-id');
       const seen = new Set<string>();
       for (const a of advisors) {
-        await collections.tbMechanics().updateOne(
+        if (!dryRun) await collections.tbMechanics().updateOne(
           { _id: `${code}:${a.v}` },
           { $set: { _id: `${code}:${a.v}`, mechanicCode: a.v, name: a.t, storeCode: code, role: 'advisor', syncedAt: now } },
           { upsert: true },
@@ -158,13 +170,14 @@ async function main(): Promise<void> {
       }
       for (const p of sales) {
         if (seen.has(p.v)) continue;
-        await collections.tbMechanics().updateOne(
+        if (!dryRun) await collections.tbMechanics().updateOne(
           { _id: `${code}:${p.v}` },
           { $set: { _id: `${code}:${p.v}`, mechanicCode: p.v, name: p.t, storeCode: code, role: 'salesperson', syncedAt: now } },
           { upsert: true },
         );
       }
-      console.log(`✓ ${advisors.length} advisor, ${sales.length} salesperson disalin${advisors.length ? `: ${advisors.map((a) => a.t).join(', ')}` : ''}`);
+      console.log(`${dryRun ? '  akan disalin:' : '✓'} ${advisors.length} advisor, ${sales.length} salesperson${advisors.length ? `: ${advisors.map((a) => a.t).join(', ')}` : ''}`);
+      if (dryRun) console.log(`\n✓ UJI COBA SELESAI — semuanya bisa dijalankan, dan TIDAK ADA yang ditulis.`);
       if (!advisors.length) {
         console.log('⚠ Turboly belum punya Service Advisor untuk store ini — daftarkan orangnya dulu (Setup → Users), lalu jalankan ulang.');
       }

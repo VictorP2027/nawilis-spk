@@ -36,6 +36,10 @@ on:
         description: 'Singkatan di nomor dokumen Turboly, mis. XXX (boleh kosong)'
         type: string
         default: ''
+      dry_run:
+        description: 'UJI COBA — jalankan semuanya (login Turboly, cari store, baca advisor) tapi JANGAN tulis apa pun. Untuk memastikan izin & nama store benar sebelum membuka cabang sungguhan.'
+        type: boolean
+        default: false
       no_turboly:
         description: 'Storenya belum ada di Turboly — daftarkan di picker dulu, petakan nanti'
         type: boolean
@@ -158,9 +162,11 @@ jobs:
           IN_TYPE: ${{ inputs.type }}
           IN_ABBREV: ${{ inputs.abbrev }}
           IN_NO_TURBOLY: ${{ inputs.no_turboly }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           FLAG=""
           if [ "$IN_NO_TURBOLY" = "true" ]; then FLAG="--no-turboly"; fi
+          if [ "$IN_DRY_RUN" = "true" ]; then FLAG="$FLAG --dry-run"; fi
           node --import tsx apps/worker/src/branch-add.ts \
             --code="$IN_CODE" \
             --name="$IN_NAME" \
