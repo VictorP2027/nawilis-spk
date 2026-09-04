@@ -1,5 +1,5 @@
 import {
-  buildSpkDoc, loadMirror, resolveSkus, validateLayer1,
+  buildSpkDoc, branchTypeFor, loadMirror, resolveSkus, validateLayer1,
   transition, emit, collections, vehicleRef, REF_SERVICES, DataError,
   type SpkIntakeInputT, type Finding, type SpkDoc, type VehicleDoc,
 } from '@spk/core';
@@ -62,7 +62,7 @@ export async function ingestSpk(input: SpkIntakeInputT): Promise<IngestResult> {
     );
   }
 
-  let doc = buildSpkDoc(input);
+  let doc = buildSpkDoc(input, { branchType: await branchTypeFor(input.branchCode) });
   doc.uploadId = input.uploadId;
   // Save the complete raw form verbatim (nothing entered is ever lost).
   if (input.raw) doc.rawForm = input.raw;

@@ -13,7 +13,7 @@
  *
  *   npx tsx tests/branch-add.mts
  */
-import { REF_BRANCHES, branchForNewStore } from '@spk/core';
+import { REF_BRANCHES, branchForNewStore, branchTypeFor, collections } from '@spk/core';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { readFile, readdir } from 'node:fs/promises';
 import { BRANCHES } from '../apps/web/lib/refdata.client.js';
@@ -94,6 +94,48 @@ try {
   ok(renamed.find((b) => b.code === 'NWL-BKS')?.name === 'Bekasi (pindah)', 'cabang bawaan boleh diganti NAMANYA tanpa deploy');
   ok(renamed.length === REF_BRANCHES.length + 1, 'dan tidak menggandakan dirinya');
   ok(renamed.filter((b) => b.code === 'NWL-BKS').length === 1, 'satu kode tetap satu cabang');
+
+  // A branch opened since the deploy is not in REF_BRANCHES, so buildSpkDoc
+  // used to fall back to NAWILIS for it — silently mistyping a new QUICKSERV
+  // counter and dropping its queue priority from 95 to 50.
+  await collections.branches().insertOne({
+    _id: 'NWL-QS9', name: 'QuickServ Baru', type: 'QUICKSERV', docAbbrev: 'QS9',
+    turbolyStoreNameGuess: 'QuickServ Baru', addedAt: new Date().toISOString(), addedBy: 'tes',
+  } as never);
+  ok(await branchTypeFor('NWL-QS9') === 'QUICKSERV', 'cabang QUICKSERV baru terbaca QUICKSERV, bukan NAWILIS');
+  const builtInBranch = REF_BRANCHES[0]!;
+  ok(await branchTypeFor(builtInBranch.code) === builtInBranch.type, `cabang bawaan (${builtInBranch.code}) tetap ${builtInBranch.type}`);
+  ok(await branchTypeFor('NWL-TIDAK-ADA') === 'NAWILIS', 'kode tak dikenal tetap jatuh ke NAWILIS');
+
+  // …and the intake path has to actually pass it, or the fix is inert.
+  const ingestSrc = await readFile(new URL('../apps/web/lib/ingest.ts', import.meta.url), 'utf8');
+  ok(/buildSpkDoc\(input,\s*\{\s*branchType:\s*await branchTypeFor\(/.test(ingestSrc), 'ingestSpk meneruskan tipe cabang ke buildSpkDoc');
+
+  // Every page that renders the branch list must read the MERGED list. The
+  // compiled-in BRANCHES is frozen at deploy time, so a page using it alone
+  // simply never offers a branch opened through /admin/cabang — which is the
+  // whole feature. /checkgo/sheet and /customers were both doing exactly that.
+  const appDir = new URL('../apps/web/app/', import.meta.url);
+  const pages: string[] = [];
+  const walk = async (dir: URL): Promise<void> => {
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const child = new URL(e.name + (e.isDirectory() ? '/' : ''), dir);
+      if (e.isDirectory()) await walk(child);
+      else if (e.name.endsWith('.tsx')) pages.push(child.pathname);
+    }
+  };
+  await walk(appDir);
+  ok(pages.length > 5, `${pages.length} halaman diperiksa`);
+  let checked = 0;
+  for (const f of pages) {
+    const src = await readFile(f, 'utf8');
+    if (!/\bBRANCHES\b/.test(src)) continue;
+    checked++;
+    const short = f.slice(f.indexOf('/app/') + 1);
+    ok(/useBranches\(\)/.test(src), `${short}: pakai daftar cabang yang digabung (useBranches)`);
+  }
+  ok(checked >= 7, `${checked} halaman menampilkan daftar cabang`);
 
   // The workflow env block. A `${{ secrets.X }}` for an X that was never created
   // does not fail the run — it expands to '', slips past config.ts's `??` (an

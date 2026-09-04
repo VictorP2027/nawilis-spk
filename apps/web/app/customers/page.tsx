@@ -3,6 +3,7 @@
 import BrandMark from './../components/BrandMark';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BRANCHES } from '../../lib/refdata.client';
+import { useBranches } from '../../lib/branches.client';
 
 /**
  * /customers — helper pendaftaran customer Turboly (via robot RPA).
@@ -223,6 +224,8 @@ function writeLedger(list: RegEntry[]): void {
 }
 
 export default function Customers(): React.ReactElement {
+  // Compiled-in list, plus any branch opened since the last deploy.
+  const BRANCHES = useBranches();
   const [tab, setTab] = useState<Tab>('retail');
 
   // ── Store pendaftaran (berlaku untuk kedua tab) ─────────────────────────

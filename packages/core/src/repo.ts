@@ -100,8 +100,7 @@ export async function emit(evt: Omit<SpkEvent, '_id' | 'at'> & { at?: string }):
  * normalisation and records provenance (fieldMeta) for every field so the
  * review/validation layers can reason about it.
  */
-export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: string } = {}): SpkDoc {
-  void opts;
+export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: string; branchType?: BranchType } = {}): SpkDoc {
   const _id = newSpkId();
   const now = new Date().toISOString();
   const arrival = input.arrivalTime ?? input.capturedAt;
@@ -112,8 +111,13 @@ export function buildSpkDoc(input: SpkIntakeInputT, opts: { correlationSalt?: st
   const wa = input.customer.wa ? parseWa(input.customer.wa) : { e164: null };
   const brand = input.vehicle.merk ? normalizeBrand(input.vehicle.merk, CAR_BRANDS) : { normalized: null, score: 0, raw: '' };
 
+  // REF_BRANCHES is compiled in, so a branch opened since the deploy is not in
+  // it and used to fall back to NAWILIS — silently mistyping a new QUICKSERV
+  // counter and costing it its queue priority below. Callers that can reach
+  // Mongo resolve it with branchTypeFor() and pass it; the fallback stays
+  // exactly as it was for everyone else.
   const branch = REF_BRANCHES.find((b) => b.code === input.branchCode);
-  const branchType: BranchType = branch?.type ?? 'NAWILIS';
+  const branchType: BranchType = opts.branchType ?? branch?.type ?? 'NAWILIS';
 
   const fieldMeta: FieldMetaEntry[] = [];
   const meta = (path: string, source: FieldMetaEntry['source'], validator: FieldMetaEntry['validator'] = 'pass', tier: FieldMetaEntry['tier'] = 'AUTO_PASS') =>

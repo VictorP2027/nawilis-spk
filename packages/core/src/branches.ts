@@ -33,3 +33,21 @@ export async function loadBranchList(): Promise<RefBranch[]> {
   for (const r of extra) if (!REF_BRANCHES.some((b) => b.code === r._id)) out.push(merged.get(r._id)!);
   return out;
 }
+
+/**
+ * A branch's type, for a branch that may have been opened since the deploy.
+ *
+ * buildSpkDoc() reads REF_BRANCHES, which is compiled in — so a branch added
+ * through /admin/cabang was invisible to it and fell back to NAWILIS. For a
+ * new QUICKSERV counter that is silently wrong, and it costs that counter its
+ * queue priority (repo.ts gives QUICKSERV 95 and everything else 50).
+ *
+ * The 27 built-ins answer with no I/O, which is every SPK today; only a branch
+ * added since the deploy costs one indexed _id lookup.
+ */
+export async function branchTypeFor(code: string): Promise<RefBranch['type']> {
+  const builtIn = REF_BRANCHES.find((b) => b.code === code);
+  if (builtIn) return builtIn.type;
+  const row = await collections.branches().findOne({ _id: code }).catch(() => null);
+  return row?.type ?? 'NAWILIS';
+}

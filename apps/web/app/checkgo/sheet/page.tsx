@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { BRANCHES } from '../../../lib/refdata.client';
+import { useBranches } from '../../../lib/branches.client';
 import { submitOrQueue, flush } from '../../../lib/outbox';
 
 /**
@@ -23,6 +24,9 @@ const DEFAULT_HARGA = 100_000;
 const DEFAULT_ESTIMASI = 30;
 
 export default function CheckGoSheet() {
+  // Compiled-in list, plus any branch opened since the last deploy — the
+  // static BRANCHES import alone left a new counter unable to pick itself.
+  const BRANCHES = useBranches();
   const [serial, setSerial] = useState('');
   const [branch, setBranch] = useState('');
   const [wa, setWa] = useState('');
