@@ -96,21 +96,35 @@ async function main(): Promise<void> {
       console.log(`\n— UJI COBA (--dry-run): tidak ada yang ditulis —`);
       console.log(`  akan ditambahkan ke picker: ${code} "${name}" (${type}${abbrev ? `, singkatan ${abbrev}` : ''})`);
     }
-    if (!dryRun) await collections.branches().updateOne(
-      { _id: code },
-      {
-        $set: { _id: code, name, type, docAbbrev: abbrev, turbolyStoreNameGuess: storeName || name },
-        $setOnInsert: { addedAt: new Date().toISOString(), addedBy: process.env.GITHUB_ACTOR ?? null },
-      },
-      { upsert: true },
-    );
-    if (!dryRun) console.log(`✓ cabang "${name}" (${code}) masuk daftar picker — muncul di form tanpa deploy`);
+    // The picker row lands only once the branch is known to be workable. It
+    // used to be written right here, BEFORE Turboly was ever asked about the
+    // store — so a typo in the store name failed the run having already put
+    // the branch in all 24 counters' pickers, where it stays forever: the
+    // code is what every SPK is filed under, and there is no delete. That is
+    // the exact outcome --dry-run exists to avoid, so it must not be the
+    // outcome of getting the store name wrong.
+    const addToPicker = async (): Promise<void> => {
+      if (dryRun) return;
+      await collections.branches().updateOne(
+        { _id: code },
+        {
+          $set: { _id: code, name, type, docAbbrev: abbrev, turbolyStoreNameGuess: storeName || name },
+          $setOnInsert: { addedAt: new Date().toISOString(), addedBy: process.env.GITHUB_ACTOR ?? null },
+        },
+        { upsert: true },
+      );
+      console.log(`✓ cabang "${name}" (${code}) masuk daftar picker — muncul di form tanpa deploy`);
+    };
 
     if (skipTurboly) {
+      // Writing the picker row ALONE is the whole point of --no-turboly.
+      await addToPicker();
       console.log('· dilewati: pemetaan store Turboly + advisor (--no-turboly). SPK cabang ini akan tertahan sampai dijalankan lagi tanpa flag itu.');
       return;
     }
     if (existingStore) {
+      // Already mapped, so the branch works — this run is a rename.
+      await addToPicker();
       console.log(`· ${code} sudah dipetakan ke store Turboly "${existingStore.turbolyStoreName}" (id ${existingStore.turbolyStoreId}) — tidak dipindah`);
       return;
     }
@@ -155,6 +169,7 @@ async function main(): Promise<void> {
       const store = hits[0]!;
       const now = new Date().toISOString();
       if (dryRun) console.log(`  akan dipetakan ke store Turboly "${store.t}" (id ${store.v})`);
+      await addToPicker(); // the store is real, so the branch can actually be used
       if (!dryRun) await collections.tbStores().updateOne(
         { _id: code },
         { $set: { _id: code, turbolyStoreId: String(store.v), turbolyStoreName: store.t, syncedAt: now } },

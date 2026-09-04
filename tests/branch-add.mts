@@ -131,6 +131,17 @@ try {
   ok(/config\.mongoDb === 'spk'/.test(e2eSrc), 'e2e-branch-add.ts menolak database produksi');
   ok(e2eSrc.indexOf("config.mongoDb === 'spk'") < e2eSrc.indexOf('dropDatabase'), 'dan menolaknya SEBELUM menghapus database apa pun');
 
+  // Write ORDER, locked offline. The picker row must not be written until the
+  // Turboly store has resolved: a branch code cannot be deleted, so a typo in
+  // the store name must fail with nothing left behind.
+  const baSrc = await readFile(new URL('../apps/worker/src/branch-add.ts', import.meta.url), 'utf8');
+  const storeResolved = baSrc.indexOf('const store = hits[0]!');
+  const noStore = baSrc.indexOf('tidak ada di daftar Turboly');
+  const pickerCall = baSrc.indexOf('await addToPicker(); // the store is real');
+  ok(storeResolved > 0 && noStore > 0 && pickerCall > 0, 'branch-add.ts menulis picker lewat addToPicker()');
+  ok(pickerCall > storeResolved, 'baris picker ditulis SETELAH store Turboly ketemu');
+  ok(pickerCall > noStore, 'dan setelah titik di mana store yang salah ditolak');
+
   // And the guard that turns a bad value into a sentence a human can act on.
   const src = await readFile(new URL('../apps/worker/src/branch-add.ts', import.meta.url), 'utf8');
   const guardAt = src.indexOf('TURBOLY_BASE_URL tidak sah');

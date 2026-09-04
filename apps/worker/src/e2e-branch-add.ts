@@ -137,7 +137,12 @@ async function main(): Promise<void> {
     log('6/7 penolakan');
     const bogus = await runBranchAdd([`--code=${CODE}-X`, '--name=Toko Karangan', '--store=Toko Yang Tidak Ada']);
     ok(bogus.code !== 0, 'store yang tidak ada di Turboly ditolak');
+    // The one that matters most: a typo'd store name must not leave a branch
+    // behind. It cannot be deleted, and every counter would see it forever.
     ok(await collections.branches().countDocuments({ _id: `${CODE}-X` } as never) === 0, 'dan tidak meninggalkan baris picker');
+    ok(await collections.tbStores().countDocuments({ _id: `${CODE}-X` } as never) === 0, 'tidak meninggalkan pemetaan store');
+    ok(await collections.tbMechanics().countDocuments({ storeCode: `${CODE}-X` } as never) === 0, 'tidak meninggalkan orang');
+    ok(!(await loadBranchList()).some((b) => b.code === `${CODE}-X`), 'dan tidak muncul di picker kasir mana pun');
 
     const listed = bogus.out.match(/Pilihan: (.+)/)?.[1]?.split(', ').map((s) => s.trim()) ?? [];
     const other = listed.find((s) => s && s.toUpperCase() !== STORE.toUpperCase());
