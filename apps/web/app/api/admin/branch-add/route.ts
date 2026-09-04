@@ -42,6 +42,8 @@ export async function POST(req: Request): Promise<Response> {
   const type = String(body.type ?? 'NAWILIS').trim().toUpperCase();
   const abbrev = String(body.abbrev ?? '').trim().toUpperCase();
   const noTurboly = body.no_turboly === true || body.no_turboly === 'true';
+  // A rehearsal: run the whole chain, write nothing. See branch-add.ts --dry-run.
+  const dryRun = body.dry_run === true || body.dry_run === 'true';
 
   const bad = (error: string, hint?: string): Response =>
     NextResponse.json({ error, hint }, { status: 400 });
@@ -89,7 +91,7 @@ export async function POST(req: Request): Promise<Response> {
       collections.branches().findOne({ _id: code }),
       collections.tbStores().findOne({ _id: code }),
     ]);
-    if (existing && mapped) {
+    if (existing && mapped && !dryRun) {
       return NextResponse.json(
         {
           error: `${code} sudah dibuka dan sudah terhubung ke store Turboly "${mapped.turbolyStoreName}".`,
@@ -117,7 +119,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const res = await triggerBranchAdd({ code, name, store, type, abbrev, no_turboly: noTurboly });
+  const res = await triggerBranchAdd({ code, name, store, type, abbrev, no_turboly: noTurboly, dry_run: dryRun });
   if (!res.ok) return NextResponse.json({ error: res.error, hint: res.hint }, { status: res.status });
 
   // "Accepted", not "done": all GitHub has promised is that the run is queued.
@@ -127,6 +129,7 @@ export async function POST(req: Request): Promise<Response> {
     ok: true,
     queued: true,
     resuming,
+    dryRun,
     code,
     name,
     runsUrl: `https://github.com/${process.env.GH_REPO ?? 'VictorP2027/nawilis-spk'}/actions/workflows/branch-add.yml`,

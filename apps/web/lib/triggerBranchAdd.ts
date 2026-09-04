@@ -25,6 +25,7 @@ export type BranchAddInputs = {
   type: string;
   abbrev: string;
   no_turboly: boolean;
+  dry_run?: boolean;
 };
 
 export type DispatchResult =
@@ -60,6 +61,7 @@ export async function triggerBranchAdd(inputs: BranchAddInputs): Promise<Dispatc
           type: inputs.type,
           abbrev: inputs.abbrev,
           no_turboly: inputs.no_turboly ? 'true' : 'false',
+          dry_run: inputs.dry_run ? 'true' : 'false',
         },
       }),
       signal: ctrl.signal,

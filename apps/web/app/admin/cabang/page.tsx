@@ -16,7 +16,7 @@ import BrandMark from '../../components/BrandMark';
  */
 
 type Result =
-  | { kind: 'ok'; code: string; name: string; runsUrl: string; resuming: boolean }
+  | { kind: 'ok'; code: string; name: string; runsUrl: string; resuming: boolean; dryRun: boolean }
   | { kind: 'err'; error: string; hint?: string };
 
 export default function TambahCabang(): React.ReactElement {
@@ -26,6 +26,7 @@ export default function TambahCabang(): React.ReactElement {
   const [type, setType] = useState('NAWILIS');
   const [abbrev, setAbbrev] = useState('');
   const [noTurboly, setNoTurboly] = useState(false);
+  const [dryRun, setDryRun] = useState(true); // rehearse by default: the code is permanent
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
 
@@ -47,11 +48,12 @@ export default function TambahCabang(): React.ReactElement {
           type,
           abbrev: abbrev.trim().toUpperCase(),
           no_turboly: noTurboly,
+          dry_run: dryRun,
         }),
       });
       const d = (await r.json().catch(() => ({}))) as Record<string, string>;
       if (r.ok) {
-        setResult({ kind: 'ok', code: d.code ?? code, name: d.name ?? name, runsUrl: d.runsUrl ?? '', resuming: Boolean(d.resuming) });
+        setResult({ kind: 'ok', code: d.code ?? code, name: d.name ?? name, runsUrl: d.runsUrl ?? '', resuming: Boolean(d.resuming), dryRun: Boolean(d.dryRun) });
         setCode(''); setName(''); setStore(''); setAbbrev(''); setNoTurboly(false);
       } else {
         setResult({ kind: 'err', error: d.error ?? `Gagal (HTTP ${r.status}).`, hint: d.hint });
@@ -103,6 +105,17 @@ export default function TambahCabang(): React.ReactElement {
             mencetak daftar nama store yang benar — tidak ada yang rusak.
           </div>
 
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 14 }}>
+            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} style={{ width: 18, marginTop: 3 }} />
+            <span style={{ fontSize: 14 }}>
+              <b>Uji coba dulu</b> — jalankan semuanya, tapi jangan tulis apa pun
+              <span style={{ display: 'block', fontSize: 12.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.45 }}>
+                Kode cabang itu permanen dan tidak bisa dihapus. Uji coba memastikan nama store-nya
+                benar dan advisornya terbaca, sebelum cabangnya betul-betul dibuka.
+              </span>
+            </span>
+          </label>
+
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 10 }}>
             <input type="checkbox" checked={noTurboly} onChange={(e) => setNoTurboly(e.target.checked)} style={{ width: 18, marginTop: 3 }} />
             <span style={{ fontSize: 14 }}>
@@ -126,13 +139,13 @@ export default function TambahCabang(): React.ReactElement {
         </div>
 
         <button className="btn primary" disabled={!canSubmit} onClick={submit}>
-          {busy ? 'Mengirim…' : 'Buka cabang ini'}
+          {busy ? 'Mengirim…' : dryRun ? 'Uji coba (tidak menulis apa pun)' : 'Buka cabang ini'}
         </button>
 
         {result?.kind === 'ok' && (
           <div className="card">
             <div className="ok-note">
-              ⏳ Permintaan untuk <b>{result.name}</b> ({result.code}) sudah dikirim
+              {result.dryRun ? '🧪 UJI COBA' : '⏳ Permintaan'} untuk <b>{result.name}</b> ({result.code}) sudah dikirim
               {result.resuming ? ' (melanjutkan cabang yang belum selesai)' : ''}. Sekitar 1 menit.
             </div>
             {/* Deliberately not "selesai": all that happened is that the run was
