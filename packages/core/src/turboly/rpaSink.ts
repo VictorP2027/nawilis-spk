@@ -533,6 +533,32 @@ export class RpaSink implements ServiceOrderSink {
             } catch (e3) {
               return this.classifyFailure(e3, payload.spkId);
             }
+          } else if (e2 instanceof PlateTakenError) {
+            /**
+             * The plate is already in Turboly — the add was refused as a
+             * duplicate. Two things can be true and only a fresh look tells
+             * them apart: the vehicle may have been created anyway (Turboly's
+             * 422-on-redirect quirk), in which case rebuilding finds it and
+             * the order goes through; or the car belongs to ANOTHER customer,
+             * in which case it will never appear under this one.
+             *
+             * So rebuild here, in seconds, instead of parking a transient
+             * failure the worker repeats every ten minutes with nothing
+             * carried forward — B1562WNT and B2401MW both looped that way.
+             * When the rebuilds are spent, it is a DATA problem for a person
+             * to look at, not something to retry: the auto-requeue skips
+             * failureClass 'data', so the loop ends and no second Service
+             * Order can be created behind our back.
+             */
+            if (depth + 1 >= 3) {
+              return this.classifyFailure(
+                new DataError(
+                  `Plat ${payload.vehiclePlateFull || payload.vehicleRegistration} sudah terdaftar di Turboly atas customer LAIN — order tidak dibuat. Buka mobil itu di Turboly, lihat pemiliknya, lalu buat order dari customer tersebut (atau perbaiki datanya).`,
+                ),
+                payload.spkId,
+              );
+            }
+            return this.runPush(payload, ctx, depth + 1);
           } else {
             return this.classifyFailure(e2, payload.spkId);
           }
@@ -923,9 +949,12 @@ export class RpaSink implements ServiceOrderSink {
     // attaches normally; a genuinely failed create just 422s again to the cap.
     const bodyText = (await page.textContent('body').catch(() => '')) ?? '';
     if (/rejected \(422\)|already been taken/i.test(bodyText)) {
-      throw new TransientError(
-        `422 page after add-vehicle for ${reg} (duplicate-plate redirect quirk; creation usually succeeded) — retrying to attach`,
-      );
+      // Its own type, because the CALLER can do something about this and
+      // classifyFailure cannot: rebuild the order form and look for the car
+      // again, right now. Thrown as TransientError this said "retrying to
+      // attach" and then never retried — it was classified, parked, and the
+      // worker re-ran the identical push ten minutes later, forever.
+      throw new PlateTakenError(reg);
     }
     if (/\/vehicles\/new/.test(page.url())) {
       const err = await this.readInlineError(page).catch(() => null);
@@ -2190,6 +2219,17 @@ export class NeedCreateMakeError extends Error {
 }
 
 /** Control-flow signal: customer exists but the vehicle doesn't → add it, then rebuild. */
+/**
+ * Turboly refused a new vehicle because the registration already exists.
+ * Carries the plate so the caller can name it; see the handler in runPush.
+ */
+export class PlateTakenError extends Error {
+  constructor(public readonly reg: string) {
+    super(`422 setelah add-vehicle untuk ${reg} — plat sudah ada di Turboly`);
+    this.name = 'PlateTakenError';
+  }
+}
+
 export class NeedAddVehicleError extends Error {
   constructor(msg: string) {
     super(msg);
