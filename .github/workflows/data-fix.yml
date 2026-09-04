@@ -79,18 +79,23 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
+          IN_MAKE: ${{ inputs.make }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_KIND: ${{ inputs.kind }}
         run: |
           node --import tsx apps/worker/src/vehicle-model-add.ts \
-            --make="${{ inputs.make }}" --model="${{ inputs.model }}" --kind="${{ inputs.kind }}"
+            --make="$IN_MAKE" --model="$IN_MODEL" --kind="$IN_KIND"
 
       - name: Teach the catalogue mirror a SKU
         if: inputs.product_sku != '' && inputs.product_name != ''
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
+          IN_SKU: ${{ inputs.product_sku }}
+          IN_NAME: ${{ inputs.product_name }}
         run: |
           node --import tsx apps/worker/src/service-product-add.ts \
-            --sku="${{ inputs.product_sku }}" --name="${{ inputs.product_name }}"
+            --sku="$IN_SKU" --name="$IN_NAME"
 
       - name: Set service variants
         if: inputs.service_code != ''

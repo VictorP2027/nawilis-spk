@@ -147,9 +147,14 @@ jobs:
           MERGE_INTO_CHECKGO_SO: 'false'
           MERGE_WINDOW_HOURS: '24'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
+          # Inputs reach the shell as VALUES, never spliced into the script.
+          # `${{ }}` is substituted before bash parses the line, so a quote or a
+          # newline in an input escaped the argument and ran as a command — in a
+          # step holding the Turboly password. Same hardening as branch-add.yml.
+          IN_REPAIR_MERGE_ID: ${{ inputs.repair_merge_id }}
         run: |
-          if [ -n "${{ inputs.repair_merge_id }}" ]; then
-            node --import tsx apps/worker/src/merge-repair.ts --id="${{ inputs.repair_merge_id }}"
+          if [ -n "$IN_REPAIR_MERGE_ID" ]; then
+            node --import tsx apps/worker/src/merge-repair.ts --id="$IN_REPAIR_MERGE_ID"
           else
             node --import tsx apps/worker/src/push-once.ts
           fi

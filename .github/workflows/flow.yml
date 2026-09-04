@@ -163,7 +163,15 @@ jobs:
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           PUSH_MODE: rpa
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
-        run: node --import tsx apps/worker/src/flow-once.ts ${{ inputs.enqueue && format('--enqueue={0}', inputs.enqueue) || '' }}
+          # Inputs reach the shell as VALUES, never spliced into the script.
+          # `${{ }}` is substituted before bash parses the line, so a quote or a
+          # newline in an input escaped the argument and ran as a command — in a
+          # step holding the Turboly password. Same hardening as branch-add.yml.
+          IN_ENQUEUE: ${{ inputs.enqueue }}
+        run: |
+          args=()
+          if [ -n "$IN_ENQUEUE" ]; then args+=(--enqueue="$IN_ENQUEUE"); fi
+          node --import tsx apps/worker/src/flow-once.ts "${args[@]}"
 
       # Skipped on a browser-free run: there is nothing to collect, and the
       # upload holds the turboly-push concurrency group open a few more seconds

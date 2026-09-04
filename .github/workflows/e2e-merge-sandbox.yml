@@ -160,13 +160,26 @@ jobs:
           MERGE_INTO_CHECKGO_SO: 'false'
           MERGE_WINDOW_HOURS: '24'
           PUSH_SCREENSHOT_DIR: .turboly-state/screenshots
+          # Inputs reach the shell as VALUES, never spliced into the script.
+          # `${{ }}` is substituted before bash parses the line, so a quote or a
+          # newline in an input escaped the argument and ran as a command — in a
+          # step holding the Turboly password. Same hardening as branch-add.yml.
+          IN_BRANCH: ${{ inputs.branch }}
+          IN_ADVISOR: ${{ inputs.advisor }}
+          IN_KIND: ${{ inputs.kind }}
+          IN_PHONE: ${{ inputs.phone }}
+          IN_PLATE: ${{ inputs.plate }}
+          IN_PART_SKU2: ${{ inputs.part_sku2 }}
+          IN_MAKE: ${{ inputs.make }}
+          IN_MODEL: ${{ inputs.model }}
+          IN_EXTRA: ${{ inputs.extra }}
         run: |
+          args=()
+          if [ -n "$IN_PHONE" ]; then args+=(--phone="$IN_PHONE"); fi
+          if [ -n "$IN_PLATE" ]; then args+=(--plate="$IN_PLATE"); fi
+          if [ -n "$IN_PART_SKU2" ]; then args+=(--part-sku2="$IN_PART_SKU2"); fi
+          if [ -n "$IN_MAKE" ]; then args+=(--make="$IN_MAKE"); fi
+          if [ -n "$IN_MODEL" ]; then args+=(--model="$IN_MODEL"); fi
+          if [ -n "$IN_EXTRA" ]; then args+=(--extra="$IN_EXTRA"); fi
           node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
-            --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}" \
-            ${{ inputs.phone && format('--phone={0}', inputs.phone) || '' }} \
-            ${{ inputs.plate && format('--plate={0}', inputs.plate) || '' }} \
-            ${{ inputs.part_sku2 && format('--part-sku2={0}', inputs.part_sku2) || '' }} \
-            ${{ inputs.make && format('--make={0}', inputs.make) || '' }} \
-            ${{ inputs.model && format('--model={0}', inputs.model) || '' }} \
-            --kind="${{ inputs.kind }}" \
-            ${{ inputs.extra && format('--extra={0}', inputs.extra) || '' }}
+            --branch="$IN_BRANCH" --advisor="$IN_ADVISOR" --kind="$IN_KIND" "${args[@]}"
