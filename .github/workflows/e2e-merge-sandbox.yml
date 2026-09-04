@@ -23,6 +23,10 @@ on:
         description: 'Nomor polisi untuk uji ini (kosongkan = plat uji acak). Isi mis. 43562-00 untuk menguji plat dinas.'
         type: string
         default: ''
+      part_sku2:
+        description: 'SKU sparepart KEDUA (kosongkan = satu sparepart seperti biasa). Menguji perbaikan dengan beberapa part.'
+        type: string
+        default: ''
       phone:
         description: 'Nomor customer. Isi nomor kantor (mis. +622155512345) untuk menguji apakah Turboly menerima nomor kantor untuk customer BARU.'
         type: string
@@ -143,4 +147,5 @@ jobs:
           node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
             --branch="${{ inputs.branch }}" --advisor="${{ inputs.advisor }}" \
             ${{ inputs.phone && format('--phone={0}', inputs.phone) || '' }} \
-            ${{ inputs.plate && format('--plate={0}', inputs.plate) || '' }}
+            ${{ inputs.plate && format('--plate={0}', inputs.plate) || '' }} \
+            ${{ inputs.part_sku2 && format('--part-sku2={0}', inputs.part_sku2) || '' }}

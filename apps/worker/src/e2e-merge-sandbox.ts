@@ -33,6 +33,15 @@ const ADVISOR = arg('advisor') ?? 'MARCEL ZAKARIA';
 const SPK_SKU = arg('spk-sku') ?? 'GRS-NAW-SU';
 /** A goods SKU that exists in the sandbox catalogue (seen on SO 249185). */
 const PART_SKU = arg('part-sku') ?? 'BAN-HAN-16513LV01';
+/**
+ * A SECOND sparepart, off unless asked for.
+ *
+ * One goods line proves a sparepart survives the Check & Go re-saving the
+ * form; it does not prove that a repair with SEVERAL parts does, and a real
+ * repair usually has several. Off by default so the baseline run stays the
+ * run that has passed all along.
+ */
+const PART_SKU2 = (arg('part-sku2') ?? '').trim();
 const CHECKGO_SKU = 'JAS-NAWJAS-GC';
 const digits = String(Date.now()).slice(-4);
 const PLATE = arg('plate') ?? `B${digits}UJI`;
@@ -78,6 +87,21 @@ async function seedMirror(): Promise<void> {
     { $set: { sku: PART_SKU, name: 'Hankook 165 R13 LV01', type: 'product', taxCode: 'PPN', price: 0, masterDurationMin: 0, storeCode: null, syncedAt: now } },
     { upsert: true },
   );
+  if (PART_SKU2) {
+    await getDb()
+      .collection<{ _id: string; sku: string; syncedAt: string }>('tb_products')
+      .updateOne({ _id: PART_SKU2 }, { $set: { sku: PART_SKU2, syncedAt: now } }, { upsert: true });
+    await collections.tbServiceProducts().updateOne(
+      { _id: PART_SKU2 },
+      { $set: { sku: PART_SKU2, name: `Sparepart kedua ${PART_SKU2}`, type: 'product', taxCode: 'PPN', price: 0, masterDurationMin: 0, storeCode: null, syncedAt: now } },
+      { upsert: true },
+    );
+    await collections.serviceSkuMap().updateOne(
+      { _id: '*:GANTI_OLI' },
+      { $set: { branchCode: null, serviceCode: 'GANTI_OLI', sku: PART_SKU2, matchScore: 1, confirmed: true, updatedAt: now } },
+      { upsert: true },
+    );
+  }
   for (const [code, sku] of [['SPOORING', SPK_SKU], ['GANTI_BAN', PART_SKU], ['CHECKGO', CHECKGO_SKU]] as const) {
     await collections.serviceSkuMap().updateOne(
       { _id: `*:${code}` },
@@ -116,6 +140,9 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
             // The repair's goods. The whole question is whether these survive
             // the Check & Go re-saving the same form.
             { serviceCode: 'GANTI_BAN', ordered: true, qty: 2, keterangan: 'Ban depan', quotedPrice: 500000, chosenSku: PART_SKU },
+            ...(PART_SKU2
+              ? [{ serviceCode: 'GANTI_OLI', ordered: true, qty: 1, keterangan: 'Sparepart kedua', quotedPrice: 250000, chosenSku: PART_SKU2 }]
+              : []),
           ]
         : [{ serviceCode: 'CHECKGO', ordered: true, qty: 1, keterangan: 'General Check', quotedPrice: 100000, chosenSku: CHECKGO_SKU }],
     conditionChecks: [],
@@ -196,6 +223,11 @@ async function main(): Promise<void> {
     log(`     sparepart SPK masih ada: ${hasPartLine ? 'ya' : 'TIDAK'}`);
     if (!hasSpkLine) fail(`baris SPK (${SPK_SKU}) tidak ada di SO`);
     if (!hasPartLine) fail(`SPAREPART SPK (${PART_SKU}) HILANG setelah Cek n Go digabung — inilah yang tidak boleh terjadi`);
+    if (PART_SKU2) {
+      const hasPart2 = rows.includes(PART_SKU2);
+      log(`     sparepart kedua masih ada: ${hasPart2 ? 'ya' : 'TIDAK'}`);
+      if (!hasPart2) fail(`SPAREPART KEDUA (${PART_SKU2}) HILANG — perbaikan dengan beberapa part tidak selamat`);
+    }
     if (!hasCheckLine) fail(`baris General Check (${CHECKGO_SKU}) tidak ada di SO — persis kegagalan SRO/TA17/26080160`);
     if (!cg?.checkGo?.inspectionsFilledAt) fail('daftar inspeksi tidak terisi');
     console.log(`\n✓ LULUS — satu SRO berisi kedua baris + daftar inspeksi: ${soUrl}\n`);
