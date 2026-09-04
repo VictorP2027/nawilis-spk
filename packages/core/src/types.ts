@@ -226,6 +226,22 @@ export interface PushInfo {
   failureClass?: FailureClass | null;
   lastError?: string | null;
   /**
+   * How many times this document has failed TRANSIENTLY — counted up and
+   * never refunded, unlike `attempt`.
+   *
+   * `attempt` is deliberately refunded on a transient failure so a vendor
+   * outage cannot walk an order to maxAttempts and strand it. The cost is that
+   * a DETERMINISTIC transient never stops: attempt oscillates 0→1→0, the
+   * requeue filter (attempt < maxAttempts) never excludes it, and the document
+   * retries every ten minutes forever. B1562WNT and B2401MW did exactly that
+   * for a day. This counter is what makes "an outage" and "this will never
+   * work" distinguishable, and it is also the honest answer to "has this
+   * document ever been pushed before?" — which the verify-before-recreate
+   * guard has to know, and could not ask `attempt`, because the refund pins
+   * it at 1.
+   */
+  transientAttempts?: number;
+  /**
    * Last attempt to APPEND this SPK onto the same car's Check & Go order
    * instead of creating one (see pushRunner). fellBack=true means nothing
    * irreversible had happened and a separate order was created as before.

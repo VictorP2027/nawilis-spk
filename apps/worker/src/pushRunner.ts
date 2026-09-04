@@ -419,7 +419,12 @@ export async function pushQueued(
         // refunds the attempt, so `attempt > 1` would never become true and the
         // check below would be skipped on precisely the doc that most needs it.
         const triedMerge = Boolean(claimed.push.mergeAttempt) && claimed.push.mergeAttempt?.fellBack !== true;
-        if (claimed.push.attempt > 1 || wasReclaimed || triedMerge) {
+        // `transientAttempts > 0` is the part `attempt` could never tell us: the
+        // refund pins it at 1, so a document that failed transiently ten times
+        // — possibly AFTER Turboly committed a Save — looked exactly like a
+        // first try and skipped this check entirely.
+        const everTried = claimed.push.attempt > 1 || (claimed.push.transientAttempts ?? 0) > 0;
+        if (everTried || wasReclaimed || triedMerge) {
           const prior = await branchSinks
             .withSink(claimed.branchCode, (sink) => sink.verifyByToken(claimed))
             .catch(() => null);
@@ -730,10 +735,24 @@ export async function pushQueued(
           // and strand it, and back off 10 min instead of hammering the
           // rate limiter every cron tick.
           const transient = (res.failureClass ?? 'structural') === 'transient';
+          /**
+           * Refund the attempt, but not forever. Past this many transient
+           * failures — over two hours at the 10-minute backoff — it is not a
+           * vendor incident, it is a document that cannot be pushed, and the
+           * refund stops so it walks to maxAttempts and rests instead of
+           * retrying every ten minutes until someone notices.
+           */
+          const TRANSIENT_REFUND_CAP = 12;
+          const transientAttempts = (claimed.push.transientAttempts ?? 0) + (transient ? 1 : 0);
+          const refund = transient && transientAttempts <= TRANSIENT_REFUND_CAP;
+          if (transient && !refund) {
+            log(`  · ${doc._id}: gagal transient ${transientAttempts}× — berhenti mengembalikan attempt (bukan gangguan sesaat)`);
+          }
           await transition(doc._id, 'pushing', 'failed', {
             push: {
               ...claimed.push,
-              ...(transient ? { attempt: Math.max(0, claimed.push.attempt - 1) } : {}),
+              transientAttempts,
+              ...(refund ? { attempt: Math.max(0, claimed.push.attempt - 1) } : {}),
               failureClass: res.failureClass ?? 'structural',
               lastError: res.error ?? 'push failed',
               nextAttemptAt: new Date(Date.now() + (transient ? 10 * 60_000 : 60_000)).toISOString(),
