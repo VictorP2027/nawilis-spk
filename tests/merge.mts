@@ -60,10 +60,15 @@ class StubSink implements ServiceOrderSink {
   public created: TurbolyServiceOrderPayload[] = [];
   public appends: Array<{ target: AppendTarget; payload: TurbolyServiceOrderPayload }> = [];
   public appendResult: AppendResult | null = null;
+  /** Force the CREATE path's outcome (default: succeeds). */
+  public pushResult: PushResult | null = null;
+  /** How many times verify-before-recreate actually asked Turboly. */
+  public verifyCalls = 0;
   /** Tokens "visible on the order page" per SO URL — what verifyByToken reads. */
   public tokensOn = new Map<string, Set<string>>();
 
   async pushServiceOrder(payload: TurbolyServiceOrderPayload, _ctx: PushContext): Promise<PushResult> {
+    if (this.pushResult) return this.pushResult;
     this.created.push(payload);
     const n = ++soSeq;
     const url = `https://sandbox.turboly.com/service_orders/${n}`;
@@ -83,6 +88,7 @@ class StubSink implements ServiceOrderSink {
     return r;
   }
   async verifyByToken(doc: SpkDoc): Promise<VerifyResult> {
+    this.verifyCalls += 1;
     // The real sink SEARCHES Turboly for the token — it does not need the doc to
     // already know a URL. That is the whole point of verify-before-recreate
     // after a crash, and after a died append the token can be sitting on the
@@ -817,6 +823,52 @@ async function main(): Promise<void> {
     ok(stub.created.length === 1, 'no second Service Order was created');
     ok(cg.turboly.mergedInto?.spkId === spk._id && cg.state === 'confirmed', 'it is recorded as merged and confirmed');
     config.mergeIntoCheckGo = true;
+  }
+
+  {
+    section('AC. a transient failure must not retry forever, nor hide a prior attempt');
+    /**
+     * B1562WNT and B2401MW were not stuck — they retried every ten minutes for
+     * a day. A transient failure REFUNDS the attempt so a vendor outage cannot
+     * strand an order, but unbounded that means attempt oscillates 0→1→0, the
+     * requeue filter (attempt < MAX_ATTEMPTS) never excludes the document, and
+     * a deterministic failure repeats until a person deletes it. The same
+     * refund pinned attempt at 1, which is what the verify-before-recreate
+     * guard tests — so the one check against a SECOND Service Order was off on
+     * exactly the documents that had already run against Turboly many times.
+     */
+    const stub = new StubSink();
+    stub.pushResult = { ok: false, serviceOrderNo: null, workOrderNo: null, verified: null, screenshotRef: null, serviceOrderUrl: null, approved: null, failureClass: 'transient', error: 'sesi ter-kick' } as never;
+    const id = await queuedSpk('B9001TRN');
+    const sinks = new BranchSinks(async () => stub);
+
+    const seen: Array<{ attempt: number; transient: number; state: string }> = [];
+    for (let pass = 1; pass <= 20; pass++) {
+      // The cron's passage of time: a failed doc is only re-queued once its
+      // 10-minute backoff is up.
+      await collections.spk().updateOne({ _id: id }, { $set: { 'push.nextAttemptAt': new Date(Date.now() - 1000).toISOString() } });
+      await pushQueued(sinks, { workerId: 'w-test', log: () => {} });
+      const d = (await collections.spk().findOne({ _id: id }))!;
+      seen.push({ attempt: d.push.attempt, transient: d.push.transientAttempts ?? 0, state: d.state });
+    }
+
+    const last = seen[seen.length - 1]!;
+    // 12 refunded passes, then attempt still has to climb 1→5 before the
+    // requeue filter drops it: ~16-17 passes in total, not 12. The number that
+    // matters is not the total but that it STOPS — asserted on the tail below.
+    ok(last.transient >= 12, `refund cap tercapai (${last.transient} kegagalan transient dihitung, tidak pernah direfund)`);
+    ok(last.attempt >= 5, `attempt akhirnya naik sampai batas (${last.attempt}) — tidak lagi 0↔1 selamanya`);
+    ok(last.state === 'failed', 'dokumen berhenti di failed, bukan antre lagi tiap 10 menit');
+    // The proof it STOPPED: the last few passes did nothing at all.
+    const tail = seen.slice(-3);
+    ok(tail.every((t) => t.attempt === last.attempt && t.transient === last.transient),
+       'tiga putaran terakhir tidak mengubah apa pun — loop-nya benar-benar berhenti');
+    // ...and it did keep refunding for a while first, which is the outage case.
+    ok(seen[3]!.attempt <= 1, `awalnya attempt tetap direfund (putaran 4: attempt=${seen[3]!.attempt}) — gangguan sesaat tidak menghukum dokumen`);
+
+    // The guard: after a transient failure, the next pass MUST ask Turboly
+    // before creating anything.
+    ok(stub.verifyCalls > 0, `verify-before-recreate benar-benar dipanggil (${stub.verifyCalls}×) — dulu tidak pernah, karena attempt dipatok 1`);
   }
 
   await close();
