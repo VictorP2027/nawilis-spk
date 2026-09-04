@@ -896,62 +896,7 @@ export class RpaSink implements ServiceOrderSink {
     await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
-    const wantType = payload.vehicleKind === 'motorcycle' ? 'Motorcycle' : 'Car';
-    await page.selectOption('#vehicle-type-select', { label: wantType }).catch(() => {});
-    await page.waitForTimeout(600);
-    if (payload.vehicleMake) {
-      try {
-        await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
-      } catch (e) {
-        // Never let a kicked session count as "make missing" — that creates a
-        // duplicate make for a brand Turboly already has.
-        if (e instanceof TransientError) throw e;
-        /**
-         * TURBOLY FILTERS THE MAKE LIST BY VEHICLE TYPE.
-         *
-         * So a Yamaha captured with the form's Mobil/Motor toggle left on Mobil
-         * is not "a brand Turboly has never heard of" — it is simply absent
-         * from the CAR list, and the run died on `no Turboly match for
-         * "YAMAHA"` (live, B2145UII, a Yamaha Lexi booked as a car). The
-         * counter cannot see that distinction, and neither could this code.
-         *
-         * The catalogue can: ask the other list before believing the brand is
-         * unknown. A make that appears there settles what the vehicle actually
-         * is, better than a toggle someone forgot. It is recorded in the notes
-         * because the SPK on paper still says the other thing.
-         */
-        let recovered = false;
-        if (e instanceof DataError) {
-          const otherType = wantType === 'Car' ? 'Motorcycle' : 'Car';
-          const word = (t: string): string => (t === 'Car' ? 'Mobil' : 'Motor');
-          const switched = await page
-            .selectOption('#vehicle-type-select', { label: otherType })
-            .then(() => true)
-            .catch(() => false);
-          if (switched) {
-            await page.waitForTimeout(900); // the make list reloads by AJAX after the type
-            try {
-              await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
-              this.notesExtra.push(
-                `SPK menulis ${word(wantType)}, tetapi merk ${payload.vehicleMake} hanya ada di daftar ${word(otherType)} Turboly — kendaraan dicatat sebagai ${word(otherType)}.`,
-              );
-              recovered = true; // fall through: the model is picked below, under the type that has it
-            } catch {
-              // Not in either list: genuinely unknown. Put the form back the way
-              // the SPK described it, then fail with the ORIGINAL error so the
-              // board still names the brand that could not be found.
-              await page.selectOption('#vehicle-type-select', { label: wantType }).catch(() => {});
-              await page.waitForTimeout(600);
-            }
-          }
-        }
-        if (!recovered) {
-          // Operator confirmed on the form: create the new make, then rebuild.
-          if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
-          throw e;
-        }
-      }
-    }
+    await this.pickMakeWithTypeFallback(page, payload);
     await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#vehicle_year', payload.vehicleYear).catch(() => {});
@@ -1438,19 +1383,7 @@ export class RpaSink implements ServiceOrderSink {
     // Vehicle
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
-    await page.selectOption('#vehicle-type-select', { label: payload.vehicleKind === 'motorcycle' ? 'Motorcycle' : 'Car' }).catch(() => {});
-    await page.waitForTimeout(700);
-    if (payload.vehicleMake) {
-      try {
-        await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
-      } catch (e) {
-        // Same guard as /vehicles/new: kicked ≠ missing make.
-        if (e instanceof TransientError) throw e;
-        // Operator confirmed on the form: create the new make, then rebuild.
-        if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
-        throw e;
-      }
-    }
+    await this.pickMakeWithTypeFallback(page, payload);
     await page.waitForTimeout(900);
     await this.pickModelLoose('s2id_vehicle-model-select', payload.vehicleModel ?? '');
     if (payload.vehicleYear) await page.fill('#customer_vehicles_attributes_0_year', payload.vehicleYear).catch(() => {});
@@ -1640,6 +1573,69 @@ export class RpaSink implements ServiceOrderSink {
     await page.locator('.select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results), #select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').nth(bestIdx).click({ timeout: 4000 });
     await page.waitForTimeout(400);
     this.notesExtra.push(q ? `Tipe diketik "${q}" tidak ada di katalog — model paling mirip dipakai: ${label}` : `Tipe kosong — model Turboly dipakai: ${label}`);
+  }
+
+  /**
+   * Set the vehicle type and pick the make — asking the OTHER list before
+   * believing the brand is unknown.
+   *
+   * TURBOLY FILTERS THE MAKE LIST BY VEHICLE TYPE. So a Yamaha captured with
+   * the form's Mobil/Motor toggle left on Mobil is not a brand Turboly has
+   * never heard of; it is simply absent from the CAR list. Live, B2145UII at
+   * QS-SRP — a Yamaha Lexi booked as a car — stopped on `no Turboly match for
+   * "YAMAHA"`, which reads like a catalogue problem and is really a toggle
+   * nobody could see was wrong.
+   *
+   * A make that appears in the other list settles what the vehicle actually
+   * is, better than a toggle someone forgot, and the model is then picked from
+   * that same list by the caller. The swap goes into the notes, because the
+   * paper SPK still says the other thing.
+   *
+   * Both vehicle forms call this — /vehicles/new for an existing customer and
+   * the New Customer modal for a new one. They are separate forms with the
+   * same field ids, and the first version of this fix only patched one of
+   * them, which is exactly the half that a new customer never reaches.
+   */
+  private async pickMakeWithTypeFallback(page: Page, payload: TurbolyServiceOrderPayload): Promise<void> {
+    const wantType = payload.vehicleKind === 'motorcycle' ? 'Motorcycle' : 'Car';
+    const word = (t: string): string => (t === 'Car' ? 'Mobil' : 'Motor');
+    await page.selectOption('#vehicle-type-select', { label: wantType }).catch(() => {});
+    await page.waitForTimeout(700);
+    if (!payload.vehicleMake) return;
+    try {
+      await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+      return;
+    } catch (e) {
+      // Never let a kicked session count as "make missing" — that creates a
+      // duplicate make for a brand Turboly already has.
+      if (e instanceof TransientError) throw e;
+      if (e instanceof DataError) {
+        const otherType = wantType === 'Car' ? 'Motorcycle' : 'Car';
+        const switched = await page
+          .selectOption('#vehicle-type-select', { label: otherType })
+          .then(() => true)
+          .catch(() => false);
+        if (switched) {
+          await page.waitForTimeout(900); // the make list reloads by AJAX after the type
+          try {
+            await this.modalSelect2Pick('s2id_vehicle-make-select', payload.vehicleMake);
+            this.notesExtra.push(
+              `SPK menulis ${word(wantType)}, tetapi merk ${payload.vehicleMake} hanya ada di daftar ${word(otherType)} Turboly — kendaraan dicatat sebagai ${word(otherType)}.`,
+            );
+            return;
+          } catch {
+            // In neither list: genuinely unknown. Put the form back the way the
+            // SPK described it and fail with the ORIGINAL error, so the board
+            // still names the brand nobody could find.
+            await page.selectOption('#vehicle-type-select', { label: wantType }).catch(() => {});
+            await page.waitForTimeout(600);
+          }
+        }
+      }
+      // Operator confirmed on the form: create the new make, then rebuild.
+      if (payload.createMakeConfirmed) throw new NeedCreateMakeError(`make "${payload.vehicleMake}" missing — operator confirmed create`);
+      throw e;
+    }
   }
 
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
