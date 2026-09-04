@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { collections, NAWILIS_COLUMNS, toNawilisRow, isUsedInServiceOrder, type SpkDoc } from '@spk/core';
+import { collections, NAWILIS_COLUMNS, toNawilisRow, branchMap, isUsedInServiceOrder, type SpkDoc } from '@spk/core';
 import { db } from '../../../lib/db';
 
 export const runtime = 'nodejs';
@@ -47,11 +47,12 @@ export async function GET(req: Request): Promise<Response> {
   // throw and the WHOLE company export answered HTTP 500 — every good row
   // held hostage by one bad one. A doc that cannot render is skipped and
   // named in the log; the export's job is the other N-1 rows.
+  const branchLookup = await branchMap();
   const rows: ReturnType<typeof toNawilisRow>[] = [];
   const skipped: string[] = [];
   for (const d of scope === 'used' ? docs.filter(isUsedInServiceOrder) : docs) {
     try {
-      rows.push(toNawilisRow(d));
+      rows.push(toNawilisRow(d, branchLookup));
     } catch (e) {
       skipped.push(d._id);
       console.error(`export: doc ${d._id} unrenderable — skipped (${(e as Error).message})`);

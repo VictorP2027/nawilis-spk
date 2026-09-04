@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@spk/core';
+import { getDb, branchMap } from '@spk/core';
 import { db } from '../../../../lib/db';
 import { buildZip, type ZipEntry } from '../../../../lib/zip';
 import { renderBackupPrintHtml } from '../../../../lib/backupPrint';
@@ -39,9 +39,13 @@ export async function GET(): Promise<Response> {
   // backup.json restores, signatures/ testifies.
   const entries: ZipEntry[] = [];
   const seen = new Set<string>();
+  // One lookup for the whole purge, so a branch opened since the deploy is
+  // named on its printout instead of appearing as a raw code.
+  const branchLookup = await branchMap();
   for (const doc of dump.spk ?? []) {
     const s = doc as {
       _id?: unknown;
+      branchCode?: string;
       vehicle?: { noPolisi?: { full?: string } };
       signatures?: Record<string, { imageDataUrl?: string | null }>;
     };
@@ -61,7 +65,7 @@ export async function GET(): Promise<Response> {
     // clobber each other, and the id ties the print to its row in backup.json.
     entries.push({
       name: `prints/${plate}_${String(s._id)}.html`,
-      data: new TextEncoder().encode(renderBackupPrintHtml(s)),
+      data: new TextEncoder().encode(renderBackupPrintHtml(s, branchLookup.get(s.branchCode ?? '')?.name ?? null)),
     });
   }
   entries.unshift({

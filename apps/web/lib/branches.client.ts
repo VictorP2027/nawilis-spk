@@ -20,20 +20,22 @@ const CACHE_KEY = 'spk.branches.v1';
  * with, which is right for all 27 existing branches.
  */
 export function useBranches(): ReadonlyArray<Branch> {
-  const [branches, setBranches] = useState<ReadonlyArray<Branch>>(() => {
-    if (typeof window === 'undefined') return BRANCHES;
+  // Always the compiled-in list for the FIRST client render, so it matches the
+  // server-rendered HTML exactly. Seeding from localStorage here instead would
+  // hydrate a different list than the server sent the moment a branch has been
+  // added — React then discards the markup and warns. The cache is applied in
+  // the effect below, one paint later, which is invisible in practice.
+  const [branches, setBranches] = useState<ReadonlyArray<Branch>>(BRANCHES);
+
+  useEffect(() => {
+    let live = true;
     try {
       const raw = window.localStorage.getItem(CACHE_KEY);
       if (raw) {
         const cached = JSON.parse(raw) as Branch[];
-        if (Array.isArray(cached) && cached.length) return cached;
+        if (Array.isArray(cached) && cached.length) setBranches(cached);
       }
     } catch { /* private mode / cleared storage — the compiled list is fine */ }
-    return BRANCHES;
-  });
-
-  useEffect(() => {
-    let live = true;
     fetch('/api/branches', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d: { branches?: Branch[] } | null) => {

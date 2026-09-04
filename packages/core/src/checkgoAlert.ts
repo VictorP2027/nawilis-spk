@@ -27,6 +27,12 @@ import { DataError } from './failure.js';
 export interface CheckGoAlertOptions {
   /** Follow-up copy: same findings, different opening and no "here are your results". */
   reminder?: boolean;
+  /**
+   * The branch's display name, resolved by the caller through branchRefFor()
+   * so a branch opened since the deploy is named properly. Without it a new
+   * branch is quoted to the CUSTOMER as its raw code.
+   */
+  branchName?: string | null;
 }
 
 /**
@@ -75,7 +81,7 @@ export function buildCheckGoAlert(doc: SpkDoc, opts: CheckGoAlertOptions = {}): 
 
   const plate = doc.vehicle.noPolisi.display || doc.vehicle.noPolisi.full;
   const nama = doc.customer.nama.trim() || 'Bapak/Ibu';
-  const branch = branchName(doc.branchCode);
+  const branch = branchName(doc.branchCode, opts.branchName);
   const tanggal = formatJakartaDate(doc.capture.businessDate);
   const rekomendasi = recommendations(checkGo.inspectionItems);
   const findings = attentionList(checkGo);
@@ -266,7 +272,8 @@ function odometer(doc: SpkDoc): string {
   return doc.vehicle.km.raw.trim() || '-';
 }
 
-function branchName(code: string): string {
+function branchName(code: string, resolved?: string | null): string {
+  if (resolved) return `Nawilis ${resolved}`;
   const branch = REF_BRANCHES.find((b) => b.code === code);
   return branch ? `Nawilis ${branch.name}` : code;
 }

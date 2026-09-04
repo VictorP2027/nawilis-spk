@@ -55,10 +55,12 @@ const rupiah = (n: number | null | undefined): string => (n == null ? '' : `Rp $
 const tanggal = (iso: string | undefined): string =>
   iso ? new Date(iso).toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short', timeZone: 'Asia/Jakarta' }) : '';
 
-export function renderBackupPrintHtml(doc: AnyDoc): string {
+export function renderBackupPrintHtml(doc: AnyDoc, branchName?: string | null): string {
   const isCG = doc.docType === 'CHECK_AND_GO';
   const plate = doc.vehicle?.noPolisi?.display ?? doc.vehicle?.noPolisi?.full ?? '';
-  const branch = BRANCHES.find((b) => b.code === doc.branchCode)?.name ?? doc.branchCode ?? '';
+  // branchName comes from branchMap() when the caller can reach Mongo, so a
+  // branch opened since the deploy prints its name and not its code.
+  const branch = branchName ?? BRANCHES.find((b) => b.code === doc.branchCode)?.name ?? doc.branchCode ?? '';
   const alamat = typeof doc.customer?.alamat === 'string' ? doc.customer.alamat : doc.customer?.alamat?.fullText ?? '';
 
   const rows: string[] = [];

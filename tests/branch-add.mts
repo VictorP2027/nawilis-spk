@@ -13,7 +13,10 @@
  *
  *   npx tsx tests/branch-add.mts
  */
-import { REF_BRANCHES, branchForNewStore, branchTypeFor, buildSpkDoc } from '@spk/core';
+import {
+  REF_BRANCHES, branchForNewStore, branchTypeFor, branchRefFor, branchMap,
+  buildSpkDoc, buildCheckGoAlert, toNawilisRow,
+} from '@spk/core';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { readFile, readdir } from 'node:fs/promises';
 import { BRANCHES } from '../apps/web/lib/refdata.client.js';
@@ -134,6 +137,29 @@ try {
   // A built-in must not regress when nothing is passed.
   const built = buildSpkDoc(intake(builtInQs.code) as never);
   ok(built.branchType === 'QUICKSERV', `cabang bawaan (${builtInQs.code}) tetap QUICKSERV tanpa opsi`);
+
+  // Labelling. A branch opened since the deploy must be NAMED, not printed as
+  // its code — most of all in the Check & Go WhatsApp, which the customer reads.
+  const ref = await branchRefFor('NWL-QS9');
+  ok(ref?.name === 'QuickServ Baru', 'branchRefFor mengembalikan nama cabang baru');
+  ok(ref?.turbolyStoreNameGuess === 'QuickServ Baru', 'berikut tebakan nama store-nya');
+  ok((await branchMap()).get('NWL-QS9')?.name === 'QuickServ Baru', 'branchMap memuat cabang baru');
+  ok((await branchMap()).size === REF_BRANCHES.length + 2, 'dan tetap memuat semua cabang bawaan');
+
+  // The customer-facing one, exercised end to end.
+  const cg = buildSpkDoc(intake('NWL-QS9') as never) as unknown as { checkGo: unknown; _id: string };
+  cg.checkGo = { inspectionItems: [], report: null, serial: null };
+  const withName = buildCheckGoAlert(cg as never, { branchName: ref?.name ?? null });
+  ok(withName.text.includes('Nawilis QuickServ Baru'), 'WA Check & Go menyebut nama cabang baru');
+  ok(!withName.text.includes('NWL-QS9'), 'dan tidak membocorkan kode cabang ke customer');
+  const withoutName = buildCheckGoAlert(cg as never);
+  ok(withoutName.text.includes('NWL-QS9'), 'tanpa nama yang diteruskan, kode mentah muncul — bug yang diperbaiki');
+
+  // The export column.
+  const exportDoc = buildSpkDoc(intake('NWL-QS9') as never);
+  const rowWith = toNawilisRow(exportDoc, await branchMap());
+  ok(rowWith.outlet === 'QuickServ Baru', 'kolom outlet ekspor memakai nama store cabang baru');
+  ok(toNawilisRow(exportDoc).outlet === 'NWL-QS9', 'tanpa peta, kolom outlet jatuh ke kode — bug yang diperbaiki');
 
   // …and the intake path has to actually pass it, or the fix is inert.
   const ingestSrc = await readFile(new URL('../apps/web/lib/ingest.ts', import.meta.url), 'utf8');

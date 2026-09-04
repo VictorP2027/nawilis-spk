@@ -46,8 +46,36 @@ export async function loadBranchList(): Promise<RefBranch[]> {
  * added since the deploy costs one indexed _id lookup.
  */
 export async function branchTypeFor(code: string): Promise<RefBranch['type']> {
+  return (await branchRefFor(code))?.type ?? 'NAWILIS';
+}
+
+/**
+ * One branch, compiled-in or opened since — the whole record, so a caller can
+ * take its display name or its Turboly store name too.
+ *
+ * Anything that labels a branch from REF_BRANCHES alone prints the raw code
+ * for a branch added at runtime. That is merely ugly on an export, but the
+ * Check & Go WhatsApp quotes it to the CUSTOMER, who has never heard of
+ * "NWL-JKT".
+ */
+export async function branchRefFor(code: string): Promise<RefBranch | null> {
   const builtIn = REF_BRANCHES.find((b) => b.code === code);
-  if (builtIn) return builtIn.type;
+  if (builtIn) return builtIn;
   const row = await collections.branches().findOne({ _id: code }).catch(() => null);
-  return row?.type ?? 'NAWILIS';
+  if (!row) return null;
+  return {
+    code: row._id,
+    name: row.name,
+    type: row.type,
+    docAbbrev: row.docAbbrev,
+    turbolyStoreNameGuess: row.turbolyStoreNameGuess,
+  };
+}
+
+/**
+ * The merged list as a lookup, for callers that label MANY documents — one
+ * read instead of one per row.
+ */
+export async function branchMap(): Promise<Map<string, RefBranch>> {
+  return new Map((await loadBranchList()).map((b) => [b.code, b]));
 }

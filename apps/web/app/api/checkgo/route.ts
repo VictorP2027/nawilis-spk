@@ -11,6 +11,7 @@ import {
   type CheckGoReport,
   type SpkDoc,
   buildCheckGoAlert,
+  branchRefFor,
   createWhatsAppClient,
 } from '@spk/core';
 import {
@@ -234,7 +235,7 @@ async function sendCheckGoAlert(spkId: string): Promise<void> {
     const doc = (await collections.spk().findOne({ _id: spkId })) as SpkDoc | null;
     if (!doc) return;
 
-    const alert = buildCheckGoAlert(doc);
+    const alert = buildCheckGoAlert(doc, { branchName: (await branchRefFor(doc.branchCode))?.name ?? null });
     const client = createWhatsAppClient();
     const res = await client.sendReport(alert);
     await stamp({

@@ -69,7 +69,10 @@ function statusOf(doc: SpkDoc): string {
  * the verbatim rawForm for fields with no structured home (oil/tyre brands,
  * previous-oil, nama_cs, etc.). Returns a plain object keyed by column name.
  */
-export function toNawilisRow(doc: SpkDoc): Record<NawilisColumn, string | number> {
+export function toNawilisRow(
+  doc: SpkDoc,
+  branches?: ReadonlyMap<string, { turbolyStoreNameGuess?: string | null }>,
+): Record<NawilisColumn, string | number> {
   const raw = (doc.rawForm ?? {}) as Record<string, unknown>;
   const rawStr = (k: string): string => (raw[k] == null ? '' : String(raw[k]));
 
@@ -79,7 +82,11 @@ export function toNawilisRow(doc: SpkDoc): Record<NawilisColumn, string | number
   row.timestamp = excelSerial(doc.capture.receivedAt);
   row.estimasi_waktu_pengerjaan = doc.estimasi?.minutes != null ? Number((doc.estimasi.minutes / 60).toFixed(2)) : '';
   row.creator = rawStr('creator') || doc.capture.operator.userId;
-  row.outlet = REF_BRANCHES.find((b) => b.code === doc.branchCode)?.turbolyStoreNameGuess ?? doc.branchCode;
+  // Pass `branches` (from branchMap()) to label a branch opened since the deploy.
+  row.outlet =
+    branches?.get(doc.branchCode)?.turbolyStoreNameGuess ??
+    REF_BRANCHES.find((b) => b.code === doc.branchCode)?.turbolyStoreNameGuess ??
+    doc.branchCode;
   row.nomor_antrian = doc.nomorAntrian ?? '';
   row.m1 = doc.assignment?.primaryMechanicCode ?? '';
   row.pekerjaan_m1 = doc.jobLines.filter((l) => l.ordered).map((l) => l.serviceCode).join(', ');

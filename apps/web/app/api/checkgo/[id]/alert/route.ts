@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { collections, buildCheckGoAlert, type SpkDoc } from '@spk/core';
+import { collections, buildCheckGoAlert, branchRefFor, type SpkDoc } from '@spk/core';
 import { db } from '../../../../../lib/db';
 
 export const runtime = 'nodejs';
@@ -37,7 +37,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if ('error' in r) return r.error;
   const { doc } = r;
   try {
-    const alert = buildCheckGoAlert(doc);
+    const alert = buildCheckGoAlert(doc, { branchName: (await branchRefFor(doc.branchCode))?.name ?? null });
     const stamp = (doc.checkGo as { alert?: { mode?: string; at?: string; text?: string } }).alert ?? null;
     // A queued staff edit IS the pending message — previews must show it, or
     // an operator "verifying" their edit sees canonical wording instead.
