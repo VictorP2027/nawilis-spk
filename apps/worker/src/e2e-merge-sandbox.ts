@@ -30,6 +30,18 @@ const arg = (k: string): string | undefined => process.argv.find((a) => a.starts
 const BRANCH = arg('branch') ?? 'NWL-BKS';
 const TAG = (arg('tag') ?? String(Date.now()).slice(-5)).toUpperCase();
 const ADVISOR = arg('advisor') ?? 'MARCEL ZAKARIA';
+/**
+ * The vehicle, so the make/type fallback can actually be exercised.
+ *
+ * Turboly filters the make list by vehicle type, and a motorcycle brand
+ * entered with the form's Mobil/Motor toggle left on Mobil is simply absent
+ * from the car list — live, a Yamaha Lexi at QS-SRP died on `no Turboly match
+ * for "YAMAHA"`. Defaults keep the long-standing Toyota Avanza car run
+ * untouched; --make=YAMAHA --model=Lexi --kind=car reproduces that SPK.
+ */
+const MAKE = arg('make') ?? 'Toyota';
+const MODEL = arg('model') ?? 'Avanza';
+const KIND = (arg('kind') ?? 'car') === 'motorcycle' ? 'motorcycle' : 'car';
 const SPK_SKU = arg('spk-sku') ?? 'GRS-NAW-SU';
 /** A goods SKU that exists in the sandbox catalogue (seen on SO 249185). */
 const PART_SKU = arg('part-sku') ?? 'BAN-HAN-16513LV01';
@@ -131,7 +143,7 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
     qrPayload: null,
     capturedAt: now,
     customer: { nama: `UJI GABUNG ${TAG}`, wa: PHONE, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
-    vehicle: { noPolisi: PLATE, merk: 'Toyota', tipe: 'Avanza', tahun: 2021, warna: 'Silver', km: '31000', createMakeConfirmed: false },
+    vehicle: { noPolisi: PLATE, merk: MAKE, tipe: MODEL, tahun: 2021, warna: 'Silver', km: '31000', kind: KIND, createMakeConfirmed: false },
     complaint: kind === 'SPK' ? 'bunyi roda depan' : 'cek rutin',
     jobLines:
       kind === 'SPK'
@@ -183,7 +195,7 @@ async function main(): Promise<void> {
   if (config.mongoDb === 'spk') fail('pakai database terpisah (MONGODB_DB=spk_e2e_merge), jangan database produksi');
   await connect(config.mongoUri, config.mongoDb);
   let sinks: BranchSinks | undefined;
-  log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE} telp=${PHONE}`);
+  log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE} telp=${PHONE} kendaraan=${MAKE} ${MODEL} (${KIND})`);
   try {
     await seedMirror();
     log('1/4 katalog sandbox siap');
