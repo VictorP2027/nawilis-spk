@@ -39,6 +39,20 @@ const ADVISOR = arg('advisor') ?? 'MARCEL ZAKARIA';
  * for "YAMAHA"`. Defaults keep the long-standing Toyota Avanza car run
  * untouched; --make=YAMAHA --model=Lexi --kind=car reproduces that SPK.
  */
+/**
+ * A job typed into "Pekerjaan lain (tulis / pilih)", verbatim as the form
+ * stores it: the typed TEXT is the serviceCode and chosenSku stays null.
+ *
+ * That is the whole question for a job with no tile of its own — Periodic
+ * Maintenance is offered only through that box, and it is worth nothing if it
+ * lands in the order's Notes instead of on a billed line. The payload builder
+ * is supposed to lift the leading SKU token back out; this proves it does,
+ * against the real Turboly form.
+ *
+ *   --extra="TPI-NAWJAS-PM Periodic Maintenance"
+ */
+const EXTRA = (arg('extra') ?? '').trim();
+const extraSku = (EXTRA.split(/\s+/)[0] ?? '').toUpperCase();
 const MAKE = arg('make') ?? 'Toyota';
 const MODEL = arg('model') ?? 'Avanza';
 const KIND = (arg('kind') ?? 'car') === 'motorcycle' ? 'motorcycle' : 'car';
@@ -82,7 +96,9 @@ async function seedMirror(): Promise<void> {
     { $set: { turbolyStoreId: store.turbolyStoreId, turbolyStoreName: store.turbolyStoreName, syncedAt: now } },
     { upsert: true },
   );
-  for (const [sku, name] of [[SPK_SKU, 'Spooring Ulangan'], [CHECKGO_SKU, 'General Check']] as const) {
+  const services: Array<readonly [string, string]> = [[SPK_SKU, 'Spooring Ulangan'], [CHECKGO_SKU, 'General Check']];
+  if (extraSku) services.push([extraSku, EXTRA.split(/\s+/).slice(1).join(' ') || extraSku] as const);
+  for (const [sku, name] of services) {
     await collections.tbServiceProducts().updateOne(
       { _id: sku },
       { $set: { sku, name, type: 'service', taxCode: 'PPN', price: 0, masterDurationMin: 30, storeCode: null, syncedAt: now } },
@@ -155,6 +171,8 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
             ...(PART_SKU2
               ? [{ serviceCode: 'GANTI_OLI', ordered: true, qty: 1, keterangan: 'Sparepart kedua', quotedPrice: 250000, chosenSku: PART_SKU2 }]
               : []),
+            // Pekerjaan lain: the typed text IS the serviceCode, chosenSku null.
+            ...(EXTRA ? [{ serviceCode: EXTRA, ordered: true, qty: 1, keterangan: null, quotedPrice: null, chosenSku: null }] : []),
           ]
         : [{ serviceCode: 'CHECKGO', ordered: true, qty: 1, keterangan: 'General Check', quotedPrice: 100000, chosenSku: CHECKGO_SKU }],
     conditionChecks: [],
@@ -166,7 +184,11 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
     attachments: [],
   } as never);
   doc = resolveSkus(doc, mirror.skuFor);
-  const unmapped = doc.jobLines.filter((l) => l.ordered && !l.turbolySku);
+  // The free-text line is deliberately unmapped: no service_sku_map entry
+  // exists for it, and the payload builder is what turns its leading token
+  // into the SKU. Calling that a failure here would fail the very case the
+  // run exists to prove.
+  const unmapped = doc.jobLines.filter((l) => l.ordered && !l.turbolySku && l.serviceCode !== EXTRA);
   if (unmapped.length) fail(`SKU tidak ketemu untuk ${unmapped.map((l) => l.serviceCode).join(', ')}`);
   doc.state = 'awaiting_assignment';
   if (kind === 'CHECKGO') {
@@ -241,6 +263,11 @@ async function main(): Promise<void> {
       if (!hasPart2) fail(`SPAREPART KEDUA (${PART_SKU2}) HILANG — perbaikan dengan beberapa part tidak selamat`);
     }
     if (!hasCheckLine) fail(`baris General Check (${CHECKGO_SKU}) tidak ada di SO — persis kegagalan SRO/TA17/26080160`);
+    if (extraSku) {
+      const hasExtra = rows.includes(extraSku);
+      log(`     "Pekerjaan lain" jadi baris beneran: ${hasExtra ? 'ya' : 'TIDAK'} (${extraSku})`);
+      if (!hasExtra) fail(`${extraSku} tidak jadi baris jasa — kemungkinan hanya masuk Notes, jadi tidak tertagih`);
+    }
     if (!cg?.checkGo?.inspectionsFilledAt) fail('daftar inspeksi tidak terisi');
     console.log(`\n✓ LULUS — satu SRO berisi kedua baris + daftar inspeksi: ${soUrl}\n`);
     await sinks.dispose().catch(() => {});

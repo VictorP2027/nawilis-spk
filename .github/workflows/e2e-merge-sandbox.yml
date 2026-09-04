@@ -36,6 +36,10 @@ on:
         type: choice
         options: [car, motorcycle]
         default: car
+      extra:
+        description: 'Pekerjaan lain (tulis / pilih) — mis. "TPI-NAWJAS-PM Periodic Maintenance". Menguji apakah pilihan itu jadi baris jasa beneran, bukan cuma catatan.'
+        type: string
+        default: ''
       part_sku2:
         description: 'SKU sparepart KEDUA (kosongkan = satu sparepart seperti biasa). Menguji perbaikan dengan beberapa part.'
         type: string
@@ -164,4 +168,5 @@ jobs:
             ${{ inputs.part_sku2 && format('--part-sku2={0}', inputs.part_sku2) || '' }} \
             ${{ inputs.make && format('--make={0}', inputs.make) || '' }} \
             ${{ inputs.model && format('--model={0}', inputs.model) || '' }} \
-            --kind="${{ inputs.kind }}"
+            --kind="${{ inputs.kind }}" \
+            ${{ inputs.extra && format('--extra={0}', inputs.extra) || '' }}
