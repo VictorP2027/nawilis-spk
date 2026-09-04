@@ -100,8 +100,21 @@ export async function POST(req: Request): Promise<Response> {
     }
     resuming = Boolean(existing);
   } catch {
-    // A database hiccup must not block opening a branch: the workflow itself
-    // re-checks both rules before it writes anything.
+    // FAIL CLOSED. The earlier version waved this through, reasoning that the
+    // workflow re-checks anyway — it does not. apps/worker/src/branch-add.ts
+    // re-checks only the 27 shipped branches; for a code already in `branches`
+    // it logs "data picker diperbarui" and OVERWRITES the row's name, type and
+    // docAbbrev, then finishes green. So this 409 is the only thing standing
+    // between a DB blip and a live branch being silently renamed for every
+    // counter — with both this page and the GitHub run reporting success.
+    // Not being able to check is a reason to stop, not to proceed.
+    return NextResponse.json(
+      {
+        error: 'Tidak bisa memeriksa daftar cabang saat ini.',
+        hint: 'Database sedang tidak bisa dihubungi. Coba lagi sebentar — lebih aman berhenti daripada menimpa cabang yang sudah ada.',
+      },
+      { status: 503 },
+    );
   }
 
   const res = await triggerBranchAdd({ code, name, store, type, abbrev, no_turboly: noTurboly });

@@ -63,6 +63,19 @@ the 5-min cron. To turn it on:
 2. **Add it to Vercel:** your project → Settings → Environment Variables →
    `GH_DISPATCH_TOKEN = <token>` (and optionally `GH_REPO = VictorP2027/nawilis-spk`). Redeploy.
 
+> **Adding `Actions: Read and write` — read this before you do.**
+> Opening a branch from `/admin/cabang` (`lib/triggerBranchAdd.ts`) runs a *named*
+> workflow, which `Contents` alone cannot do; without that permission the page
+> answers 403 and says so. But the permission is not scoped to one workflow:
+> a token carrying it can dispatch **any** workflow in the repo, and several of
+> them still paste their inputs straight into a shell step that holds
+> `MONGODB_URI` and the Turboly password (`data-fix.yml`, `push.yml`, `flow.yml`,
+> `e2e-merge-sandbox.yml` — `branch-add.yml` was hardened against exactly this).
+> So this one env var, which also sits in Netlify per the standby section below,
+> becomes enough to run code on a runner with those secrets. Grant it if you want
+> the branch page; if you do, harden those four workflows the same way
+> `branch-add.yml` was, or keep opening branches from the GitHub UI instead.
+
 That's it — assign an SPK and the Turboly push kicks off immediately. The 5-min cron stays as a
 safety net, and if the token isn't set the app just skips the kick (cron still covers it).
 

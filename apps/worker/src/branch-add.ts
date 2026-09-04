@@ -18,10 +18,16 @@ import { config } from './config.js';
  *   3. the branch must have advisors  → harvested from the same form, since an
  *      SPK with an unknown advisor is refused at push.
  *
- * Idempotent: run it twice and nothing changes. It never edits an existing
- * branch's CODE or store mapping — a code is what every SPK ever pushed is
- * filed under, and re-pointing a live branch at another store would quietly
- * misfile its orders. Fixing one of those is a deliberate, separate act.
+ * Safe to re-run, but NOT inert: a second run with different text overwrites
+ * the row's name, type and docAbbrev (that is what makes a rename possible).
+ * What it never edits is the CODE or an existing store mapping — a code is
+ * what every SPK ever pushed is filed under, and re-pointing a live branch at
+ * another store would quietly misfile its orders. Fixing one of those is a
+ * deliberate, separate act.
+ *
+ * Because a rename IS possible here, the caller is the guard against an
+ * accidental one: /api/admin/branch-add refuses a branch that is already
+ * complete, and refuses outright when it cannot check.
  *
  * --no-turboly writes only the picker row (steps 2 and 3 skipped), for the case
  * where the store does not exist in Turboly yet. The branch is then selectable
