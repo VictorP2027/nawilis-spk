@@ -22,6 +22,7 @@ import { config } from './config.js';
  */
 const argAll = (k: string): string[] => process.argv.filter((a) => a.startsWith(`--${k}=`)).map((a) => a.slice(k.length + 3));
 const arg = (k: string): string | undefined => argAll(k)[0];
+const has = (k: string): boolean => process.argv.includes(`--${k}`);
 
 interface Opt { sku: string; label: string }
 interface Row { _id: string; defaultSku: string; options: Opt[] }
@@ -43,8 +44,24 @@ async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   try {
     const col = getDb().collection<Row>('service_options');
-    const row = await col.findOne({ _id: code });
-    if (!row) throw new Error(`service_options/${code} tidak ada — kode jasa itu belum punya daftar varian`);
+    const existing = await col.findOne({ _id: code });
+    /**
+     * A code with no row yet.
+     *
+     * Normally that means a typo, and refusing is right — silently creating
+     * `SPOORNG` would leave a dropdown nobody can find. But the SPK form's
+     * "Pekerjaan lain (tulis / pilih)" box offers the union of EVERY option in
+     * this collection, so a job that has no tile of its own still needs a row
+     * here to be selectable at all. That is how Periodic Maintenance
+     * (TPI-NAWJAS-PM) is offered without adding a 16th button to the grid.
+     * --create says the new code is deliberate.
+     */
+    const creating = !existing && has('create');
+    if (!existing && !creating) {
+      throw new Error(`service_options/${code} tidak ada — kode jasa itu belum punya daftar varian (pakai --create kalau memang kode baru)`);
+    }
+    const row = existing ?? { _id: code, defaultSku: '', options: [] as Array<{ sku: string; label: string }> };
+    if (creating) console.log(`· ${code} belum ada — dibuat baru (--create)`);
 
     const options = [...row.options];
     for (const a of adds) {
@@ -72,8 +89,8 @@ async function main(): Promise<void> {
     };
     options.sort((a, b) => rank(a.sku) - rank(b.sku));
 
-    await col.updateOne({ _id: code }, { $set: { defaultSku, options } });
-    console.log(`\n✓ ${code}: default ${row.defaultSku} → ${defaultSku}`);
+    await col.updateOne({ _id: code }, { $set: { _id: code, defaultSku, options } }, { upsert: creating });
+    console.log(`\n✓ ${code}: default ${row.defaultSku || '(baru)'} → ${defaultSku}`);
     for (const o of options) console.log(`   ${o.sku === defaultSku ? '●' : '·'} ${o.label}`);
 
     /**

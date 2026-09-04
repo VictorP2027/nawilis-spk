@@ -43,6 +43,10 @@ on:
         description: 'VARIAN JASA — SKU baru, dipisah koma: "HSB-NAW-HSB=High Speed Balance,HSB-NAW-VIP=High Speed Balance VIP"'
         type: string
         default: ''
+      service_create:
+        description: 'VARIAN JASA — centang kalau KODE JASA-nya baru. Dipakai untuk jasa tanpa tombol sendiri, yang hanya muncul di "Pekerjaan lain (tulis / pilih)".'
+        type: boolean
+        default: false
 
 jobs:
   add-model:
@@ -93,13 +97,25 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
+          # Every input reaches the shell as a VALUE, never spliced into the
+          # script text. `${{ }}` is substituted before bash parses the line, so
+          # a quote or newline in a name used to escape the argument and run as
+          # a command — in a step holding MONGODB_URI. Same hardening as
+          # branch-add.yml.
           ADD_SKUS: ${{ inputs.add_skus }}
+          SERVICE_CODE: ${{ inputs.service_code }}
+          DEFAULT_SKU: ${{ inputs.default_sku }}
+          ORDER_SKUS: ${{ inputs.order_skus }}
+          SERVICE_CREATE: ${{ inputs.service_create }}
         run: |
           args=()
           IFS=',' read -ra pairs <<< "$ADD_SKUS"
-          for p in "${pairs[@]}"; do [ -n "$p" ] && args+=(--add="$p"); done
+          for p in "${pairs[@]}"; do
+            if [ -n "$p" ]; then args+=(--add="$p"); fi
+          done
+          if [ -n "$DEFAULT_SKU" ]; then args+=(--default="$DEFAULT_SKU"); fi
+          if [ -n "$ORDER_SKUS" ]; then args+=(--order="$ORDER_SKUS"); fi
+          if [ "$SERVICE_CREATE" = "true" ]; then args+=(--create); fi
           node --import tsx apps/worker/src/service-option-set.ts \
-            --code="${{ inputs.service_code }}" \
-            ${{ inputs.default_sku && format('--default={0}', inputs.default_sku) || '' }} \
-            ${{ inputs.order_skus && format('--order={0}', inputs.order_skus) || '' }} \
+            --code="$SERVICE_CODE" \
             "${args[@]}"
