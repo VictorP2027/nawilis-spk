@@ -115,6 +115,15 @@ async function main(): Promise<void> {
       return;
     }
 
+    // An unset secret arrives as '', which slips past config.ts's ?? fallback and
+    // only surfaces 130 lines later as "Cannot navigate to invalid URL".
+    if (!/^https?:\/\//.test(config.turbolyBaseUrl)) {
+      throw new Error(
+        `TURBOLY_BASE_URL tidak sah: "${config.turbolyBaseUrl}". ` +
+        'Set ke https://live.turboly.com di workflow, atau pakai --no-turboly.',
+      );
+    }
+
     // Only Turboly knows its own store id, so read it from the form staff use.
     const session = new TurbolySession({
       baseUrl: config.turbolyBaseUrl,

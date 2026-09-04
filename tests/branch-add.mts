@@ -15,6 +15,7 @@
  */
 import { REF_BRANCHES, branchForNewStore } from '@spk/core';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { readFile, readdir } from 'node:fs/promises';
 import { BRANCHES } from '../apps/web/lib/refdata.client.js';
 
 let passed = 0;
@@ -93,6 +94,39 @@ try {
   ok(renamed.find((b) => b.code === 'NWL-BKS')?.name === 'Bekasi (pindah)', 'cabang bawaan boleh diganti NAMANYA tanpa deploy');
   ok(renamed.length === REF_BRANCHES.length + 1, 'dan tidak menggandakan dirinya');
   ok(renamed.filter((b) => b.code === 'NWL-BKS').length === 1, 'satu kode tetap satu cabang');
+
+  // The workflow env block. A `${{ secrets.X }}` for an X that was never created
+  // does not fail the run — it expands to '', slips past config.ts's `??` (an
+  // empty string is not nullish) and dies 130 lines later inside page.goto as
+  // "Cannot navigate to invalid URL". Every other live workflow hardcodes these
+  // two, so branch-add.yml must too.
+  const wfDir = new URL('../.github/workflows/', import.meta.url);
+  const wfNames = (await readdir(wfDir)).filter((f) => f.endsWith('.yml'));
+  ok(wfNames.length >= 8, `ketemu ${wfNames.length} workflow untuk diperiksa`);
+
+  for (const f of wfNames) {
+    const yml = await readFile(new URL(f, wfDir), 'utf8');
+    for (const key of ['TURBOLY_BASE_URL', 'MONGODB_DB'] as const) {
+      for (const line of yml.split('\n')) {
+        const m = line.match(new RegExp(`^\\s*${key}:\\s*(.+?)\\s*$`));
+        if (!m) continue;
+        const value = m[1]!;
+        ok(!value.includes('secrets.'), `${f}: ${key} tidak dibaca dari secret (${value})`);
+        if (key === 'TURBOLY_BASE_URL') {
+          ok(/^https:\/\/\S+$/.test(value), `${f}: ${key} berupa URL utuh (${value})`);
+        } else {
+          ok(/^\S+$/.test(value), `${f}: ${key} terisi (${value})`);
+        }
+      }
+    }
+  }
+
+  // And the guard that turns a bad value into a sentence a human can act on.
+  const src = await readFile(new URL('../apps/worker/src/branch-add.ts', import.meta.url), 'utf8');
+  const guardAt = src.indexOf('TURBOLY_BASE_URL tidak sah');
+  ok(guardAt > 0, 'branch-add.ts menolak base URL yang tidak sah dengan pesan yang jelas');
+  ok(guardAt < src.indexOf('/service_orders/new'), 'dan menolaknya SEBELUM membuka halaman Turboly');
+
 } finally {
   await close().catch(() => {});
   await mongod.stop();

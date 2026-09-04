@@ -144,8 +144,8 @@ jobs:
       - name: Add the branch
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          MONGODB_DB: ${{ secrets.MONGODB_DB }}
-          TURBOLY_BASE_URL: ${{ secrets.TURBOLY_BASE_URL }}
+          MONGODB_DB: spk
+          TURBOLY_BASE_URL: https://live.turboly.com
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           GITHUB_ACTOR: ${{ github.actor }}
