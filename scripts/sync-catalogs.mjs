@@ -7,7 +7,7 @@
 //
 // One Turboly session (one login). In CI this runs in the same concurrency
 // group as the pusher so the two can never fight over the single session.
-import { connect, close, collections, branchForNewStore } from '../packages/core/dist/index.js';
+import { connect, close, collections, branchForNewStore, loadBranchList } from '../packages/core/dist/index.js';
 import { TurbolySession } from '../packages/core/dist/turboly/index.js';
 import { getDb } from '../packages/core/dist/mongo.js';
 
@@ -234,7 +234,9 @@ async function syncOneStore(st, ls) {
  * Anything else keeps today's behaviour: a warning, and no write.
  */
 async function autoMapNewStore(ls) {
-  const b = branchForNewStore(ls.t, new Set(known.map((s) => String(s._id))));
+  // The merged list, so a branch added through branch-add (picker only, store
+  // deferred) is mapped here the day its Turboly store appears.
+  const b = branchForNewStore(ls.t, new Set(known.map((s) => String(s._id))), await loadBranchList());
   if (!b) return null;
   await collections.tbStores().updateOne(
     { _id: b.code },

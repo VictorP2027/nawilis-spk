@@ -14,6 +14,7 @@
  *   npx tsx tests/branch-add.mts
  */
 import { REF_BRANCHES, branchForNewStore } from '@spk/core';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 import { BRANCHES } from '../apps/web/lib/refdata.client.js';
 
 let passed = 0;
@@ -62,6 +63,40 @@ for (const b of REF_BRANCHES) {
   else ok(false, `${b.code} tidak cocok dengan namanya sendiri ("${b.turbolyStoreNameGuess}")`);
 }
 ok(selfOk === REF_BRANCHES.length, `ke-${REF_BRANCHES.length} cabang cocok dengan toko-nya sendiri, tanpa bentrok`);
+
+console.log('E. a branch added with NO deploy');
+// The whole point: a row in Mongo has to reach the picker exactly like a
+// compiled-in branch, or "add without pushing code" is not true.
+const mongod = await MongoMemoryServer.create();
+const { connect, close, collections, loadBranchList } = await import('@spk/core');
+await connect(mongod.getUri(), 'spk_branch_test');
+try {
+  const before = await loadBranchList();
+  ok(before.length === REF_BRANCHES.length, `tanpa baris tambahan: ${before.length} cabang bawaan`);
+
+  await collections.branches().insertOne({
+    _id: 'NWL-ZZZ', name: 'Cabang Uji', type: 'NAWILIS', docAbbrev: 'ZZZ',
+    turbolyStoreNameGuess: 'Nawilis Cabang Uji', addedAt: new Date().toISOString(), addedBy: 'tes',
+  } as never);
+  const after = await loadBranchList();
+  ok(after.length === REF_BRANCHES.length + 1, 'cabang baru muncul di daftar tanpa deploy');
+  ok(after[after.length - 1]!.code === 'NWL-ZZZ', 'ditambahkan di akhir — urutan yang dihafal kasir tidak berubah');
+  ok(after.slice(0, REF_BRANCHES.length).every((b, i) => b.code === REF_BRANCHES[i]!.code), 'ke-27 cabang bawaan tetap di urutan semula');
+  ok(branchForNewStore('Nawilis Cabang Uji', new Set(), after)?.code === 'NWL-ZZZ', 'sync bisa memetakan store-nya nanti');
+
+  // A rename must work (a rebranded outlet) but a code must never be reassigned.
+  await collections.branches().insertOne({
+    _id: 'NWL-BKS', name: 'Bekasi (pindah)', type: 'NAWILIS', docAbbrev: 'BKS',
+    turbolyStoreNameGuess: 'Nawilis Bekasi', addedAt: new Date().toISOString(), addedBy: 'tes',
+  } as never);
+  const renamed = await loadBranchList();
+  ok(renamed.find((b) => b.code === 'NWL-BKS')?.name === 'Bekasi (pindah)', 'cabang bawaan boleh diganti NAMANYA tanpa deploy');
+  ok(renamed.length === REF_BRANCHES.length + 1, 'dan tidak menggandakan dirinya');
+  ok(renamed.filter((b) => b.code === 'NWL-BKS').length === 1, 'satu kode tetap satu cabang');
+} finally {
+  await close().catch(() => {});
+  await mongod.stop();
+}
 
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);

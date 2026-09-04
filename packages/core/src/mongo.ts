@@ -1,8 +1,7 @@
 import { MongoClient, type Db, type Collection } from 'mongodb';
 import type {
   SpkDoc, SpkEvent, TurbolyClaim, VehicleDoc, TbStore, TbServiceProduct,
-  TbMechanic, TbCredential, ReconRun, DlqItem, ServiceSkuMap, DegradationState,
-} from './types.js';
+  TbMechanic, TbCredential, ReconRun, DlqItem, ServiceSkuMap, DegradationState, BranchRow } from './types.js';
 
 let client: MongoClient | null = null;
 let db: Db | null = null;
@@ -32,6 +31,7 @@ export const collections = {
   turbolyDocs: () => getDb().collection<TurbolyClaim>('turboly_docs'),
   vehicles: () => getDb().collection<VehicleDoc>('vehicles'),
   tbStores: () => getDb().collection<TbStore>('tb_stores'),
+  branches: () => getDb().collection<BranchRow>('branches'),
   tbServiceProducts: () => getDb().collection<TbServiceProduct>('tb_service_products'),
   tbMechanics: () => getDb().collection<TbMechanic>('tb_mechanics'),
   tbCredentials: () => getDb().collection<TbCredential>('tb_credentials'),

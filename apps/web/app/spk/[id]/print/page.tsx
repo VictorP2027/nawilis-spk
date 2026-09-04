@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { fuelWord } from '../../../../lib/fuel';
 import { useParams } from 'next/navigation';
 import { SERVICES, BRANCHES, CONDITION_ITEMS, DAMAGE_ZONES } from '../../../../lib/refdata.client';
+import { useBranches } from '../../../../lib/branches.client';
 import { CarDiagram } from '../../../components/CarDiagram';
 
 /**
@@ -52,6 +53,8 @@ const fmtDate = (iso?: string): string =>
 export default function PrintSpk() {
   const params = useParams<{ id: string }>();
   const [doc, setDoc] = useState<Doc | null>(null);
+  // So a branch opened after the last deploy prints its NAME, not its code.
+  const BRANCHES = useBranches();
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {

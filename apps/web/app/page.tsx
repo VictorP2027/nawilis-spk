@@ -7,6 +7,7 @@ import { FuelGauge } from './components/FuelGauge';
 import { DiagramInk, type InkHandle } from './components/DiagramInk';
 import { CarDiagram } from './components/CarDiagram';
 import { SERVICES, BRANCHES, CONDITION_ITEMS } from '../lib/refdata.client';
+import { useBranches } from '../lib/branches.client';
 import { ProductInput } from '../lib/productSuggest';
 import { SuggestInput } from '../lib/suggestInput';
 import { submitOrQueue, flush, pending } from '../lib/outbox';
@@ -43,6 +44,8 @@ function uuid(): string {
 
 export default function Intake() {
   const [branch, setBranch] = useState<string>('');
+  // Compiled-in list, plus any branch opened since the last deploy.
+  const BRANCHES = useBranches();
   const [operator, setOperator] = useState<string>('');
   const [plate, setPlate] = useState('');
   const [hist, setHist] = useState<VehicleHist | null>(null);

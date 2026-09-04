@@ -6,6 +6,7 @@ import { FuelGauge } from '../components/FuelGauge';
 import { DiagramInk, type InkHandle } from '../components/DiagramInk';
 import { CarDiagram } from '../components/CarDiagram';
 import { SERVICES, BRANCHES, CONDITION_ITEMS } from '../../lib/refdata.client';
+import { useBranches } from '../../lib/branches.client';
 import { submitOrQueue } from '../../lib/outbox';
 
 /** Pixel-faithful, fillable replica of the Nawilis SPK (Surat Perintah Kerja). */
@@ -50,6 +51,8 @@ export default function Sheet() {
   const [dmgInked, setDmgInked] = useState(false);
   const dmgInk = useRef<InkHandle>(null);
   const [branch, setBranch] = useState('');
+  // Compiled-in list, plus any branch opened since the last deploy.
+  const BRANCHES = useBranches();
   const [extra1, setExtra1] = useState('');
   const [extra2, setExtra2] = useState('');
   const [advisors, setAdvisors] = useState<{ code: string; name: string }[]>([]);

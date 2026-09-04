@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ProductInput } from '../../lib/productSuggest';
 import { SuggestInput } from '../../lib/suggestInput';
 import { submitOrQueue, flush } from '../../lib/outbox';
+import { useBranches } from '../../lib/branches.client';
 import {
   BRANCHES,
   CHECKGO_SECTIONS,
@@ -76,6 +77,8 @@ const VERDICT_BTN: CSSProperties = { flex: '0 0 auto', fontSize: 13, padding: '4
 
 export default function CheckGoIntake() {
   const [branch, setBranch] = useState('');
+  // Compiled-in list, plus any branch opened since the last deploy.
+  const BRANCHES = useBranches();
   const [operator, setOperator] = useState('');
   // No mechanic is picked at intake. At the counter the check has usually not
   // been done yet, so the tablet would be asking who WILL do it; the flow board

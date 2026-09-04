@@ -503,6 +503,25 @@ export interface VehicleDoc {
   customerRefs: string[];
 }
 
+/**
+ * A branch added AFTER the app was built.
+ *
+ * The 27 branches in REF_BRANCHES are compiled in, which is what makes the
+ * intake forms work with no network at a counter. A branch that opens later
+ * cannot wait for a deploy, so it lands here instead and is merged on top of
+ * that list — same shape, so nothing downstream can tell the two apart.
+ */
+export interface BranchRow {
+  _id: string; // branchCode, e.g. NWL-XXX
+  name: string;
+  type: BranchType;
+  docAbbrev: string | null;
+  turbolyStoreNameGuess: string;
+  /** Who added it and when — this is the one list a typo can quietly break. */
+  addedAt: string;
+  addedBy: string | null;
+}
+
 /** Turboly master-data mirror rows (tb_*). Built from UI export, never scraped blind. */
 export interface TbStore {
   _id: string; // branchCode

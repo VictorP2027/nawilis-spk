@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { BRANCHES, CHECKGO_SECTIONS, CHECKGO_TIRE } from '../../../../lib/refdata.client';
+import { useBranches } from '../../../../lib/branches.client';
 
 /**
  * /checkgo/[id]/print — a captured Check & Go rendered back onto the final-3
@@ -77,6 +78,8 @@ function Tick({ on, label }: { on: boolean; label: string }) {
 export default function PrintCheckGo() {
   const params = useParams<{ id: string }>();
   const [doc, setDoc] = useState<Doc | null>(null);
+  // So a branch opened after the last deploy prints its NAME, not its code.
+  const BRANCHES = useBranches();
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
