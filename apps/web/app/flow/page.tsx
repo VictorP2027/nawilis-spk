@@ -71,14 +71,21 @@ interface ActionDef {
 // Params follow the worker's expectations ({assigneeName}, {waktuMinutes,
 // feedback}, {nextOdometer, nextServiceDateISO, recommendations}, {method, amount}).
 const ACTIONS: Record<string, ActionDef> = {
-  // approve_so is deliberately ABSENT. The branches now approve the Service
-  // Order inside Turboly itself, so this button re-approved something already
-  // approved and the card sat in "Service Order" looking stuck. Dropping the
-  // entry is all it takes: nextActionFor() looks the name up here, so a card
-  // waiting on approval simply shows no button (and keeps its SO link and its
-  // print icon). The action still exists server-side in flow.ts and is still
-  // reachable through /api/flow/action — this removes the BUTTON, not the
-  // capability.
+  // The branches approve the Service Order inside Turboly now, so this step
+  // is a RECORD of what already happened, not a request to do it — hence the
+  // wording. It cannot simply be dropped: flow.so reaches 'approved' through
+  // exactly one writer (flowPatchAfter('approve_so') in flow.ts), and
+  // canRunFlowAction gates create_wo on so === 'approved'. Removing the button
+  // therefore strands every card in the Service Order column with Work Order,
+  // QC and Invoice permanently unreachable. Pressing it is safe either way:
+  // flowSink.approveServiceOrder returns immediately when the order already
+  // reads APPROVED, so for work done in Turboly this only advances the board.
+  approve_so: {
+    action: 'approve_so',
+    label: 'Sudah di-approve di Turboly',
+    fields: 'none',
+    hint: 'Mencatat SO ini sebagai approved supaya kartu bisa lanjut ke Work Order. Kalau di Turboly ternyata belum di-approve, robot yang meng-approve-nya.',
+  },
   create_wo: { action: 'create_wo', label: 'Buat Work Order', fields: 'mechanic', hint: 'Work Order dibuat dari SO yang sudah approved — pilih mekanik.' },
   start_wo: { action: 'start_wo', label: 'Start', fields: 'none', hint: 'Pekerjaan dimulai (WO → IN PROGRESS).' },
   complete_wo: { action: 'complete_wo', label: 'Selesai', fields: 'complete', hint: 'Tandai pekerjaan selesai — isi durasi & temuan.' },
@@ -890,13 +897,6 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
       )}
       {!inFlight && !failed && !def && col === 'intake' && (
         <div className="fb-wait" style={{ color: 'var(--muted)' }}><span className="fb-spin" /> Menunggu Service Order dari Turboly…</div>
-      )}
-      {/* Where the Approve SO button used to be. Without a word here the card
-          reads as stuck; this says whose turn it is. */}
-      {!inFlight && !failed && !def && col === 'so' && (
-        <div className="fb-meta" style={{ marginTop: 6, color: 'var(--muted)' }}>
-          Di-approve langsung di Turboly — buka tautan SO di atas.
-        </div>
       )}
       {showStayCheck && !failed && (
         <button type="button" className="btn ghost fb-act-sec" onClick={() => onAction(row, ACTIONS.stay_check_only!)}>Tetap Check Saja</button>

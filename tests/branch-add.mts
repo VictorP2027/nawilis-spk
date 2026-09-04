@@ -13,7 +13,7 @@
  *
  *   npx tsx tests/branch-add.mts
  */
-import { REF_BRANCHES, branchForNewStore, branchTypeFor, collections } from '@spk/core';
+import { REF_BRANCHES, branchForNewStore, branchTypeFor, buildSpkDoc } from '@spk/core';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { readFile, readdir } from 'node:fs/promises';
 import { BRANCHES } from '../apps/web/lib/refdata.client.js';
@@ -103,9 +103,37 @@ try {
     turbolyStoreNameGuess: 'QuickServ Baru', addedAt: new Date().toISOString(), addedBy: 'tes',
   } as never);
   ok(await branchTypeFor('NWL-QS9') === 'QUICKSERV', 'cabang QUICKSERV baru terbaca QUICKSERV, bukan NAWILIS');
-  const builtInBranch = REF_BRANCHES[0]!;
-  ok(await branchTypeFor(builtInBranch.code) === builtInBranch.type, `cabang bawaan (${builtInBranch.code}) tetap ${builtInBranch.type}`);
+  // Deliberately a QUICKSERV built-in: asserting on a NAWILIS one would pass
+  // even with the whole lookup replaced by `return 'NAWILIS'`.
+  const builtInQs = REF_BRANCHES.find((b) => b.type === 'QUICKSERV')!;
+  ok(await branchTypeFor(builtInQs.code) === 'QUICKSERV', `cabang bawaan QUICKSERV (${builtInQs.code}) tidak tertukar jadi NAWILIS`);
   ok(await branchTypeFor('NWL-TIDAK-ADA') === 'NAWILIS', 'kode tak dikenal tetap jatuh ke NAWILIS');
+
+  // The repo.ts half, exercised rather than grepped: a source regex stays green
+  // if the wiring is reverted, so build a real document and read the field the
+  // queue priority is computed from.
+  const intake = (branchCode: string) => ({
+    uploadId: `tes-${branchCode}`, docType: 'SPK_NAWILIS', branchCode, captureMode: 'typed',
+    operatorUserId: 'tes', operatorPinVerified: true, deviceBindingVerified: true,
+    spkNumber: `TES-${branchCode}`, qrPayload: null, capturedAt: new Date().toISOString(),
+    customer: { nama: 'UJI TIPE', wa: '+628123456789', alamat: 'Jl. Uji 1', kontakLain: null, turbolyCustomerId: null },
+    vehicle: { noPolisi: 'B1234XYZ', merk: 'Toyota', tipe: 'Avanza', tahun: 2021, warna: 'Silver', km: '31000', kind: 'car', createMakeConfirmed: false },
+    complaint: 'cek rutin',
+    jobLines: [{ serviceCode: 'SPOORING', ordered: true, qty: 1, keterangan: 'Spooring', quotedPrice: 350000 }],
+    conditionChecks: [], rekomendasiService: null, estimasiMinutes: 60,
+    serviceAdvisorName: 'UJI', salespersonName: 'UJI',
+    signatures: { menyerahkanPresent: true, menyerahkanInkDensity: 40, menyerahkanNamaJelas: 'UJI', menerimaPresent: true, menerimaNamaJelas: 'UJI' },
+    attachments: [],
+  });
+
+  const passed = buildSpkDoc(intake('NWL-QS9') as never, { branchType: await branchTypeFor('NWL-QS9') });
+  ok(passed.branchType === 'QUICKSERV', 'buildSpkDoc memakai tipe yang diberikan — dokumen cabang baru bertipe QUICKSERV');
+  // …and without it, the old bug: the branch is unknown to REF_BRANCHES.
+  const unpassed = buildSpkDoc(intake('NWL-QS9') as never);
+  ok(unpassed.branchType === 'NAWILIS', 'tanpa diteruskan, tipe jatuh ke NAWILIS — inilah bug yang diperbaiki');
+  // A built-in must not regress when nothing is passed.
+  const built = buildSpkDoc(intake(builtInQs.code) as never);
+  ok(built.branchType === 'QUICKSERV', `cabang bawaan (${builtInQs.code}) tetap QUICKSERV tanpa opsi`);
 
   // …and the intake path has to actually pass it, or the fix is inert.
   const ingestSrc = await readFile(new URL('../apps/web/lib/ingest.ts', import.meta.url), 'utf8');
