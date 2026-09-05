@@ -22,6 +22,23 @@ import { matchPersonLabel } from '../personMatch.js';
 /** Internal signal: the checklist is already on the order, nothing to type. */
 class SkipInspections extends Error {}
 
+/**
+ * Which select2 result carries this SKU? -1 when none does.
+ *
+ * Turboly renders each result as "<SKU> <name>", so this is an exact match on
+ * the code and never a fuzzy one — "TPI-NAWJAS-PM" must not match
+ * "TPI-NAWJAS-PMX", and "GSM-NAW-PMG1 Periodic Maintenance GSM Grade 1" must
+ * not be accepted for "GSM-NAW-PMG". Exported for tests.
+ */
+export function resultIndexForSku(texts: ReadonlyArray<string>, sku: string): number {
+  const want = (sku ?? '').toUpperCase().trim();
+  if (!want) return -1;
+  return texts.findIndex((t) => {
+    const u = (t ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
+    return u === want || u.startsWith(`${want} `);
+  });
+}
+
 export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
 
@@ -1040,16 +1057,16 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** Open a Select2-v3 widget by container selector, type, and pick first selectable result. */
-  private async pickSelect2(containerSel: string, query: string): Promise<void> {
+  private async pickSelect2(containerSel: string, query: string, preferSku?: string | null): Promise<void> {
     const page = this.session.page_();
     await page.locator(`${containerSel} .select2-choice, ${containerSel}`).first().click();
-    await this.dropPick(query);
+    await this.dropPick(query, preferSku);
   }
-  private async pickSelect2Locator(container: import('playwright').Locator, query: string): Promise<void> {
+  private async pickSelect2Locator(container: import('playwright').Locator, query: string, preferSku?: string | null): Promise<void> {
     await container.click();
-    await this.dropPick(query);
+    await this.dropPick(query, preferSku);
   }
-  private async dropPick(query: string): Promise<void> {
+  private async dropPick(query: string, preferSku?: string | null): Promise<void> {
     const page = this.session.page_();
     await page.waitForTimeout(400);
     let ready = false;
@@ -1073,7 +1090,42 @@ export class RpaSink implements ServiceOrderSink {
       }
     }
     if (!ready) throw new TransientError(`Turboly search for "${query}" timed out (still searching)`);
-    await page.locator('#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').first().click({ timeout: 4000 });
+    const ITEMS =
+      '#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)';
+
+    /**
+     * Turboly's remote search matches on the product NAME, so a product whose
+     * name is a PREFIX of others comes back surrounded by its siblings and
+     * `.first()` silently takes the wrong one — a real catalogue line, at the
+     * wrong price, past every guard we have (the row does attach to a product,
+     * it just isn't the one asked for).
+     *
+     * VERIFIED read-only on LIVE, 2026-09-05: searching "Periodic Maintenance"
+     * — which is what a TPI-NAWJAS-PM line searches for, because the search
+     * term is the mirror's NAME (payload.ts) — returns
+     *   [0] GSM-NAW-PMG1 Periodic Maintenance GSM Grade 1   ← was taken
+     *   [1..3] GSM-NAW-PMG2/3/4
+     *   [4] TPI-NAWJAS-PM Periodic Maintenance              ← wanted
+     * so every Periodic Maintenance line was billed as Grade 1.
+     *
+     * When the caller knows the SKU, take the option that carries it. The
+     * result rows are rendered "<SKU> <name>", so this is an exact match on
+     * the code, never a fuzzy one. If no row carries the SKU — a service whose
+     * picker does not show codes, every non-product select2 (vehicle, customer,
+     * advisor) — the behaviour is unchanged: first result, exactly as before.
+     */
+    if (preferSku) {
+      const texts = await page.evaluate(
+        (sel) => Array.from(document.querySelectorAll(sel)).map((x) => (x as HTMLElement).innerText),
+        ITEMS,
+      );
+      const idx = resultIndexForSku(texts, preferSku);
+      if (idx >= 0) {
+        await page.locator(ITEMS).nth(idx).click({ timeout: 4000 });
+        return;
+      }
+    }
+    await page.locator(ITEMS).first().click({ timeout: 4000 });
   }
 
   /** Like pickSelect2 but returns false (and closes the drop) instead of throwing on no-match. */
@@ -1845,7 +1897,7 @@ export class RpaSink implements ServiceOrderSink {
       for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
       if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
       await page.waitForTimeout(400);
-      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku);
+      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku, line.expectedSku);
       await page.waitForTimeout(600);
       // The append path stamps the token onto EVERY service line it adds, not
       // just the first. VERIFIED in sandbox 2026-08-18: Turboly keeps a typed
@@ -1930,7 +1982,7 @@ export class RpaSink implements ServiceOrderSink {
           return container.id;
         })) as string;
         if (!pickerId) throw new DataError(`sparepart product picker not found for "${want}"`);
-        await this.pickSelect2Locator(page.locator(`#${pickerId}`), want);
+        await this.pickSelect2Locator(page.locator(`#${pickerId}`), want, line.expectedSku);
         await page.waitForTimeout(600);
         // The line only counts once Turboly holds a product id. Without this the row
         // saves blank and vanishes — which is exactly how the first attempt "passed".
