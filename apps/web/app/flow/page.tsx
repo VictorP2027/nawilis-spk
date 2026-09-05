@@ -71,21 +71,20 @@ interface ActionDef {
 // Params follow the worker's expectations ({assigneeName}, {waktuMinutes,
 // feedback}, {nextOdometer, nextServiceDateISO, recommendations}, {method, amount}).
 const ACTIONS: Record<string, ActionDef> = {
-  // The branches approve the Service Order inside Turboly now, so this step
-  // is a RECORD of what already happened, not a request to do it — hence the
-  // wording. It cannot simply be dropped: flow.so reaches 'approved' through
-  // exactly one writer (flowPatchAfter('approve_so') in flow.ts), and
-  // canRunFlowAction gates create_wo on so === 'approved'. Removing the button
-  // therefore strands every card in the Service Order column with Work Order,
-  // QC and Invoice permanently unreachable. Pressing it is safe either way:
-  // flowSink.approveServiceOrder returns immediately when the order already
-  // reads APPROVED, so for work done in Turboly this only advances the board.
-  approve_so: {
-    action: 'approve_so',
-    label: 'Sudah di-approve di Turboly',
-    fields: 'none',
-    hint: 'Mencatat SO ini sebagai approved supaya kartu bisa lanjut ke Work Order. Kalau di Turboly ternyata belum di-approve, robot yang meng-approve-nya.',
-  },
+  // approve_so is deliberately ABSENT — the board is a VIEW now.
+  //
+  // The whole service lifecycle is driven in Turboly directly, so this map no
+  // longer needs to offer the first step. Know what that costs before adding it
+  // back or removing more: flow.so reaches 'approved' through exactly one
+  // writer (flowPatchAfter('approve_so') in flow.ts:283), nothing reads
+  // Turboly's status back into Mongo, and canRunFlowAction gates create_wo on
+  // so === 'approved' (flow.ts:246). So with this key gone a card stays in the
+  // Service Order column and the entries below it never render for a new
+  // document. That is intended here — the counters read this board and print
+  // from it; they do not drive work with it.
+  //
+  // The action itself is untouched server-side (flow.ts, /api/flow/action), so
+  // an ops curl can still advance a card if one ever needs it.
   create_wo: { action: 'create_wo', label: 'Buat Work Order', fields: 'mechanic', hint: 'Work Order dibuat dari SO yang sudah approved — pilih mekanik.' },
   start_wo: { action: 'start_wo', label: 'Start', fields: 'none', hint: 'Pekerjaan dimulai (WO → IN PROGRESS).' },
   complete_wo: { action: 'complete_wo', label: 'Selesai', fields: 'complete', hint: 'Tandai pekerjaan selesai — isi durasi & temuan.' },
@@ -771,12 +770,11 @@ function DocLink({ label, no, url }: { label: string; no: string | null; url: st
   );
 }
 
-function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, onToggleSelect }: {
+function Card({ row, onAction, onRetry, onWa, selectable, selected, onToggleSelect }: {
   row: FlowRow;
   onAction: (row: FlowRow, def: ActionDef) => void;
   onRetry: (row: FlowRow) => void;
   onWa: (row: FlowRow) => void;
-  onArchive: (row: FlowRow) => void;
   /** Bulk-WA selection (Check & Go, belum terkirim) — checkbox kanan-atas. */
   selectable: boolean;
   selected: boolean;
@@ -829,13 +827,6 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
           rel="noreferrer"
           title={isCng ? 'Cetak Check & Go (format kertas)' : 'Cetak SPK (format kertas)'}
         >🖨</a>
-        {/* Keluarkan dari papan — dokumen TIDAK dihapus, hanya diarsipkan. */}
-        <button
-          type="button"
-          className="fb-doc fb-archbtn"
-          title="Arsipkan — keluarkan dari papan (dokumen tetap tersimpan)"
-          onClick={() => onArchive(row)}
-        >🗄</button>
       </div>
 
       {/* Merged into the car's Check & Go order: say where the work went, and
@@ -897,6 +888,13 @@ function Card({ row, onAction, onRetry, onWa, onArchive, selectable, selected, o
       )}
       {!inFlight && !failed && !def && col === 'intake' && (
         <div className="fb-wait" style={{ color: 'var(--muted)' }}><span className="fb-spin" /> Menunggu Service Order dari Turboly…</div>
+      )}
+      {/* No button here on purpose: the work is done in Turboly. Without a
+          word the card reads as stalled, so say where it is being handled. */}
+      {!inFlight && !failed && !def && col === 'so' && (
+        <div className="fb-meta" style={{ marginTop: 6, color: 'var(--muted)' }}>
+          Diproses di Turboly — buka tautan SO di atas.
+        </div>
       )}
       {showStayCheck && !failed && (
         <button type="button" className="btn ghost fb-act-sec" onClick={() => onAction(row, ACTIONS.stay_check_only!)}>Tetap Check Saja</button>
@@ -1010,34 +1008,6 @@ export default function FlowBoard() {
   }, [load]);
 
   // Archive: keluarkan dari papan (dokumen tetap tersimpan) — alasan wajib.
-  const onArchive = useCallback((row: FlowRow) => {
-    const reason = prompt('Alasan arsip? (wajib — tercatat pada dokumen)');
-    if (!reason || reason.trim() === '') return;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/spk/${encodeURIComponent(row._id)}/archive`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: reason.trim(), by: 'flow-board' }),
-        });
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-        if (!res.ok) {
-          alert(str(body.message) ?? str(body.error) ?? `Gagal mengarsipkan (HTTP ${res.status})`);
-          return;
-        }
-        // Optimistic: the card leaves the board now; the poll confirms.
-        setRows((prev) => prev.filter((r) => r._id !== row._id));
-        setSelected((prev) => {
-          if (!prev.has(row._id)) return prev;
-          const next = new Set(prev);
-          next.delete(row._id);
-          return next;
-        });
-      } catch {
-        alert('Jaringan bermasalah — coba lagi.');
-      }
-    })();
-  }, []);
 
   /** Eligible for bulk WA: same gate as the single "Kirim Hasil via WA" button. */
   const waEligible = useCallback(
@@ -1168,8 +1138,6 @@ export default function FlowBoard() {
         .fb-errtxt { color: var(--block); font-size: 11.5px; line-height: 1.4; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
         .fb-retry { margin-top: 6px; font-size: 12px; font-weight: 700; padding: 5px 12px; border: 1.5px solid var(--block); border-radius: 8px; background: #fff; color: var(--block); cursor: pointer; }
         .fb-retry:active { background: #fdecea; }
-        .fb-archbtn { border: 0; background: none; padding: 0; cursor: pointer; font-size: inherit; line-height: inherit; }
-        .fb-archbtn:hover { filter: brightness(.85); }
         .fb-selchk { margin-left: 2px; width: 16px; height: 16px; flex: none; cursor: pointer; accent-color: var(--nawilis); }
         .fb-bulkbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 16px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(30,46,145,.14); }
         .fb-bulkbar .btn { width: auto; }
@@ -1234,7 +1202,6 @@ export default function FlowBoard() {
                     onAction={(row, def) => setModal({ row, def })}
                     onRetry={onRetry}
                     onWa={setWaModal}
-                    onArchive={onArchive}
                     selectable={waEligible(r)}
                     selected={selected.has(r._id)}
                     onToggleSelect={toggleSelect}
