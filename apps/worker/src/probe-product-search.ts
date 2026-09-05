@@ -55,6 +55,17 @@ async function main(): Promise<void> {
     if (store) { await page.selectOption('#store-id', { value: store.v }); await page.waitForTimeout(2000); }
     console.log(`\nstore: ${store ? `${store.t} (${store.v})` : '(tidak dipilih)'}`);
 
+    // Open the pane exactly as addLinesOnOpenForm does — the add-links sit
+    // hidden until this tab is clicked, so the click may no-op but is required.
+    await page.getByRole('link', { name: 'Packages, Spareparts & Services' }).click({ timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    const addLink = page.locator('a.btn-add-item', { hasText: /add service item/i }).first();
+    if (!(await addLink.isVisible().catch(() => false))) {
+      await page.locator('.nav-tabs a', { hasText: /packages, spareparts/i }).first().click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(700);
+    }
+    if (!(await addLink.isVisible().catch(() => false))) throw new Error('panel "Packages, Spareparts & Services" tidak terbuka');
+
     for (const q of QUERIES) {
       const rowSel = '.select2-container.input-service-product';
       const before = await page.locator(rowSel).count();
@@ -63,7 +74,8 @@ async function main(): Promise<void> {
       await page.waitForTimeout(400);
       await page.locator(rowSel).last().click();
       await page.waitForTimeout(400);
-      await page.keyboard.insertText(q);
+      await page.locator('#select2-drop input.select2-input, .select2-drop-active input.select2-input')
+        .first().fill(q).catch(async () => { await page.keyboard.insertText(q); });
       let results: string[] = [];
       for (let i = 0; i < 30; i++) {
         results = await page.evaluate(() =>
