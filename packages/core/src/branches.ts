@@ -42,8 +42,8 @@ export async function loadBranchList(): Promise<RefBranch[]> {
  * new QUICKSERV counter that is silently wrong, and it costs that counter its
  * queue priority (repo.ts gives QUICKSERV 95 and everything else 50).
  *
- * The 27 built-ins answer with no I/O, which is every SPK today; only a branch
- * added since the deploy costs one indexed _id lookup.
+ * Costs one indexed _id lookup, once per document — not per line; callers that
+ * label many documents use branchMap() instead.
  */
 export async function branchTypeFor(code: string): Promise<RefBranch['type']> {
   return (await branchRefFor(code))?.type ?? 'NAWILIS';
@@ -59,10 +59,13 @@ export async function branchTypeFor(code: string): Promise<RefBranch['type']> {
  * "NWL-JKT".
  */
 export async function branchRefFor(code: string): Promise<RefBranch | null> {
-  const builtIn = REF_BRANCHES.find((b) => b.code === code);
-  if (builtIn) return builtIn;
+  // Mongo FIRST, exactly like loadBranchList(): a row for a compiled-in code is
+  // the documented way to rename a rebranded outlet without a release (see the
+  // contract at the top of this file). Short-circuiting on REF_BRANCHES here
+  // would make the two resolvers disagree — the pickers and the export would
+  // show the new name while the customer's WhatsApp still used the old one.
   const row = await collections.branches().findOne({ _id: code }).catch(() => null);
-  if (!row) return null;
+  if (!row) return REF_BRANCHES.find((b) => b.code === code) ?? null;
   return {
     code: row._id,
     name: row.name,

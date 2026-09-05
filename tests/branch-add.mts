@@ -138,6 +138,17 @@ try {
   const built = buildSpkDoc(intake(builtInQs.code) as never);
   ok(built.branchType === 'QUICKSERV', `cabang bawaan (${builtInQs.code}) tetap QUICKSERV tanpa opsi`);
 
+  // The documented rename lever must work the SAME way through both resolvers,
+  // or the pickers show the new name while the customer's WhatsApp shows the old.
+  await collections.branches().insertOne({
+    _id: builtInQs.code, name: 'QuickServ Ganti Nama', type: 'QUICKSERV', docAbbrev: builtInQs.docAbbrev,
+    turbolyStoreNameGuess: builtInQs.turbolyStoreNameGuess, addedAt: new Date().toISOString(), addedBy: 'tes',
+  } as never);
+  ok((await branchRefFor(builtInQs.code))?.name === 'QuickServ Ganti Nama', 'branchRefFor menghormati ganti nama cabang bawaan');
+  ok((await loadBranchList()).find((b) => b.code === builtInQs.code)?.name === 'QuickServ Ganti Nama', 'loadBranchList setuju');
+  ok(await branchTypeFor(builtInQs.code) === 'QUICKSERV', 'dan tipenya tidak ikut berubah');
+  await collections.branches().deleteOne({ _id: builtInQs.code } as never);
+
   // Labelling. A branch opened since the deploy must be NAMED, not printed as
   // its code — most of all in the Check & Go WhatsApp, which the customer reads.
   const ref = await branchRefFor('NWL-QS9');

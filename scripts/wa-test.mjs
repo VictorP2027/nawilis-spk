@@ -9,7 +9,7 @@
 // a hand-written "test 123" would prove the gateway works and nothing about
 // the thing we actually ship. Read-only: no document is written or stamped, so
 // this never marks a real customer as already-notified.
-import { connect, close, collections, buildCheckGoAlert, createWhatsAppClient, whatsappConfigFromEnv } from '../packages/core/dist/index.js';
+import { connect, close, collections, buildCheckGoAlert, branchRefFor, createWhatsAppClient, whatsappConfigFromEnv } from '../packages/core/dist/index.js';
 
 const SEND = process.argv.includes('--send');
 const TO = process.argv.find((a) => a.startsWith('--to='))?.slice(5)
@@ -22,7 +22,7 @@ const doc = await collections.spk().findOne(
 );
 if (!doc) { console.error('no Check & Go with a report in Mongo'); await close(); process.exit(1); }
 
-const alert = buildCheckGoAlert(doc);
+const alert = buildCheckGoAlert(doc, { branchName: (await branchRefFor(doc.branchCode))?.name ?? null });
 console.log(`source doc : ${doc._id}  (${doc.branchCode}, ${doc.checkGo.inspectionItems.length} baris)`);
 console.log(`real customer: ${alert.to}   →  REDIRECTED TO: ${TO}`);
 console.log('\n──────── message as the customer receives it ────────');

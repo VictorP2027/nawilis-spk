@@ -20,7 +20,7 @@
  * It exists for one reason — zero Docker — and inherits every safety rail.
  */
 import { chromium } from 'playwright';
-import { connect, close, collections, buildCheckGoAlert } from '../packages/core/dist/index.js';
+import { connect, close, collections, buildCheckGoAlert, branchRefFor } from '../packages/core/dist/index.js';
 
 const LOGIN = process.argv.includes('--login');
 const SEND = process.argv.includes('--send');
@@ -109,7 +109,7 @@ async function drainOnce(): Promise<void> {
       };
       let alert;
       try {
-        alert = buildCheckGoAlert(doc as never);
+        alert = buildCheckGoAlert(doc as never, { branchName: (await branchRefFor(doc.branchCode))?.name ?? null });
         if (editedText) alert = { ...alert, text: editedText };
       } catch (e) {
         console.error(`  SKIP ${d._id} — ${(e as Error).message}`);

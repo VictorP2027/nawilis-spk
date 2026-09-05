@@ -25,7 +25,7 @@
 // who would get what, and sends nothing. Delivery is stamped on the doc at
 // checkGo.alert (mode 'live' + providerMessageId), which is also the dedupe:
 // a doc already stamped 'live' is never sent twice.
-import { connect, close, collections, buildCheckGoAlert, createWhatsAppClient, whatsappConfigFromEnv } from '../packages/core/dist/index.js';
+import { connect, close, collections, buildCheckGoAlert, branchRefFor, createWhatsAppClient, whatsappConfigFromEnv } from '../packages/core/dist/index.js';
 
 const SEND = process.argv.includes('--send');
 const onlyId = process.argv.find((a) => a.startsWith('--id='))?.slice(5)
@@ -174,7 +174,10 @@ async function drainOnce() {
     };
     let alert;
     try {
-      alert = buildCheckGoAlert(doc);
+      // THIS is the send that reaches the customer — the web routes only build
+      // a preview. Resolve the branch name here too, or a branch opened since
+      // the deploy is quoted to the customer as its raw code.
+      alert = buildCheckGoAlert(doc, { branchName: (await branchRefFor(doc.branchCode))?.name ?? null });
       // Staff may have edited the message when they queued it — what they
       // approved is what gets sent.
       if (editedText && !templateMode) {
