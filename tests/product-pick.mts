@@ -11,7 +11,7 @@
  *
  *   npx tsx tests/product-pick.mts
  */
-import { resultIndexForSku } from '@spk/core/turboly';
+import { resultIndexForSku, plateQueryFallback } from '@spk/core/turboly';
 
 let passed = 0, failed = 0;
 const ok = (cond: boolean, label: string): void => {
@@ -46,6 +46,24 @@ ok(resultIndexForSku(['  BAN-HAN-16513LV01   Hankook 165 R13 LV01  '], 'BAN-HAN-
 
 // The everyday case: one result, already correct — identical outcome to before.
 ok(resultIndexForSku(['GRS-NAW-SU Spooring Ulangan'], 'GRS-NAW-SU') === 0, 'satu hasil yang sudah benar tetap dipilih');
+
+
+// ── plate spelling ────────────────────────────────────────────────────────
+// The vehicle picker is a prefix search over Turboly's STORED registration, so
+// a car stored "B 63 YNA" is invisible to a search for "B63YNA" — the push then
+// tried to ADD it and Turboly refused as duplicate (422), which is how B63YNA
+// died with "sudah terdaftar atas customer LAIN" while the intake form was
+// showing that exact plate among SUMI's three vehicles.
+const ok2 = ok;
+
+ok2(plateQueryFallback('B63YNA', 'B 63 YNA') === 'B 63 YNA', 'ejaan Turboly dengan spasi dicoba sebagai cadangan');
+ok2(plateQueryFallback('B63YNA', 'B-63-YNA') === 'B-63-YNA', 'ejaan dengan tanda hubung juga');
+ok2(plateQueryFallback('B63YNA', 'B63YNA') === null, 'ejaan yang sama → tidak perlu dicoba dua kali');
+ok2(plateQueryFallback('B63YNA', '') === null, 'tidak ada ejaan tersimpan → tidak ada cadangan');
+ok2(plateQueryFallback('B63YNA', null) === null, 'lookup gagal → tidak ada cadangan');
+// The guard that matters: it must never wander to a DIFFERENT car.
+ok2(plateQueryFallback('B63YNA', 'B63YNB') === null, 'plat yang BEDA tidak pernah dipakai');
+ok2(plateQueryFallback('B63YNA', 'B 63 YNA 1') === null, 'plat yang lebih panjang bukan mobil yang sama');
 
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);

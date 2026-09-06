@@ -30,6 +30,23 @@ class SkipInspections extends Error {}
  * "TPI-NAWJAS-PMX", and "GSM-NAW-PMG1 Periodic Maintenance GSM Grade 1" must
  * not be accepted for "GSM-NAW-PMG". Exported for tests.
  */
+/**
+ * The second spelling to ask the vehicle picker for, or null when one try is enough.
+ *
+ * The picker is a prefix search over Turboly's STORED registration, while our
+ * plate is normalised compact. "B 63 YNA" and "B63YNA" are the same car and the
+ * JSON lookup says so, but the picker only answers to its own spelling.
+ * Exported for tests.
+ */
+export function plateQueryFallback(reg: string, stored: string | null | undefined): string | null {
+  const a = (reg ?? '').trim();
+  const b = (stored ?? '').trim();
+  if (!b || b === a) return null;
+  // Only a different SPELLING of the same plate, never a different plate.
+  const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return norm(a) === norm(b) ? b : null;
+}
+
 export function resultIndexForSku(texts: ReadonlyArray<string>, sku: string): number {
   const want = (sku ?? '').toUpperCase().trim();
   if (!want) return -1;
@@ -650,7 +667,27 @@ export class RpaSink implements ServiceOrderSink {
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH effNama="${effNama}" effPhone="${effPhone}" custOk=${custOk} owner=${JSON.stringify(owner)}`);
     if (custOk) {
       await page.waitForTimeout(1200);
-      const vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
+      /**
+       * ATTACH TO THE CAR THAT IS ALREADY THERE.
+       *
+       * The picker is a prefix search over Turboly's stored registration, so
+       * our compact plate misses a car stored with spaces or a dash — and the
+       * miss is indistinguishable from "this customer has no such car". The
+       * old code then added the vehicle, Turboly refused it as a duplicate
+       * (422), and the SPK died as "sudah terdaftar atas customer LAIN" even
+       * though the customer on screen owned it: B63YNA/SUMI, whose intake form
+       * had listed that very plate among her three vehicles.
+       *
+       * resolveVehicleOriginalOwner already found the car — it matches on
+       * normalised text — so retry the picker with Turboly's OWN spelling
+       * before concluding anything.
+       */
+      let vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', reg);
+      const stored = plateQueryFallback(reg, owner?.registration);
+      if (!vehOk && stored) {
+        vehOk = await this.tryPickSelect2('#s2id_select2-input-vehicle', stored);
+        if (vehOk) this.notesExtra.push(`Plat dicocokkan dengan ejaan Turboly: "${stored}"`);
+      }
       if (vehOk) {
         attached = true;
         await page.waitForTimeout(1200);
@@ -1263,7 +1300,7 @@ export class RpaSink implements ServiceOrderSink {
 
   /** The ORIGINAL registration owns the car: lowest vehicle id among exact
    * plate matches, with that row's owner name/phone (inline in the JSON). */
-  private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string } | null> {
+  private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string; registration: string } | null> {
     try {
       const j = await this.lookupJson<{
         vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }>;
@@ -1275,7 +1312,14 @@ export class RpaSink implements ServiceOrderSink {
       const mine = raw
         .filter((v) => norm(v.registration) === norm(reg))
         .sort((a, b) => a.id - b.id);
-      return mine[0] ? { name: mine[0].name, phone: mine[0].phone } : null;
+      // registration is Turboly's OWN spelling of the plate. The JSON lookup
+      // matches on normalised text, but the select2 vehicle picker does not —
+      // it is a prefix search over the stored string. So a car stored as
+      // "B 63 YNA" is invisible to a search for "B63YNA", and the caller would
+      // conclude the vehicle does not exist and try to ADD it, which Turboly
+      // refuses with a 422 duplicate. Hand the stored form back so the caller
+      // can ask the picker a question it can answer.
+      return mine[0] ? { name: mine[0].name, phone: mine[0].phone, registration: mine[0].registration } : null;
     } catch (e) {
       // Logged out ≠ "plate unknown": the car would silently change owner.
       if (e instanceof TransientError) throw e;
