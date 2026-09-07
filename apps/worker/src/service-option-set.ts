@@ -30,6 +30,7 @@ interface Row { _id: string; defaultSku: string; options: Opt[] }
 async function main(): Promise<void> {
   const code = (arg('code') ?? '').trim().toUpperCase();
   const def = (arg('default') ?? '').trim().toUpperCase();
+  const rename = process.argv.includes('--rename');
   const adds = argAll('add')
     .map((s) => {
       const [sku, ...rest] = s.split('=');
@@ -65,7 +66,24 @@ async function main(): Promise<void> {
 
     const options = [...row.options];
     for (const a of adds) {
-      if (options.some((o) => o.sku.toUpperCase() === a.sku)) { console.log(`  · ${a.sku} sudah ada`); continue; }
+      const hit = options.find((o) => o.sku.toUpperCase() === a.sku);
+      if (hit) {
+        /**
+         * This label is what the counter reads in "Pekerjaan lain" AND what it
+         * types into the SPK, so it should match the catalogue: the carwash
+         * option said "Carwash" while Turboly calls the product "Car Wash".
+         * Only on --rename, so an ordinary re-run still cannot rewrite a label
+         * somebody chose.
+         */
+        const want = a.label ? `${a.sku} ${a.label}` : a.sku;
+        if (rename && hit.label !== want) {
+          console.log(`  ~ label diperbaiki: "${hit.label}" → "${want}"`);
+          hit.label = want;
+        } else {
+          console.log(`  · ${a.sku} sudah ada${hit.label !== want ? ' (pakai --rename untuk memperbaiki labelnya)' : ''}`);
+        }
+        continue;
+      }
       options.push({ sku: a.sku, label: a.label ? `${a.sku} ${a.label}` : a.sku });
       console.log(`  + ditambahkan: ${a.sku}${a.label ? ` (${a.label})` : ''}`);
     }

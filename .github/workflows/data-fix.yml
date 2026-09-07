@@ -28,7 +28,7 @@ on:
         type: string
         default: ''
       rename_sku:
-        description: 'KATALOG JASA — centang kalau SKU-nya SUDAH ADA dan NAMANYA yang mau diperbaiki. Nama ini yang dipakai untuk mencari produk di Turboly, jadi harus sama persis dengan katalog.'
+        description: 'PERBAIKI NAMA — centang kalau SKU-nya SUDAH ADA dan namanya/labelnya yang salah. Berlaku untuk nama di katalog mirror (dipakai mencari produk di Turboly) dan untuk label di dropdown "Pekerjaan lain".'
         type: boolean
         default: false
       service_code:
@@ -116,6 +116,7 @@ jobs:
           # branch-add.yml.
           ADD_SKUS: ${{ inputs.add_skus }}
           SERVICE_CODE: ${{ inputs.service_code }}
+          IN_RENAME2: ${{ inputs.rename_sku }}
           DEFAULT_SKU: ${{ inputs.default_sku }}
           ORDER_SKUS: ${{ inputs.order_skus }}
           SERVICE_CREATE: ${{ inputs.service_create }}
@@ -128,6 +129,7 @@ jobs:
           if [ -n "$DEFAULT_SKU" ]; then args+=(--default="$DEFAULT_SKU"); fi
           if [ -n "$ORDER_SKUS" ]; then args+=(--order="$ORDER_SKUS"); fi
           if [ "$SERVICE_CREATE" = "true" ]; then args+=(--create); fi
+          if [ "$IN_RENAME2" = "true" ]; then args+=(--rename); fi
           node --import tsx apps/worker/src/service-option-set.ts \
             --code="$SERVICE_CODE" \
             "${args[@]}"
