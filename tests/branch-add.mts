@@ -220,7 +220,25 @@ try {
         const value = m[1]!;
         ok(!value.includes('secrets.'), `${f}: ${key} tidak dibaca dari secret (${value})`);
         if (key === 'TURBOLY_BASE_URL') {
-          ok(/^https:\/\/\S+$/.test(value), `${f}: ${key} berupa URL utuh (${value})`);
+          /**
+           * The hazard this guards is an UNSET value: a missing secret expands
+           * to '' and only surfaces as "Cannot navigate to invalid URL". A
+           * `choice` input cannot be empty — every option is spelled out and it
+           * has a default — so a reference to one is as safe as a literal, and
+           * it is how a probe is pointed at sandbox instead of live.
+           */
+          const ref = /^\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}$/.exec(value);
+          if (ref) {
+            const decl = new RegExp(`^\\s{6}${ref[1]}:\\n([\\s\\S]*?)(?=^\\s{6}\\S|^\\S)`, 'm').exec(yml)?.[1] ?? '';
+            const opts = /options:\s*\[([^\]]*)\]/.exec(decl)?.[1] ?? '';
+            const values = opts.split(',').map((o) => o.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+            ok(/type:\s*choice/.test(decl), `${f}: ${key} dari input ${ref[1]} yang bertipe choice`);
+            ok(values.length > 0 && values.every((v) => /^https:\/\/\S+$/.test(v)),
+              `${f}: setiap pilihan ${ref[1]} berupa URL utuh (${values.join(', ')})`);
+            ok(/default:\s*['"]?https:\/\//.test(decl), `${f}: ${ref[1]} punya default berupa URL`);
+          } else {
+            ok(/^https:\/\/\S+$/.test(value), `${f}: ${key} berupa URL utuh (${value})`);
+          }
         } else {
           ok(/^\S+$/.test(value), `${f}: ${key} terisi (${value})`);
         }

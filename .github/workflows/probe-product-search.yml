@@ -23,6 +23,15 @@ on:
         description: 'Store Turboly yang dipakai untuk membuka form'
         type: string
         default: 'Nawilis Bekasi'
+      customers:
+        description: 'CEK DUPLIKAT: nomor telepon — hitung berapa record customer yang memakainya'
+        type: string
+        default: ''
+      base:
+        description: 'Turboly mana'
+        type: choice
+        options: ['https://live.turboly.com', 'https://sandbox.turboly.com']
+        default: 'https://live.turboly.com'
 
 concurrency:
   group: turboly-push
@@ -124,12 +133,14 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
-          TURBOLY_BASE_URL: https://live.turboly.com
+          TURBOLY_BASE_URL: ${{ inputs.base }}
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           IN_Q: ${{ inputs.q }}
           IN_STORE: ${{ inputs.store }}
+          IN_CUSTOMERS: ${{ inputs.customers }}
         run: |
           node --import tsx apps/worker/src/probe-product-search.ts \
             --q="$IN_Q" \
-            --store="$IN_STORE"
+            --store="$IN_STORE" \
+            --customers="$IN_CUSTOMERS"

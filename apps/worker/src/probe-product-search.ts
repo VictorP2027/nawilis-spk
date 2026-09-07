@@ -21,12 +21,49 @@ import { config } from './config.js';
  *   node --import tsx apps/worker/src/probe-product-search.ts --q="Periodic Maintenance"
  */
 const arg = (k: string): string | undefined => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3);
-const QUERIES = (arg('q') ?? 'Periodic Maintenance|TPI-NAWJAS-PM').split('|').map((s) => s.trim()).filter(Boolean);
+const QUERIES = (arg('q') ?? '').split('|').map((s) => s.trim()).filter(Boolean);
+/** --customers=<phone>: how many customer records carry this number? */
+const CUSTOMERS = (arg('customers') ?? '').trim();
 const STORE = arg('store') ?? 'Nawilis Bekasi';
 
 async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   console.log(`base=${config.turbolyBaseUrl} db=${config.mongoDb}`);
+
+  // --customers: the duplicate check. Counts the records Turboly holds for one
+  // number, which is the only thing that says whether a push ATTACHED to an
+  // existing customer or quietly registered a second one.
+  if (CUSTOMERS) {
+    const key = CUSTOMERS.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+    const seen = new Map<number, { name: string; phone: string }>();
+    const session0 = new TurbolySession({
+      baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state',
+      userAgentSuffix: 'probe-cust', branchCode: 'PROBE',
+    });
+    await session0.start();
+    await session0.ensureLoggedIn();
+    const pg = session0.page_();
+    try {
+      for (const t of ['0' + key, key, '62' + key, '+62' + key]) {
+        const j = (await pg.evaluate(async (u) => {
+          const r = await fetch(u, { credentials: 'include' });
+          return r.ok ? await r.json() : null;
+        }, `/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`)) as
+          { customers?: Array<{ id: number; name?: unknown; phone?: unknown }> } | null;
+        for (const c of j?.customers ?? []) {
+          const cp = String(c.phone ?? '').replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+          if (cp === key) seen.set(c.id, { name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+        }
+      }
+      console.log(`\n— customer dengan nomor ${CUSTOMERS} (key ${key}) —`);
+      for (const [id, c] of seen) console.log(`  id=${id}  "${c.name}"  ${c.phone}`);
+      console.log(`  TOTAL: ${seen.size} ${seen.size === 1 ? '→ tidak ada duplikat ✓' : seen.size === 0 ? '→ tidak ditemukan' : '→ DUPLIKAT!'}`);
+    } finally {
+      await session0.dispose().catch(() => {});
+      await close().catch(() => {});
+    }
+    process.exit(seen.size > 1 ? 1 : 0);
+  }
 
   // 1. What the MIRROR thinks — this is what becomes the search term.
   const mirror = await collections.tbServiceProducts()
