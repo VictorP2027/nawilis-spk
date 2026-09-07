@@ -502,7 +502,6 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const partsOnly = jobsOk && !freeText && orderedCodes.every((c) => partCodes.has(c));
   const estimasiOk = /^\d+$/.test(estimasi.trim()) && Number(estimasi) > 0;
   const fuelOk = fuelMode === 'fuel' ? fuelPct !== null : /^\d{1,3}$/.test(evPct.trim()) && Number(evPct) <= 100;
-  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && !partsOnly && fuelOk && vinOk && !submitting;
   const plateNorm = plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const plateBad = plate.trim() !== '' && !/^[A-Z]{1,2}\d{1,4}[A-Z]{0,3}$/.test(plateNorm);
   const kmValQ = /\d/.test(km) ? Number(km.replace(/[.\s]/g, '')) : NaN;
@@ -511,6 +510,33 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   const [custVehicles, setCustVehicles] = useState<Array<{ plate: string; merk: string | null; tipe: string | null; tahun: number | null; warna: string | null }>>([]);
   const [custHint, setCustHint] = useState<string | null>(null);
   const [regName, setRegName] = useState<string | null>(null);
+  /** 'turboly' only when the ERP itself answered — the Mongo fallback cannot
+   *  say which plates the ERP holds, so it must never drive the warning below. */
+  const [custSource, setCustSource] = useState<string | null>(null);
+
+  /**
+   * THE PLATE IS THE ONLY THING THAT RELIABLY NAMES A CUSTOMER.
+   *
+   * When the push meets a plate Turboly does not hold, it has to identify the
+   * customer from the typed name and phone instead — and for a COMPANY that
+   * regularly fails (Turboly holds "PT. ANGKASA PURA LOGISTIK", the counter
+   * types "ANGKASA PURA"), so Turboly is handed a customer it thinks is new
+   * and the company ends up with two records and a split history. Nothing can
+   * merge them afterwards.
+   *
+   * The counter can prevent it in thirty seconds, while the car is still here:
+   * add the plate to that customer in Turboly first. This says so at the only
+   * moment it is cheap to act on.
+   */
+  const custPlates = new Set(custVehicles.map((v) => (v.plate ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')));
+  const plateNotOnRecord =
+    custSource === 'turboly' && !!custHint && plateNorm.length >= 4 && !custPlates.has(plateNorm);
+  // Legal-form words are what the ERP spelling adds or drops, so they mark the
+  // records this actually goes wrong for.
+  const looksCorporate = /\b(PT|CV|UD|PD|TBK|PERSERO|KOPERASI)\b/i.test(`${regName ?? ''} ${nama}`);
+  const [plateRiskAck, setPlateRiskAck] = useState(false);
+  const plateRiskBlocks = plateNotOnRecord && looksCorporate && !plateRiskAck;
+  const canSubmit = !!branch && waOk && advisorOk && salespersonOk && alamatOk && plateOk && namaOk && merkOk && warnaOk && kmOk && tahunOk && tipeOk && estimasiOk && jobsOk && !partsOnly && fuelOk && vinOk && !plateRiskBlocks && !submitting;
   useEffect(() => {
     if (waDigits.length < 9) { setCustVehicles([]); setCustHint(null); return; }
     let live = true;
@@ -526,11 +552,12 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
             const vs = d.vehicles ?? [];
             setCustVehicles(vs);
             setCustHint(`${d.customer.nama} — ${vs.length} kendaraan`);
+            setCustSource(typeof d.source === 'string' ? d.source : null);
             const v = vs[0];
             if (v && !plate && !merk) { setPlate(v.plate); setMerk(v.merk ?? ''); setTipe(v.tipe ?? ''); setTahun(v.tahun ? String(v.tahun) : ''); setWarna(v.warna ?? ''); }
-          } else { setCustVehicles([]); setCustHint(null); setRegName(null); }
+          } else { setCustVehicles([]); setCustHint(null); setRegName(null); setCustSource(null); }
         })
-        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); } });
+        .catch(() => { if (live) { setCustVehicles([]); setCustHint(null); setCustSource(null); } });
     }, 500);
     return () => { live = false; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -917,6 +944,25 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {!namaOk && <div className="req-note">⚠ wajib diisi</div>}
           {regName && nama.trim() !== '' && nama.trim().toUpperCase() !== regName.toUpperCase() && (
             <div className="warn-note">⚠ Nomor ini terdaftar atas &quot;{regName}&quot; — order Turboly memakai nama terdaftar.</div>
+          )}
+          {plateNotOnRecord && (
+            <div className="warn-note">
+              ⚠ Plat <b>{plateNorm}</b> belum terdaftar pada {regName ? <b>{regName}</b> : 'customer ini'} di Turboly.
+              {looksCorporate
+                ? ' Untuk customer perusahaan, mengirim sekarang biasanya membuat CUSTOMER BARU di Turboly — datanya jadi terpecah dan tidak bisa digabung lagi.'
+                : ' Mobil baru untuk customer lama memang begini; kirim seperti biasa.'}
+              {looksCorporate && (
+                <>
+                  <div style={{ marginTop: 6 }}>
+                    Cara aman: buka {regName ? `"${regName}"` : 'customer itu'} di Turboly, tambahkan plat <b>{plateNorm}</b> ke datanya, lalu kirim SPK ini.
+                  </div>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 8, fontWeight: 600 }}>
+                    <input type="checkbox" className="chk" checked={plateRiskAck} onChange={(e) => setPlateRiskAck(e.target.checked)} />
+                    <span>Saya sudah menambahkan platnya di Turboly, atau memang customer baru — kirim saja.</span>
+                  </label>
+                </>
+              )}
+            </div>
           )}
           <div className="row" style={{ marginTop: 10 }}>
             <input value={alamat} onChange={(e) => setAlamat(e.target.value)} placeholder="Alamat — WAJIB" style={!alamatOk ? { borderColor: '#dc2626' } : undefined} />

@@ -142,5 +142,44 @@ console.log('H. carwash-only: a job picked in "Pekerjaan lain" counts');
   }
 }
 
+
+// ── Duplicate-customer guard on the SPK form ──────────────────────────────
+// A plate Turboly does not hold forces the push to identify the customer from
+// the typed name instead, which for a COMPANY regularly creates a second
+// record that can never be merged back. The form warns while the car is still
+// at the counter. Driven from the REAL expressions, not a copy of them.
+{
+  const src = readFileSync(new URL('../apps/web/app/page.tsx', import.meta.url), 'utf8');
+  const grab = (name: string): string => {
+    const m = new RegExp(`const ${name} =([^;]+);`, 's').exec(src);
+    if (!m) throw new Error(`aturan ${name} tidak ditemukan di page.tsx`);
+    return m[1]!;
+  };
+  // eslint-disable-next-line no-new-func
+  const notOnRecord = new Function('custSource', 'custHint', 'plateNorm', 'custPlates',
+    `return (${grab('plateNotOnRecord')});`) as (a: string | null, b: string | null, c: string, d: Set<string>) => boolean;
+  // eslint-disable-next-line no-new-func
+  const corporate = new Function('regName', 'nama',
+    `return (${grab('looksCorporate')});`) as (a: string | null, b: string) => boolean;
+
+  const SUMI = new Set(['A29SJP', 'B63YNA']);
+  ok(notOnRecord('turboly', 'SUMI — 2 kendaraan', 'B1234XY', SUMI), 'plat asing pada customer yang dikenal → diperingatkan');
+  ok(!notOnRecord('turboly', 'SUMI — 2 kendaraan', 'A29SJP', SUMI), 'plat yang memang miliknya → tidak diganggu');
+  // The Mongo fallback knows our history, not the ERP's vehicle list. Warning
+  // from it would be a guess, and a guess that blocks the counter.
+  ok(!notOnRecord('mongo', 'SUMI — 2 kendaraan', 'B1234XY', SUMI), 'jawaban dari Mongo tidak pernah memicu peringatan');
+  ok(!notOnRecord(null, null, 'B1234XY', new Set()), 'customer tidak dikenal → tidak ada peringatan');
+  ok(!notOnRecord('turboly', 'SUMI — 2 kendaraan', 'B12', SUMI), 'plat setengah diketik belum dinilai');
+
+  ok(corporate('PT. ANGKASA PURA LOGISTIK', ''), 'PT dikenali sebagai perusahaan');
+  ok(corporate(null, 'CV SINAR JAYA'), 'CV juga');
+  ok(corporate('KOPERASI KARYAWAN', ''), 'koperasi juga');
+  ok(!corporate('SUMI', 'SUMI'), 'orang biasa bukan perusahaan');
+  // The trap: a person whose name merely CONTAINS those letters.
+  ok(!corporate('SEPTIAN', 'SEPTIAN'), '"SEPTIAN" tidak dikira PT');
+  ok(!corporate('CVETKOVIC', 'CVETKOVIC'), '"CVETKOVIC" tidak dikira CV');
+  ok(!corporate('UDIN', 'UDIN'), '"UDIN" tidak dikira UD');
+}
+
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);
