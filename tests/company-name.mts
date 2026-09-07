@@ -67,5 +67,43 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(drift === 0, `salinan di browser sama persis dengan companyNameKey (${NAMES.length} nama diuji)`);
 }
 
+// ── name-only matching must never take a PERSON ──────────────────────────
+// Regression, live: an SPK for LANA (+6285781530528) attached to a DIFFERENT
+// LANA (628119188661) on SRO/TA12/26090099, because a phone the lookup could
+// not answer fell through to a NAME search and "LANA" matched "LANA".
+// Wrong customer is worse than a duplicate — the order, the invoice and the
+// WhatsApp all go to a stranger. Without phone proof, only a row TURBOLY marks
+// as a company may be taken.
+{
+  const src = readFileSync(new URL('../packages/core/src/turboly/rpaSink.ts', import.meta.url), 'utf8');
+  const m = /var isCompany = function \(rowName\) \{([\s\S]*?)\};/.exec(src);
+  ok(!!m, 'penjaga isCompany ada di rpaSink');
+  const body = (m?.[1] ?? '').replace(/\\\\/g, '\\');
+  // eslint-disable-next-line no-new-func
+  const isCompany = new Function('rowName', body) as (n: string) => boolean;
+
+  // These may be attached to on a name alone.
+  ok(isCompany('PT. ANGKASA PURA LOGISTIK'), 'PT. dikenali sebagai perusahaan');
+  ok(isCompany('PT ANGKASA PURA'), 'PT tanpa titik juga');
+  ok(isCompany('CV SINAR JAYA'), 'CV juga');
+  ok(isCompany('SUMBER MAKMUR TBK'), 'Tbk di belakang juga');
+  ok(isCompany('UD BAROKAH'), 'UD juga');
+  ok(isCompany('KOPERASI KARYAWAN NAWILIS'), 'koperasi juga');
+
+  // These must NEVER be attached to on a name alone.
+  ok(!isCompany('LANA'), 'LANA bukan perusahaan — inilah bug-nya');
+  ok(!isCompany('SUMI'), 'SUMI bukan perusahaan');
+  ok(!isCompany('BUDI SANTOSO'), 'nama orang lengkap pun bukan');
+  ok(!isCompany('PTERODAKTIL'), 'PTERODAKTIL bukan PT');
+  ok(!isCompany('CVETKOVIC'), 'CVETKOVIC bukan CV');
+  ok(!isCompany('UDIN'), 'UDIN bukan UD');
+  // PDAM is a company, but the rule only sees a legal form as a WHOLE word, so
+  // it is not detected — and that errs the safe way: the push creates a record
+  // rather than risking the wrong one. Only 'PD' standing alone counts.
+  ok(!isCompany('PDAM JAYA'), 'PDAM tidak dibaca sebagai PD — aman, bukan sempurna');
+  ok(isCompany('PD PASAR JAYA'), 'PD sebagai kata utuh memang dihitung');
+  ok(!isCompany(''), 'kosong bukan perusahaan');
+}
+
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);

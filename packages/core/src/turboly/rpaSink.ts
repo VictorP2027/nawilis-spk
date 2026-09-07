@@ -1378,6 +1378,8 @@ export class RpaSink implements ServiceOrderSink {
     };
     /** Whose name the picked row must carry. Set when a record was proven. */
     let expectName = '';
+    /** No phone proof: only a row Turboly itself marks as a COMPANY may be taken. */
+    let nameOnly = false;
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
@@ -1389,7 +1391,22 @@ export class RpaSink implements ServiceOrderSink {
        * thing that could still have identified it, was never searched.
        */
       if (orig === null) {
-        if (nama.trim().length >= 3) queries.push(...nameQueries(nama));
+        /**
+         * NAME ALONE IS NOT IDENTITY FOR A PERSON.
+         *
+         * Searching the name here is what rescues a company whose number the
+         * lookup cannot answer. But "LANA" is not one customer — and this path
+         * attached an SPK to a DIFFERENT LANA, with her phone number, on
+         * SRO/TA12/26090099. Wrong customer is worse than the duplicate this
+         * was written to prevent: the order, the invoice and the WhatsApp all
+         * go to a stranger.
+         *
+         * So the row we land on must prove it is a COMPANY, by carrying a legal
+         * form in the name TURBOLY holds — never in the name that was typed,
+         * because the whole problem is that the counter types the short form.
+         * A person falls through to the old behaviour and is created.
+         */
+        if (nama.trim().length >= 3) { queries.push(...nameQueries(nama)); nameOnly = true; }
       } else if (orig) {
         /**
          * The PICKER is the same select2 endpoint that cannot search a "+"
@@ -1417,7 +1434,7 @@ export class RpaSink implements ServiceOrderSink {
       // The expected name is the one that produced this query: when the record
       // was proven by phone, that is the ERP's own spelling, and checking the
       // typed spelling instead is why the row we had just found was rejected.
-      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama)) return true;
+      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama, nameOnly)) return true;
     }
     /**
      * PROVEN TO EXIST, BUT UNPICKABLE — never the same thing as "not there".
@@ -1438,7 +1455,7 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** One attempt: type `query` into the customer select2 and pick the row that matches. */
-  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string): Promise<boolean> {
+  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string, requireCompany = false): Promise<boolean> {
     const page = this.session.page_();
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
@@ -1492,7 +1509,14 @@ export class RpaSink implements ServiceOrderSink {
             var f = (t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
             return f.replace(/^(PT|CV|UD|PD|NV|FA)(\s+|$)/, '').trim();
           };
+          var requireCompany = ${JSON.stringify(requireCompany)};
+          // Turboly's own spelling has to say "company". A person's name is not
+          // an identifier — see SRO/TA12/26090099.
+          var isCompany = function (rowName) {
+            return /(^|\s)(PT|CV|UD|PD|NV|FA|TBK|PERSERO|KOPERASI)(\s|$|\.)/i.test(rowName || '');
+          };
           var nameHit = function (rowName) {
+            if (requireCompany && !isCompany(rowName)) return false;
             if (wantName && rowName === wantName) return true;
             return !!wantKey && keyOf(rowName) === wantKey;
           };
