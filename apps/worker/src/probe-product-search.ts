@@ -44,16 +44,34 @@ async function main(): Promise<void> {
     await session0.ensureLoggedIn();
     const pg = session0.page_();
     try {
-      for (const t of ['0' + key, key, '62' + key, '+62' + key]) {
-        const j = (await pg.evaluate(async (u) => {
-          const r = await fetch(u, { credentials: 'include' });
-          return r.ok ? await r.json() : null;
-        }, `/lookup/customers.json?search_term=${encodeURIComponent(t)}&page_limit=30&page=1`)) as
-          { customers?: Array<{ id: number; name?: unknown; phone?: unknown }> } | null;
-        for (const c of j?.customers ?? []) {
-          const cp = String(c.phone ?? '').replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
-          if (cp === key) seen.set(c.id, { name: String(c.name ?? ''), phone: String(c.phone ?? '') });
+      /**
+       * The customers LIST, not lookup/customers.json — the select2 lookup
+       * cannot search a phone in any spelling (measured on live, and the same
+       * on sandbox: it answered 0 for a number that exists). q[phone_start]
+       * normalises server-side, which is why findCustomerByPhoneAnyFormat uses
+       * it, so the probe has to ask the same way production does.
+       */
+      const rows = (await pg.evaluate(async (k) => {
+        let res = await fetch('/customers?q%5Bphone_start%5D=' + encodeURIComponent(k), { credentials: 'include' });
+        if (!res.ok) res = await fetch('/customers?q%5Bphone_cont%5D=' + encodeURIComponent(k), { credentials: 'include' });
+        if (!res.ok) return [];
+        const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+        const out: Array<{ id: number; cells: string[] }> = [];
+        for (const tr of Array.from(doc.querySelectorAll('table tr'))) {
+          const a = tr.querySelector('a[href*="/customers/"]');
+          if (!a) continue;
+          const id = parseInt((a.getAttribute('href') || '').split('/customers/')[1] ?? '', 10);
+          if (!id) continue;
+          out.push({ id, cells: Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim()).filter(Boolean) });
         }
+        return out;
+      }, key)) as Array<{ id: number; cells: string[] }>;
+      for (const r of rows) {
+        const phoneCell = r.cells.find((c) => {
+          const d = c.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+          return d === key;
+        });
+        if (phoneCell) seen.set(r.id, { name: r.cells[0] ?? '', phone: phoneCell });
       }
       console.log(`\n— customer dengan nomor ${CUSTOMERS} (key ${key}) —`);
       for (const [id, c] of seen) console.log(`  id=${id}  "${c.name}"  ${c.phone}`);
