@@ -291,6 +291,43 @@ export function parseWa(raw: string): WaParse {
 // Brand normalisation (Jaro-Winkler ≥ 0.92 only)
 // ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * A company name reduced to the part that identifies it.
+ *
+ * Turboly and the counter disagree about the legal form and the punctuation,
+ * never about the name itself: the ERP holds "PT. ANGKASA PURA LOGISTIK" and
+ * the counter types "ANGKASA PURA LOGISTIK". Comparing the raw strings made
+ * those two different customers, and the company ended up with two records
+ * that cannot be merged.
+ *
+ * Only a LEADING legal form is dropped, and nothing else is touched:
+ *
+ *   "PT. ANGKASA PURA LOGISTIK" -> "ANGKASA PURA LOGISTIK"
+ *   "ANGKASA PURA LOGISTIK"     -> "ANGKASA PURA LOGISTIK"   (same customer)
+ *   "PT SUMBER MAKMUR TBK"      -> "SUMBER MAKMUR TBK"
+ *   "SUMBER MAKMUR"             -> "SUMBER MAKMUR"           (NOT the same:
+ *                                   Tbk is a different legal entity)
+ *   "PT SINAR JAYA ABADI"       -> "SINAR JAYA ABADI"
+ *   "PT SINAR JAYA"             -> "SINAR JAYA"              (NOT the same)
+ *
+ * The last two pairs are the point: this is only ever used for EQUALITY, never
+ * as a prefix test, so a longer company name can never swallow a shorter one.
+ */
+// The `$` arm matters: a name that is ONLY a legal form has no identifying
+// part, so it must reduce to '' — and an empty key is never treated as a match.
+const LEADING_LEGAL_FORM = /^(PT|CV|UD|PD|NV|FA)(\s+|$)/;
+
+export function companyNameKey(name: string): string {
+  const flat = (name ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+  // Once only: "PT PT X" is a typo, not two legal forms, and stripping twice
+  // would make it equal to "X".
+  return flat.replace(LEADING_LEGAL_FORM, '').trim();
+}
+
 export function jaroWinkler(a: string, b: string): number {
   const s1 = a.toUpperCase();
   const s2 = b.toUpperCase();

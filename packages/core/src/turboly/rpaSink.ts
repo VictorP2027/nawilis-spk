@@ -4,7 +4,7 @@ import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControl
 import { TurbolySession, AuthChallengeError, TenantOutageError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload, AppendTarget, AppendResult } from './sink.js';
 import type { SpkDoc } from '../types.js';
-import { jaroWinkler, canonPhoneKey, e164Phone, localPhone } from '../indonesia.js';
+import { jaroWinkler, canonPhoneKey, e164Phone, localPhone, companyNameKey } from '../indonesia.js';
 import { matchPersonLabel } from '../personMatch.js';
 
 /**
@@ -1364,11 +1364,33 @@ export class RpaSink implements ServiceOrderSink {
   private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
     const queries: string[] = [];
+    /**
+     * The picker is a PREFIX search over the stored name, so asking for
+     * "ANGKASA PURA" cannot find "PT. ANGKASA PURA" — the ERP's spelling has
+     * to be guessed. Widening the SEARCH is safe; what must stay strict is the
+     * ACCEPT, which is an exact match on companyNameKey and never a prefix.
+     */
+    const nameQueries = (n: string): string[] => {
+      const raw = n.trim();
+      const core = companyNameKey(raw);
+      if (!core) return raw ? [raw] : [];
+      return [...new Set([raw, core, `PT ${core}`, `PT. ${core}`, `CV ${core}`, `CV. ${core}`])];
+    };
+    /** Whose name the picked row must carry. Set when a record was proven. */
+    let expectName = '';
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
-      if (orig === null) return false; // phone genuinely not in Turboly → create new
-      if (orig) {
+      /**
+       * A phone we cannot find is a verdict about the NUMBER, not the person.
+       * Returning here is what made every corporate duplicate: the company IS
+       * in Turboly under a name the counter spells differently, and its number
+       * is stored in a form the lookup cannot answer — so the name, the one
+       * thing that could still have identified it, was never searched.
+       */
+      if (orig === null) {
+        if (nama.trim().length >= 3) queries.push(...nameQueries(nama));
+      } else if (orig) {
         /**
          * The PICKER is the same select2 endpoint that cannot search a "+"
          * number, so the stored form is worthless as a query when it starts
@@ -1381,6 +1403,7 @@ export class RpaSink implements ServiceOrderSink {
          * the canonical key, so a common first name cannot adopt the wrong
          * person.
          */
+        expectName = orig.name.trim();
         const stored = orig.phone.trim();
         if (stored.startsWith('+')) queries.push(orig.name.trim(), localPhone(phone), stored);
         else queries.push(stored, orig.name.trim());
@@ -1388,10 +1411,28 @@ export class RpaSink implements ServiceOrderSink {
         queries.push(e164Phone(phone), localPhone(phone), nama.trim()); // endpoint hiccup
       }
     } else if (nama) {
-      queries.push(nama.trim());
+      queries.push(...nameQueries(nama));
     }
     for (const q of [...new Set(queries.filter((x) => x && x.length >= 3))]) {
-      if (await this.pickCustomerInSelect2(q, phoneKey, nama)) return true;
+      // The expected name is the one that produced this query: when the record
+      // was proven by phone, that is the ERP's own spelling, and checking the
+      // typed spelling instead is why the row we had just found was rejected.
+      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama)) return true;
+    }
+    /**
+     * PROVEN TO EXIST, BUT UNPICKABLE — never the same thing as "not there".
+     *
+     * The caller creates a customer when this returns false, so returning it
+     * here would knowingly register a second record for someone the lookup had
+     * just identified by id. That duplicate cannot be merged back and splits
+     * the company's history for good; a parked SPK costs a minute. So say what
+     * is wrong and let a human finish it.
+     */
+    if (expectName) {
+      throw new DataError(
+        `Customer "${expectName}" ADA di Turboly tapi tidak bisa dipilih otomatis — order tidak dibuat, ` +
+        'supaya tidak terbentuk customer ganda. Buka customer itu di Turboly, tambahkan plat kendaraan ini ke datanya, lalu tekan "Coba lagi".',
+      );
     }
     return false;
   }
@@ -1443,6 +1484,18 @@ export class RpaSink implements ServiceOrderSink {
         `(() => {
           var want = ${JSON.stringify(phoneKey)};
           var wantName = ${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\s+/g, ' '))};
+          // Same rule as companyNameKey() in indonesia.ts, inlined because this
+          // runs in the page. EQUALITY only — never a prefix — so a longer
+          // company name can never swallow a shorter one.
+          var wantKey = ${JSON.stringify(companyNameKey(nama ?? ''))};
+          var keyOf = function (t) {
+            var f = (t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+            return f.replace(/^(PT|CV|UD|PD|NV|FA)(\s+|$)/, '').trim();
+          };
+          var nameHit = function (rowName) {
+            if (wantName && rowName === wantName) return true;
+            return !!wantKey && keyOf(rowName) === wantKey;
+          };
           var lis = Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
             .filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); });
           for (var i = 0; i < lis.length; i++) {
@@ -1451,17 +1504,17 @@ export class RpaSink implements ServiceOrderSink {
               if (text.replace(/\\D/g, '').indexOf(want) >= 0) return i;
             } else if (wantName) {
               var name = (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
-              if (name === wantName) return i;
+              if (nameHit(name)) return i;
             }
           }
           // Digit proof failed on every row. If live renders rows without the
           // phone, an EXACT full-name match is still identity (never a prefix,
           // so FRANK cannot adopt FRANKI).
-          if (want && wantName) {
+          if (want && (wantName || wantKey)) {
             for (var k = 0; k < lis.length; k++) {
               var t2 = lis[k].innerText || '';
               var n2 = (t2.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
-              if (n2 === wantName) return k;
+              if (nameHit(n2)) return k;
             }
           }
           return -1;
