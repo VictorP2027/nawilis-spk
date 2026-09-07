@@ -1994,7 +1994,40 @@ export class RpaSink implements ServiceOrderSink {
       for (let i = 0; i < 25 && (await page.locator(rowSel).count()) <= before; i++) await page.waitForTimeout(200);
       if ((await page.locator(rowSel).count()) <= before) throw new DataError(`service row did not appear for "${line.serviceName || line.expectedSku}"`);
       await page.waitForTimeout(400);
-      await this.pickSelect2Locator(page.locator(rowSel).last(), line.serviceName || line.expectedSku, line.expectedSku);
+      /**
+       * THE SKU IS THE FALLBACK, BECAUSE THE NAME IS OURS AND THE SKU IS THEIRS.
+       *
+       * The query is the MIRROR's product name, and the mirror is a copy that
+       * can be a word out of step with the catalogue: live holds CWS-NAW-CWS1
+       * "Car Wash", our mirror said "Carwash", the search returned nothing and
+       * the SPK died on `no Turboly match for "Carwash"` — for a product that
+       * was sitting right there.
+       *
+       * The SKU cannot drift that way: it is Turboly's own key, and searching
+       * it returned exactly one row. So when the name finds nothing, ask for
+       * the code before giving up.
+       */
+      const productQueries = [...new Set([line.serviceName, line.expectedSku].filter((q): q is string => !!q && q.trim() !== ''))];
+      let productPicked = false;
+      for (const q of productQueries) {
+        try {
+          await this.pickSelect2Locator(page.locator(rowSel).last(), q, line.expectedSku);
+          productPicked = true;
+          if (q !== productQueries[0]) this.notesExtra.push(`Jasa dicocokkan lewat kode "${q}" — nama katalog kita ("${productQueries[0]}") tidak ditemukan di Turboly`);
+          break;
+        } catch (e) {
+          // A kicked session or a slow search is not "this product is absent".
+          if (e instanceof TransientError) throw e;
+          await page.keyboard.press('Escape').catch(() => {});
+          await page.waitForTimeout(250);
+        }
+      }
+      if (!productPicked) {
+        throw new DataError(
+          `Jasa tidak ditemukan di Turboly — dicari sebagai ${productQueries.map((q) => `"${q}"`).join(' lalu ')}. ` +
+          'Periksa nama/SKU jasa ini di katalog Turboly.',
+        );
+      }
       await page.waitForTimeout(600);
       // The append path stamps the token onto EVERY service line it adds, not
       // just the first. VERIFIED in sandbox 2026-08-18: Turboly keeps a typed

@@ -27,6 +27,10 @@ on:
         description: 'KATALOG JASA — nama persis seperti di Turboly, mis. High Speed Balance'
         type: string
         default: ''
+      rename_sku:
+        description: 'KATALOG JASA — centang kalau SKU-nya SUDAH ADA dan NAMANYA yang mau diperbaiki. Nama ini yang dipakai untuk mencari produk di Turboly, jadi harus sama persis dengan katalog.'
+        type: boolean
+        default: false
       service_code:
         description: 'VARIAN JASA — kode jasa, mis. BALANCING_ON_CAR (kosongkan kalau mau tambah tipe kendaraan)'
         type: string
@@ -93,9 +97,12 @@ jobs:
           MONGODB_DB: spk
           IN_SKU: ${{ inputs.product_sku }}
           IN_NAME: ${{ inputs.product_name }}
+          IN_RENAME: ${{ inputs.rename_sku }}
         run: |
+          RENAME_FLAG=""
+          if [ "$IN_RENAME" = "true" ]; then RENAME_FLAG="--rename"; fi
           node --import tsx apps/worker/src/service-product-add.ts \
-            --sku="$IN_SKU" --name="$IN_NAME"
+            --sku="$IN_SKU" --name="$IN_NAME" $RENAME_FLAG
 
       - name: Set service variants
         if: inputs.service_code != ''

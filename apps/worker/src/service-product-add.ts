@@ -28,6 +28,7 @@ const arg = (k: string): string | undefined => process.argv.find((a) => a.starts
 async function main(): Promise<void> {
   const sku = (arg('sku') ?? '').trim().toUpperCase();
   const name = (arg('name') ?? '').trim();
+  const rename = process.argv.includes('--rename');
   const tax = (arg('tax') ?? 'PPN').trim();
   if (!sku || !name) {
     console.error('butuh --sku=SKU --name="Nama Jasa"');
@@ -39,7 +40,21 @@ async function main(): Promise<void> {
     const col = collections.tbServiceProducts();
     const existing = await col.findOne({ $or: [{ sku }, { _id: sku }] });
     if (existing) {
-      console.log(`· ${sku} sudah ada di mirror (${existing.name}) — tidak diubah`);
+      /**
+       * The name in this mirror is what the pusher SEARCHES Turboly for, so a
+       * copy that is a word out of step with the catalogue makes the product
+       * unfindable: live holds CWS-NAW-CWS1 "Car Wash", this said "Carwash",
+       * and the SPK died on `no Turboly match for "Carwash"`. Correcting it has
+       * to be possible — but only when asked for, so a re-run of the teach
+       * command still cannot quietly rewrite a name somebody chose.
+       */
+      if (!rename || existing.name === name) {
+        console.log(`· ${sku} sudah ada di mirror (${existing.name}) — tidak diubah${existing.name === name ? '' : ' (pakai --rename untuk memperbaiki namanya)'}`);
+        return;
+      }
+      await col.updateOne({ _id: existing._id }, { $set: { name } });
+      console.log(`✓ ${sku} namanya diperbaiki: "${existing.name}" → "${name}"`);
+      console.log('  Nama ini yang dipakai untuk MENCARI produk di Turboly — samakan persis dengan katalog.');
       return;
     }
     const newest = await col.find({}, { projection: { syncedAt: 1 }, sort: { syncedAt: -1 }, limit: 1 }).toArray();
