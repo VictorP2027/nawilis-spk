@@ -22,6 +22,10 @@ on:
         description: 'Upload RPA screenshots on failure (contains customer PII — public repo)'
         type: boolean
         default: false       # + a manual "Run workflow" button
+      debug_match:
+        description: 'Cetak setiap keputusan pencocokan customer/kendaraan (PUSH_DEBUG_MATCH). Nama & nomor customer akan tampil di log.'
+        type: boolean
+        default: false
       repair_merge_id:
         description: 'Perbaiki SATU gabungan yang setengah jadi: isi spkId dokumen yang sudah digabung (mis. Cek n Go). Menambahkan HANYA baris yang belum ada di SO-nya + daftar inspeksi. Kosongkan untuk push biasa.'
         type: string
@@ -129,6 +133,7 @@ jobs:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
           TURBOLY_BASE_URL: https://live.turboly.com
+          PUSH_DEBUG_MATCH: ${{ inputs.debug_match == true && '1' || '' }}
           TURBOLY_USERNAME: ${{ secrets.TURBOLY_USERNAME }}
           TURBOLY_PASSWORD: ${{ secrets.TURBOLY_PASSWORD }}
           PUSH_MODE: rpa
