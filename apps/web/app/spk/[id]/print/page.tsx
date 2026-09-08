@@ -100,7 +100,8 @@ export default function PrintSpk() {
             <b>SURAT PERINTAH KERJA (S.P.K.)</b>
             <small>{branch?.name ?? doc.branchCode}</small>
           </div>
-          <div className="serial">{doc._id.slice(-8)}</div>
+          {/* Reference number removed at management's request — the document id
+              is still on the page URL and in the system; it just no longer prints. */}
         </div>
 
         <div className="two">
