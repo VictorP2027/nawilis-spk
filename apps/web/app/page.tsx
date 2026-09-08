@@ -461,7 +461,9 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
   // the only thing the operator sees flagged first, but a nonsense year is now caught
   // at the keyboard instead of hours later in the push queue.
   // VIN is required exactly when the vehicle is electric.
-  const vinOk = fuelMode !== 'ev' || vin.trim().length >= 5;
+  // VIN is OPTIONAL on an EV (asked for, never required). If one is typed it
+  // still has to look like one — the shape check is unchanged.
+  const vinOk = fuelMode !== 'ev' || vin.trim() === '' || vin.trim().length >= 5;
   const tahunOk = /^\d{4}$/.test(tahun.trim())
     && Number(tahun) >= 1950
     && Number(tahun) <= new Date().getFullYear() + 1;
@@ -742,7 +744,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           </div>
           {fuelMode === 'ev' && (
             <div style={{ marginTop: 10 }}>
-              <div className="label" style={{ marginBottom: 4 }}>Nomor Rangka / VIN — WAJIB untuk mobil listrik</div>
+              <div className="label" style={{ marginBottom: 4 }}>Nomor Rangka / VIN — opsional (mobil listrik)</div>
               <input
                 value={vin}
                 onChange={(e) => setVin(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 25))}
@@ -752,7 +754,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
                 spellCheck={false}
                 style={!vinOk ? { borderColor: '#dc2626' } : undefined}
               />
-              {!vinOk && <div className="req-note">⚠ wajib — mobil listrik tidak punya nomor mesin, rangka yang membedakannya</div>}
+              {!vinOk && <div className="req-note">⚠ nomor rangka terlalu pendek — kosongkan, atau isi lengkap</div>}
             </div>
           )}
         </div>

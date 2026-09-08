@@ -181,5 +181,21 @@ console.log('H. carwash-only: a job picked in "Pekerjaan lain" counts');
   ok(!corporate('UDIN', 'UDIN'), '"UDIN" tidak dikira UD');
 }
 
+// ── VIN on an electric vehicle: optional, but a typed one must look like one ──
+// Driven from the REAL expression in page.tsx, so it cannot drift.
+{
+  const src = readFileSync(new URL('../apps/web/app/page.tsx', import.meta.url), 'utf8');
+  const m = /const vinOk = ([^;]+);/.exec(src);
+  if (!m) throw new Error('aturan vinOk tidak ditemukan di page.tsx');
+  // eslint-disable-next-line no-new-func
+  const vinOk = new Function('fuelMode', 'vin', `return (${m[1]});`) as (f: string, v: string) => boolean;
+  ok(vinOk('ev', ''), 'mobil listrik tanpa VIN → boleh kirim (opsional)');
+  ok(vinOk('ev', '   '), 'spasi saja dihitung kosong');
+  ok(vinOk('ev', 'MHKA6GJ6JLK012345'), 'VIN lengkap tetap diterima');
+  ok(!vinOk('ev', 'ABC'), 'VIN yang diketik tapi terlalu pendek tetap ditolak — bentuknya masih diperiksa');
+  ok(vinOk('fuel', ''), 'mobil BBM tidak pernah ditanya');
+  ok(vinOk('fuel', 'AB'), 'mobil BBM tidak memeriksa VIN');
+}
+
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);
