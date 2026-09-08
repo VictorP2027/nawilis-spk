@@ -24,11 +24,30 @@ const arg = (k: string): string | undefined => process.argv.find((a) => a.starts
 const QUERIES = (arg('q') ?? '').split('|').map((s) => s.trim()).filter(Boolean);
 /** --customers=<phone>: how many customer records carry this number? */
 const CUSTOMERS = (arg('customers') ?? '').trim();
+/** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
+const VEHICLE = (arg('vehicle') ?? '').toUpperCase().replace(/\s/g, '');
 const STORE = arg('store') ?? 'Nawilis Bekasi';
 
 async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   console.log(`base=${config.turbolyBaseUrl} db=${config.mongoDb}`);
+
+  // --vehicle: the owner check, via the exact lookup resolveVehicleOriginalOwner uses.
+  if (VEHICLE) {
+    const sv = new TurbolySession({ baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state', userAgentSuffix: 'probe-veh', branchCode: 'PROBE' });
+    await sv.start(); await sv.ensureLoggedIn();
+    try {
+      const j = (await sv.page_().evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.json() : null; },
+        `/lookup/vehicles.json?search_term=${encodeURIComponent(VEHICLE)}&page_limit=30&page=1`)) as
+        { vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }> } | null;
+      const norm = (x: string) => (x ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const rows = (j?.vehicles ?? []).filter((v) => norm(String(v.registration ?? '')) === VEHICLE).sort((a, b) => a.id - b.id);
+      console.log(`\n— kendaraan ${VEHICLE} di Turboly → ${rows.length} record —`);
+      for (const v of rows) console.log(`  id=${v.id}  plat="${v.registration}"  pemilik="${v.customer_name ?? ''}"  telp=${v.customer_phone ?? '(kosong)'}`);
+      if (!rows.length) console.log('  (tidak ada — lookup tidak menemukan plat ini)');
+    } finally { await sv.dispose().catch(() => {}); await close().catch(() => {}); }
+    process.exit(0);
+  }
 
   // --customers: the duplicate check. Counts the records Turboly holds for one
   // number, which is the only thing that says whether a push ATTACHED to an
