@@ -58,7 +58,11 @@ const MODEL = arg('model') ?? 'Avanza';
 const KIND = (arg('kind') ?? 'car') === 'motorcycle' ? 'motorcycle' : 'car';
 const SPK_SKU = arg('spk-sku') ?? 'GRS-NAW-SU';
 /** A goods SKU that exists in the sandbox catalogue (seen on SO 249185). */
-const PART_SKU = arg('part-sku') ?? 'BAN-HAN-16513LV01';
+// --part-sku=none runs the visit WITHOUT a sparepart line, to tell a sandbox
+// that rejects goods apart from one that rejects orders. 'none' rather than
+// '' so a blank input still means the default.
+const PART_RAW = (arg('part-sku') ?? '').trim();
+const PART_SKU = PART_RAW.toLowerCase() === 'none' ? '' : (PART_RAW || 'BAN-HAN-16513LV01');
 /**
  * A SECOND sparepart, off unless asked for.
  *
@@ -109,7 +113,7 @@ async function seedMirror(): Promise<void> {
   // service line and Turboly would refuse it.
   await getDb()
     .collection<{ _id: string; sku: string; syncedAt: string }>('tb_products')
-    .updateOne({ _id: PART_SKU }, { $set: { sku: PART_SKU, syncedAt: now } }, { upsert: true });
+    .updateOne({ _id: PART_SKU || '__none__' }, { $set: { sku: PART_SKU || '__none__', syncedAt: now } }, { upsert: true });
   await collections.tbServiceProducts().updateOne(
     { _id: PART_SKU },
     { $set: { sku: PART_SKU, name: 'Hankook 165 R13 LV01', type: 'product', taxCode: 'PPN', price: 0, masterDurationMin: 0, storeCode: null, syncedAt: now } },
@@ -167,7 +171,7 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
             { serviceCode: 'SPOORING', ordered: true, qty: 1, keterangan: 'Spooring', quotedPrice: 350000 },
             // The repair's goods. The whole question is whether these survive
             // the Check & Go re-saving the same form.
-            { serviceCode: 'GANTI_BAN', ordered: true, qty: 2, keterangan: 'Ban depan', quotedPrice: 500000, chosenSku: PART_SKU },
+            ...(PART_SKU ? [{ serviceCode: 'GANTI_BAN', ordered: true, qty: 2, keterangan: 'Ban depan', quotedPrice: 500000, chosenSku: PART_SKU }] : []),
             ...(PART_SKU2
               ? [{ serviceCode: 'GANTI_OLI', ordered: true, qty: 1, keterangan: 'Sparepart kedua', quotedPrice: 250000, chosenSku: PART_SKU2 }]
               : []),
