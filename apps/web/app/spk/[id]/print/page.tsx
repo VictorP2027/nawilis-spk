@@ -281,7 +281,7 @@ export default function PrintSpk() {
 
         {/* Digital provenance — the one block the paper never had. */}
         <div style={{ fontSize: 9, color: '#667', marginTop: 8, borderTop: '1px solid #b9c6de', paddingTop: 4 }}>
-          Dokumen digital {doc._id} · {branch?.name ?? doc.branchCode}
+          Dokumen digital · {branch?.name ?? doc.branchCode}
           {doc.turboly?.serviceOrderNo ? ` · SO ${doc.turboly.serviceOrderNo}` : ''}
           {doc.turboly?.workOrderNo ? ` · WO ${doc.turboly.workOrderNo}` : ''}
         </div>

@@ -128,7 +128,7 @@ export default function PrintCheckGo() {
         <div className="hd">
           <div className="logo"><img src="/nawilis-logo.webp" alt="NAWILIS — Spooring - Balancing Specialist" style={{ height: 34, width: 'auto', display: 'block' }} /></div>
           <div className="title"><b>CHECK and GO REPORT</b><small>SAFETY &amp; COMFORT FIRST</small></div>
-          <div className="serial">{doc._id.slice(-8)}</div>
+          {/* Reference number removed at management's request, as on the SPK printout. */}
         </div>
 
         {/* Header grid, exactly the paper's six boxes. */}
@@ -298,7 +298,7 @@ export default function PrintCheckGo() {
 
         {/* Digital provenance — the one block the paper never had. */}
         <div style={{ fontSize: 9, color: '#667', marginTop: 8, borderTop: '1px solid #b9c6de', paddingTop: 4 }}>
-          Dokumen digital {doc._id} · {branch?.name ?? doc.branchCode}
+          Dokumen digital · {branch?.name ?? doc.branchCode}
           {doc.turboly?.serviceOrderNo ? ` · SO ${doc.turboly.serviceOrderNo}` : ''}
         </div>
         <div className="foot">Pioneering wheel alignment and balancing for more than 50 years</div>
