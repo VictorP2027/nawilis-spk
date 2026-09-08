@@ -37,6 +37,10 @@ async function main(): Promise<void> {
     const sv = new TurbolySession({ baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state', userAgentSuffix: 'probe-veh', branchCode: 'PROBE' });
     await sv.start(); await sv.ensureLoggedIn();
     try {
+      // Stand on a Turboly page first: right after login the tab can be on
+      // about:blank, and a fetch from there is cross-origin and refused.
+      await sv.page_().goto(`${config.turbolyBaseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await sv.page_().waitForTimeout(800);
       const j = (await sv.page_().evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.json() : null; },
         `${config.turbolyBaseUrl}/lookup/vehicles.json?search_term=${encodeURIComponent(VEHICLE)}&page_limit=30&page=1`)) as
         { vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }> } | null;
@@ -63,6 +67,8 @@ async function main(): Promise<void> {
     await session0.ensureLoggedIn();
     const pg = session0.page_();
     try {
+      await pg.goto(`${config.turbolyBaseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await pg.waitForTimeout(800);
       /**
        * The customers LIST, not lookup/customers.json — the select2 lookup
        * cannot search a phone in any spelling (measured on live, and the same
