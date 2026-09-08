@@ -1539,26 +1539,35 @@ export class RpaSink implements ServiceOrderSink {
           };
           var lis = Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
             .filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); });
-          for (var i = 0; i < lis.length; i++) {
-            var text = lis[i].innerText || '';
+          // Score every row and take the BEST, not the first that clears some bar.
+          // Two records can share one phone — AGNESYA DEWI and AGNESYA DEWI T
+          // both carried 6287779174377, and first-digits-wins picked the one that
+          // did not own the car (B1390ZOE), so the push tried to ADD the plate
+          // and Turboly refused it as already registered. The name was known the
+          // whole time; a row matching digits AND name must outrank digits alone.
+          //   3 = digits + name   2 = digits only   1 = name only (no digits shown)
+          var rowNameOf = function (text) {
+            return (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
+          };
+          var rowScore = function (text) {
+            var digitsOk = !!want && text.replace(/\\D/g, '').indexOf(want) >= 0;
+            var nameOk = nameHit(rowNameOf(text));
             if (want) {
-              if (text.replace(/\\D/g, '').indexOf(want) >= 0) return i;
-            } else if (wantName) {
-              var name = (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
-              if (nameHit(name)) return i;
+              if (digitsOk && nameOk) return 3;
+              if (digitsOk) return 2;
+              // Live can render rows without the phone; an exact name is still
+              // identity (never a prefix, so FRANK cannot adopt FRANKI).
+              if (nameOk && (wantName || wantKey)) return 1;
+              return 0;
             }
+            return nameOk ? 1 : 0;
+          };
+          var best = -1, bestScore = 0;
+          for (var i = 0; i < lis.length; i++) {
+            var sc = rowScore(lis[i].innerText || '');
+            if (sc > bestScore) { bestScore = sc; best = i; }
           }
-          // Digit proof failed on every row. If live renders rows without the
-          // phone, an EXACT full-name match is still identity (never a prefix,
-          // so FRANK cannot adopt FRANKI).
-          if (want && (wantName || wantKey)) {
-            for (var k = 0; k < lis.length; k++) {
-              var t2 = lis[k].innerText || '';
-              var n2 = (t2.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
-              if (nameHit(n2)) return k;
-            }
-          }
-          return -1;
+          return best;
         })()`,
       )) as number;
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH idx=${idx}`);

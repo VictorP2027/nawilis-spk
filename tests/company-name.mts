@@ -105,5 +105,44 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(!isCompany(''), 'kosong bukan perusahaan');
 }
 
+// ── the whole in-page customer matcher, driven with fake rows ────────────
+// Lift the exact string the pusher evaluates in the browser, substitute the
+// four interpolated inputs, stub document.querySelectorAll, and run it. This
+// is the real matcher, not a copy — so the two-record case can never regress
+// silently.
+{
+  const src = readFileSync(new URL('../packages/core/src/turboly/rpaSink.ts', import.meta.url), 'utf8');
+  const start = src.indexOf('var want = ${JSON.stringify(phoneKey)};');
+  const end = src.indexOf('return best;', start) + 'return best;'.length;
+  ok(start > 0 && end > start, 'blok pencocok customer ditemukan di rpaSink');
+  const raw = src.slice(start, end);
+  const matcher = (rows: string[], phoneKey: string, nama: string, requireCompany = false): number => {
+    const body = raw
+      .replace('${JSON.stringify(phoneKey)}', JSON.stringify(phoneKey))
+      .replace("${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\\s+/g, ' '))}", JSON.stringify(nama.trim().toUpperCase().replace(/\s+/g, ' ')))
+      .replace("${JSON.stringify(companyNameKey(nama ?? ''))}", JSON.stringify(companyNameKey(nama)))
+      .replace('${JSON.stringify(requireCompany)}', JSON.stringify(requireCompany))
+      .replace(/\\\\/g, '\\');
+    const fakeDoc = { querySelectorAll: () => rows.map((t) => ({ innerText: t, className: 'select2-result' })) };
+    // eslint-disable-next-line no-new-func
+    return new Function('document', body) (fakeDoc) as number;
+  };
+
+  // The live case, verbatim from the debug run of 01M1ZWK89.
+  const AGNESYA = [
+    'AGNESYA DEWI 6287779174377 PALSIGUNUNG 10/03 TUGU CIMANGGIS DEPOK, Tug',
+    'AGNESYA DEWI T 6287779174377 Indonesia',
+  ];
+  ok(matcher(AGNESYA, '87779174377', 'AGNESYA DEWI T') === 1, 'dua record satu nomor: yang NAMANYA cocok yang dipilih (B1390ZOE)');
+  ok(matcher(AGNESYA, '87779174377', 'AGNESYA DEWI') === 0, 'dan sebaliknya, kalau yang diminta memang AGNESYA DEWI');
+  ok(matcher(AGNESYA, '87779174377', 'ORANG LAIN') === 0, 'nama tak cocok → jatuh ke digit saja, perilaku lama (baris pertama)');
+  ok(matcher(AGNESYA, '', 'AGNESYA DEWI T') === 1, 'tanpa nomor, nama persis tetap identitas');
+  ok(matcher(AGNESYA, '', 'LANA', true) === -1, 'tanpa nomor, orang biasa tidak boleh diambil (LANA)');
+  ok(matcher(['PT ANGKASA PURA LOGISTIK 021xxx'], '', 'ANGKASA PURA LOGISTIK', true) === 0, 'tanpa nomor, perusahaan boleh diambil lewat inti nama');
+  ok(matcher(['FRANKI 6281200000000'], '81200000000', 'FRANK') === 0, 'digit cocok, nama beda → tetap dipilih lewat digit (perilaku lama)');
+  ok(matcher(['FRANKI'], '', 'FRANK') === -1, 'tanpa digit, FRANK tidak boleh mengambil FRANKI');
+  ok(matcher([], '87779174377', 'AGNESYA DEWI T') === -1, 'tidak ada baris → -1');
+}
+
 console.log(`\n${passed} lulus, ${failed} gagal`);
 process.exit(failed ? 1 : 0);
