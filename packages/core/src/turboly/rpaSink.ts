@@ -4,7 +4,7 @@ import { resolve, selectTypeahead, fillInput, readValue, exists, hashFormControl
 import { TurbolySession, AuthChallengeError, TenantOutageError } from './session.js';
 import type { ServiceOrderSink, PushContext, PushResult, VerifyResult, TurbolyServiceOrderPayload, AppendTarget, AppendResult } from './sink.js';
 import type { SpkDoc } from '../types.js';
-import { jaroWinkler, canonPhoneKey, e164Phone, localPhone, companyNameKey } from '../indonesia.js';
+import { jaroWinkler, canonPhoneKey, e164Phone, localPhone, companyNameKey, parsePlate } from '../indonesia.js';
 import { matchPersonLabel } from '../personMatch.js';
 
 /**
@@ -1302,12 +1302,29 @@ export class RpaSink implements ServiceOrderSink {
    * plate matches, with that row's owner name/phone (inline in the JSON). */
   private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string; registration: string } | null> {
     try {
-      const j = await this.lookupJson<{
-        vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }>;
-      }>(`/lookup/vehicles.json?search_term=${encodeURIComponent(reg)}&page_limit=30&page=1`, 'cari pemilik asli kendaraan');
-      const raw = (j?.vehicles ?? []).map((v) => ({
-        id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? ''),
-      }));
+      /**
+       * Ask in Turboly's spelling as well as ours. The lookup is a prefix
+       * search over the STORED registration, so a car held as "B 1390 ZOE" is
+       * invisible to a search for "B1390ZOE" — and a miss here does not read as
+       * a miss: the push falls back to the typed identity, a person with no
+       * phone match is "created", and Turboly refuses the duplicate plate as
+       * "sudah terdaftar atas customer LAIN" for a car that was HERS
+       * (B1390ZOE / AGNESYA DEWI T). Results are filtered on the normalised
+       * plate below, so extra spellings can only find, never mis-match.
+       */
+      const p = parsePlate(reg);
+      const spellings = [...new Set([reg, p.display, [p.area, p.number, p.suffix].filter(Boolean).join(' ')].filter((x) => x && x.trim()))];
+      const raw: Array<{ id: number; registration: string; name: string; phone: string }> = [];
+      for (const term of spellings) {
+        const j = await this.lookupJson<{
+          vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }>;
+        }>(`/lookup/vehicles.json?search_term=${encodeURIComponent(term)}&page_limit=30&page=1`, 'cari pemilik asli kendaraan');
+        for (const v of j?.vehicles ?? []) {
+          if (raw.some((r) => r.id === v.id)) continue;
+          raw.push({ id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? '') });
+        }
+        if (raw.length) break; // found under this spelling; no need to ask again
+      }
       const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
       const mine = raw
         .filter((v) => norm(v.registration) === norm(reg))
