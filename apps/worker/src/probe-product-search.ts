@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     await sv.start(); await sv.ensureLoggedIn();
     try {
       const j = (await sv.page_().evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.json() : null; },
-        `/lookup/vehicles.json?search_term=${encodeURIComponent(VEHICLE)}&page_limit=30&page=1`)) as
+        `${config.turbolyBaseUrl}/lookup/vehicles.json?search_term=${encodeURIComponent(VEHICLE)}&page_limit=30&page=1`)) as
         { vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }> } | null;
       const norm = (x: string) => (x ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const rows = (j?.vehicles ?? []).filter((v) => norm(String(v.registration ?? '')) === VEHICLE).sort((a, b) => a.id - b.id);
