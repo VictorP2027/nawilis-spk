@@ -1546,8 +1546,13 @@ export class RpaSink implements ServiceOrderSink {
           // and Turboly refused it as already registered. The name was known the
           // whole time; a row matching digits AND name must outrank digits alone.
           //   3 = digits + name   2 = digits only   1 = name only (no digits shown)
+          // Live renders a row as "NAME PHONE ADDRESS" with no separator, so the
+          // name is everything before the first phone-length digit run (or a
+          // dash / newline, which older rows use).
           var rowNameOf = function (text) {
-            return (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '').trim().toUpperCase().replace(/\\s+/g, ' ');
+            var head = (text.split(/\\s[-\u2013\u2014]\\s|\\n/)[0] || '');
+            head = head.split(/\\s*\\+?\\d[\\d\\s-]{7,}/)[0] || '';
+            return head.trim().toUpperCase().replace(/\\s+/g, ' ');
           };
           var rowScore = function (text) {
             var digitsOk = !!want && text.replace(/\\D/g, '').indexOf(want) >= 0;

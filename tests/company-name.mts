@@ -138,7 +138,7 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(matcher(AGNESYA, '87779174377', 'ORANG LAIN') === 0, 'nama tak cocok → jatuh ke digit saja, perilaku lama (baris pertama)');
   ok(matcher(AGNESYA, '', 'AGNESYA DEWI T') === 1, 'tanpa nomor, nama persis tetap identitas');
   ok(matcher(AGNESYA, '', 'LANA', true) === -1, 'tanpa nomor, orang biasa tidak boleh diambil (LANA)');
-  ok(matcher(['PT ANGKASA PURA LOGISTIK 021xxx'], '', 'ANGKASA PURA LOGISTIK', true) === 0, 'tanpa nomor, perusahaan boleh diambil lewat inti nama');
+  ok(matcher(['PT ANGKASA PURA LOGISTIK 0215551234 Jakarta'], '', 'ANGKASA PURA LOGISTIK', true) === 0, 'tanpa nomor, perusahaan boleh diambil lewat inti nama');
   ok(matcher(['FRANKI 6281200000000'], '81200000000', 'FRANK') === 0, 'digit cocok, nama beda → tetap dipilih lewat digit (perilaku lama)');
   ok(matcher(['FRANKI'], '', 'FRANK') === -1, 'tanpa digit, FRANK tidak boleh mengambil FRANKI');
   ok(matcher([], '87779174377', 'AGNESYA DEWI T') === -1, 'tidak ada baris → -1');
