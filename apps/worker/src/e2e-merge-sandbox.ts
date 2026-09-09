@@ -81,6 +81,15 @@ const PLATE = arg('plate') ?? `B${digits}UJI`;
  * the forms accept them, and a fleet contact often has nothing else.
  */
 const PHONE = arg('phone') ?? `+62812${digits}${digits}`;
+/**
+ * --reset=1: empty the scratch database's documents first. The scratch db has
+ * no cleanup, so every failed doc from earlier runs is re-pushed in the same
+ * round as this run's pair — extra orders in the sandbox, a longer session,
+ * and a log where the pair's own story is hard to read (run 34308756075: a
+ * stale Check & Go pushed BETWEEN the pair, and the merge then met a dead
+ * session). Refuses any database whose name does not say it is scratch.
+ */
+const RESET = arg('reset') === '1';
 
 const log = (m: string): void => console.log(`[e2e-merge ${TAG}] ${m}`);
 const fail = (m: string): never => {
@@ -219,7 +228,12 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
 async function main(): Promise<void> {
   if (!/sandbox/i.test(config.turbolyBaseUrl)) fail(`ini HANYA untuk sandbox — TURBOLY_BASE_URL=${config.turbolyBaseUrl}`);
   if (config.mongoDb === 'spk') fail('pakai database terpisah (MONGODB_DB=spk_e2e_merge), jangan database produksi');
+  if (RESET && !/e2e/i.test(config.mongoDb)) fail(`--reset hanya untuk database uji (nama harus mengandung "e2e"), bukan ${config.mongoDb}`);
   await connect(config.mongoUri, config.mongoDb);
+  if (RESET) {
+    const gone = await collections.spk().deleteMany({});
+    log(`0/4 database uji dikosongkan — ${gone.deletedCount} dokumen lama dibuang`);
+  }
   let sinks: BranchSinks | undefined;
   log(`base=${config.turbolyBaseUrl} db=${config.mongoDb} cabang=${BRANCH} plat=${PLATE} telp=${PHONE} kendaraan=${MAKE} ${MODEL} (${KIND})`);
   try {

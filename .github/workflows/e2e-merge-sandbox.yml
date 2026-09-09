@@ -52,6 +52,10 @@ on:
         description: 'Nomor customer. Isi nomor kantor (mis. +622155512345) untuk menguji apakah Turboly menerima nomor kantor untuk customer BARU.'
         type: string
         default: ''
+      reset_db:
+        description: 'Kosongkan dokumen lama di database uji dulu (dokumen gagal dari run sebelumnya tidak ikut di-push lagi).'
+        type: boolean
+        default: false
 
 concurrency:
   group: turboly-push
@@ -175,6 +179,7 @@ jobs:
           IN_PLATE: ${{ inputs.plate }}
           IN_PART_SKU: ${{ inputs.part_sku }}
           IN_PART_SKU2: ${{ inputs.part_sku2 }}
+          IN_RESET: ${{ inputs.reset_db }}
           IN_MAKE: ${{ inputs.make }}
           IN_MODEL: ${{ inputs.model }}
           IN_EXTRA: ${{ inputs.extra }}
@@ -184,6 +189,7 @@ jobs:
           if [ -n "$IN_PLATE" ]; then args+=(--plate="$IN_PLATE"); fi
           if [ -n "$IN_PART_SKU" ]; then args+=(--part-sku="$IN_PART_SKU"); fi
           if [ -n "$IN_PART_SKU2" ]; then args+=(--part-sku2="$IN_PART_SKU2"); fi
+          if [ "$IN_RESET" = "true" ]; then args+=(--reset=1); fi
           if [ -n "$IN_MAKE" ]; then args+=(--make="$IN_MAKE"); fi
           if [ -n "$IN_MODEL" ]; then args+=(--model="$IN_MODEL"); fi
           if [ -n "$IN_EXTRA" ]; then args+=(--extra="$IN_EXTRA"); fi
