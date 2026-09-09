@@ -366,6 +366,11 @@ export default function CheckGoIntake() {
     ));
 
   // ENFORCED Indonesian WA format: identity key of the customer.
+  // A number typed with its own country code — an explicit "+" that is not
+  // +62 — is foreign and kept as typed: 8-15 digits, mirrors parseWa. This
+  // rule was missing here: "+65 8305 0688" went through the landline rule
+  // below (area code 6…) and the green tick promised "+626583050688".
+  const waForeign = wa.trim().startsWith('+') && !waDigits.startsWith('62');
   const waNat = waDigits.replace(/^62/, '').replace(/^0/, '');
   /**
    * Same rule as the SPK form: a mobile (starts 8, 9-12 national digits) OR a
@@ -378,9 +383,9 @@ export default function CheckGoIntake() {
    * than the send failing silently — but the number's job here is identity and
    * callback, and refusing it outright is the worse answer.
    */
-  const waOk = /^8\d{8,11}$/.test(waNat) || /^[2-7]\d{7,10}$/.test(waNat);
-  const waIsLandline = waOk && /^[2-7]/.test(waNat);
-  const waE164Preview = waOk ? `+62${waNat}` : null;
+  const waOk = waForeign ? /^[1-9]\d{7,14}$/.test(waDigits) : (/^8\d{8,11}$/.test(waNat) || /^[2-7]\d{7,10}$/.test(waNat));
+  const waIsLandline = waOk && !waForeign && /^[2-7]/.test(waNat);
+  const waE164Preview = waOk ? (waForeign ? `+${waDigits}` : `+62${waNat}`) : null;
   const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
   const ownerMismatch = !!plateOwner?.wa && canonK(wa).length >= 8 && canonK(plateOwner.wa) !== canonK(wa);
 
@@ -605,7 +610,7 @@ export default function CheckGoIntake() {
           <div>
           <div className="label">Nomor WhatsApp — ketik dulu</div>
           <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
-          {!waOk && <div className="req-note">⚠ wajib — HP 08… / +62 8…, atau nomor kantor 021… (contoh 08123456789 / 02155512345)</div>}
+          {!waOk && <div className="req-note">⚠ wajib — HP 08… / +62 8…, nomor kantor 021…, atau nomor luar negeri lengkap dengan + (contoh 08123456789 / 02155512345 / +6581234567)</div>}
           {waOk && <div className="ok-sm">✓ {waE164Preview}{custHint ? ` · ↩ ${custHint}` : ''}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}</div>}
           {waIsLandline && <div className="req-note" style={{ color: '#b45309' }}>ℹ nomor kantor — hasil Cek n Go tidak bisa dikirim lewat WhatsApp ke nomor ini</div>}
           {custVehicles.length > 1 && (

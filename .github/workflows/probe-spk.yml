@@ -10,9 +10,13 @@ on:
   workflow_dispatch:
     inputs:
       plate:
-        description: 'Nomor polisi, mis. B63YNA'
+        description: 'Nomor polisi, mis. B63YNA (kosongkan bila mencari lewat nomor telepon)'
         type: string
-        required: true
+        default: ''
+      phone:
+        description: 'Nomor telepon customer, ejaan apa saja (dicocokkan lewat kunci kanonik). Dipakai bila plat kosong.'
+        type: string
+        default: ''
 
 jobs:
   probe:
@@ -88,5 +92,6 @@ jobs:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           MONGODB_DB: spk
           IN_PLATE: ${{ inputs.plate }}
+          IN_PHONE: ${{ inputs.phone }}
         run: |
-          node --import tsx apps/worker/src/probe-spk.ts --plate="$IN_PLATE"
+          node --import tsx apps/worker/src/probe-spk.ts --plate="$IN_PLATE" --phone="$IN_PHONE"

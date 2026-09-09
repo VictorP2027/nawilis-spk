@@ -437,6 +437,32 @@ export function e164Phone(raw: string): string {
   return k ? `+62${k}` : '';
 }
 
+/**
+ * A number typed with its own country code: an explicit "+" that is not +62.
+ * The question parseWa and e164Phone already ask, named once so the intake
+ * forms can ask it the same way. "+0…" is not foreign, it is a typo — parseWa
+ * rejects it, and so must the form.
+ */
+export function isForeignPhone(raw: string): boolean {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed.startsWith('+')) return false;
+  const digits = trimmed.replace(/\D/g, '');
+  return digits !== '' && !digits.startsWith('62') && !digits.startsWith('0');
+}
+
+/**
+ * The spelling the intake form is pre-filled with on a return visit.
+ *
+ * Indonesian numbers keep the "0812…" the counter is used to (localPhone). A
+ * foreign number has no "0…" spelling: localPhone("+6583050688") gave
+ * "06583050688", which the form then read as an Aceh landline (area code
+ * 065) and sent back as "+626583050688" — a correctly stored number corrupted
+ * on the customer's SECOND visit. It comes back exactly as stored.
+ */
+export function formPhone(raw: string): string {
+  return isForeignPhone(raw) ? `+${(raw ?? '').replace(/\D/g, '')}` : localPhone(raw);
+}
+
 /** Asia/Jakarta calendar day (YYYY-MM-DD) for a given instant. */
 export function jakartaBusinessDate(iso: string): string {
   const d = new Date(iso);

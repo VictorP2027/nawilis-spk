@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { collections, canonPhoneKey, localPhone } from '@spk/core';
+import { collections, canonPhoneKey, formPhone } from '@spk/core';
 import { turbolyCustomersByPhone, turbolyDebugProbe } from '../../../lib/turbolyLookup';
 import { db } from '../../../lib/db';
 
@@ -44,7 +44,7 @@ export async function GET(req: Request): Promise<Response> {
       return NextResponse.json({
         customer: {
           nama: c.name,
-          wa: c.phone ? localPhone(String(c.phone)) : null,
+          wa: c.phone ? formPhone(String(c.phone)) : null,
           alamat: (c.address ?? '').replace(/, Indonesia$/, '') || null,
         },
         vehicles: vs,
@@ -80,7 +80,7 @@ export async function GET(req: Request): Promise<Response> {
   const latest = docs[0]!;
   const customer = {
     nama: original?.customer.nama ?? latest.customer.nama,
-    wa: (original?.customer.waE164 ?? latest.customer.waE164) ? localPhone(original?.customer.waE164 ?? latest.customer.waE164 ?? '') : null,
+    wa: (original?.customer.waE164 ?? latest.customer.waE164) ? formPhone(original?.customer.waE164 ?? latest.customer.waE164 ?? '') : null,
     alamat: latest.customer.alamat ?? original?.customer.alamat ?? null,
   };
   // Distinct vehicles, newest first.

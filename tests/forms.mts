@@ -12,7 +12,7 @@
  *   npx tsx tests/forms.mts
  */
 import { readFileSync } from 'node:fs';
-import { parseWa, parsePlate } from '@spk/core';
+import { parseWa, parsePlate, formPhone, isForeignPhone, localPhone } from '@spk/core';
 
 let passed = 0;
 let failed = 0;
@@ -21,24 +21,57 @@ const ok = (cond: unknown, msg: string): void => {
   else { failed++; console.error(`  ✗ FAIL: ${msg}`); }
 };
 
-/** Pull `const waOk = <expr>;` out of a form and turn it into a function. */
-function formRule(file: string): (national: string) => boolean {
+/**
+ * Pull the whole phone rule out of a form — `waDigits`, `waForeign`, `waNat`,
+ * `waOk` and the `waE164Preview` the counter is shown — and turn it into a
+ * function of the typed string. Lifting only `waOk` was not enough: the
+ * foreign-number bug lived in how `waNat` was derived and in the preview,
+ * and `waOk` alone said "accepted" for "+65 8305 0688" while the tick promised
+ * "+626583050688".
+ */
+function formRule(file: string): (wa: string) => { ok: boolean; preview: string | null } {
   const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
-  const m = /const waOk = ([^;]+);/.exec(src);
-  if (!m) throw new Error(`tidak menemukan aturan waOk di ${file}`);
+  const lift = (name: string): string => {
+    const m = new RegExp(`const ${name} = ([^;]+);`).exec(src);
+    if (!m) throw new Error(`tidak menemukan aturan ${name} di ${file}`);
+    return m[1]!;
+  };
+  const body = [
+    `const waDigits = ${lift('waDigits')};`,
+    `const waForeign = ${lift('waForeign')};`,
+    `const waNat = ${lift('waNat')};`,
+    `const waOk = ${lift('waOk')};`,
+    `const waE164Preview = ${lift('waE164Preview')};`,
+    'return { ok: waOk, preview: waE164Preview };',
+  ].join('\n');
   // eslint-disable-next-line no-new-func
-  return new Function('waNat', `return ${m[1]};`) as (n: string) => boolean;
+  return new Function('wa', body) as (wa: string) => { ok: boolean; preview: string | null };
 }
 
-const CASES: Array<{ raw: string; national: string; valid: boolean; what: string }> = [
-  { raw: '08123456789', national: '8123456789', valid: true, what: 'HP biasa' },
-  { raw: '+628123456789', national: '8123456789', valid: true, what: 'HP dengan +62' },
-  { raw: '+622155512345', national: '2155512345', valid: true, what: 'nomor kantor Jakarta (+6221)' },
-  { raw: '02155512345', national: '2155512345', valid: true, what: 'nomor kantor ditulis 021' },
-  { raw: '0315551234', national: '315551234', valid: true, what: 'nomor kantor Surabaya (031)' },
-  { raw: '+622212345', national: '2212345', valid: false, what: 'nomor kantor terlalu pendek' },
-  { raw: '0812345', national: '812345', valid: false, what: 'HP terlalu pendek' },
-  { raw: '09123456789', national: '9123456789', valid: false, what: 'awalan 9 bukan nomor Indonesia' },
+/** `e164` is what the SERVER stores; a form that accepts the number must promise the same spelling. */
+const CASES: Array<{ raw: string; valid: boolean; e164?: string; what: string }> = [
+  { raw: '08123456789', valid: true, e164: '+628123456789', what: 'HP biasa' },
+  { raw: '+628123456789', valid: true, e164: '+628123456789', what: 'HP dengan +62' },
+  { raw: '+62 812 3456 789', valid: true, e164: '+628123456789', what: 'HP dengan +62 dan spasi' },
+  { raw: '+622155512345', valid: true, e164: '+622155512345', what: 'nomor kantor Jakarta (+6221)' },
+  { raw: '02155512345', valid: true, e164: '+622155512345', what: 'nomor kantor ditulis 021' },
+  { raw: '0315551234', valid: true, e164: '+62315551234', what: 'nomor kantor Surabaya (031)' },
+  { raw: '+622212345', valid: false, what: 'nomor kantor terlalu pendek' },
+  { raw: '0812345', valid: false, what: 'HP terlalu pendek' },
+  { raw: '09123456789', valid: false, what: 'awalan 9 bukan nomor Indonesia' },
+  // Jane, 9 Sep 2026: "+65 … shows up in Turboly as +6265 …". A number typed
+  // with its own country code is kept as typed — on the server since 5 Aug,
+  // and now on both forms too.
+  { raw: '+65 8305 0688', valid: true, e164: '+6583050688', what: 'nomor Singapura dengan +' },
+  { raw: '+6583050688', valid: true, e164: '+6583050688', what: 'nomor Singapura tanpa spasi' },
+  { raw: '+1 415 555 2671', valid: true, e164: '+14155552671', what: 'nomor Amerika dengan +' },
+  { raw: '+60 12 345 6789', valid: true, e164: '+60123456789', what: 'nomor Malaysia dengan +' },
+  { raw: '+65 1234', valid: false, what: 'nomor luar negeri terlalu pendek' },
+  { raw: '+0812 3456 789', valid: false, what: '"+0" bukan kode negara' },
+  { raw: '+65 8305 0688 1234 567', valid: false, what: 'lebih dari 15 digit bukan nomor telepon' },
+  // WITHOUT the "+" the digits are an Indonesian number, exactly as before:
+  // 065 is an Aceh area code. This is the trap — the "+" is what says "abroad".
+  { raw: '6583050688', valid: true, e164: '+626583050688', what: 'tanpa + tetap dibaca nomor Indonesia (kode area 065)' },
 ];
 
 console.log('\n── Aturan nomor di kedua form vs server ──');
@@ -48,14 +81,32 @@ const forms = {
 };
 for (const [label, rule] of Object.entries(forms)) {
   for (const c of CASES) {
-    ok(rule(c.national) === c.valid, `${label}: ${c.what} (${c.raw}) → ${c.valid ? 'diterima' : 'ditolak'}`);
+    const r = rule(c.raw);
+    ok(r.ok === c.valid, `${label}: ${c.what} (${c.raw}) → ${c.valid ? 'diterima' : 'ditolak'}`);
+    if (c.valid) ok(r.preview === c.e164, `${label}: ${c.what} — centang menjanjikan ${c.e164}, form bilang ${r.preview}`);
   }
 }
 
 console.log('\n── Server (parseWa) memberi jawaban yang sama ──');
 for (const c of CASES) {
-  ok(parseWa(c.raw).ok === c.valid, `${c.what} (${c.raw}) → ${c.valid ? 'diterima' : 'ditolak'}`);
+  const p = parseWa(c.raw);
+  ok(p.ok === c.valid, `${c.what} (${c.raw}) → ${c.valid ? 'diterima' : 'ditolak'}`);
+  if (c.valid) ok(p.e164 === c.e164, `${c.what} — disimpan sebagai ${c.e164} (server: ${p.e164})`);
 }
+
+console.log('\n── Nomor yang tersimpan kembali ke form tanpa berubah arti ──');
+for (const c of CASES) {
+  if (!c.valid || !c.e164) continue;
+  const back = formPhone(c.e164);
+  const again = parseWa(back).e164;
+  ok(again === c.e164, `${c.what}: ${c.e164} → form "${back}" → ${again}`);
+  ok(isForeignPhone(c.e164) === !c.e164.startsWith('+62'), `${c.what}: isForeignPhone(${c.e164}) = ${isForeignPhone(c.e164)}`);
+}
+ok(formPhone('+628123456789') === '08123456789', 'nomor Indonesia tetap tampil 08… di form (seperti sebelumnya)');
+ok(formPhone('+622155512345') === '02155512345', 'nomor kantor tetap tampil 021… di form (seperti sebelumnya)');
+ok(formPhone('+6583050688') === '+6583050688', 'nomor luar negeri tampil apa adanya, bukan 0658…');
+ok(localPhone('+6583050688') === '06583050688', 'localPhone sendiri tidak berubah (masih dipakai pencarian ejaan lama)');
+ok(formPhone('+626583050688') === '06583050688', 'record yang terlanjur +6265… tetap konsisten sebagai nomor Indonesia');
 
 console.log('\n── Nomor kantor tetap tersimpan sebagai E.164 ──');
 ok(parseWa('02155512345').e164 === '+622155512345', '021 5551 2345 → +622155512345');

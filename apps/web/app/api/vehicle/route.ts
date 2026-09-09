@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { collections, localPhone } from '@spk/core';
+import { collections, formPhone } from '@spk/core';
 import { turbolyVehicleByPlate, turbolyCustomersByPhone } from '../../../lib/turbolyLookup';
 import { db } from '../../../lib/db';
 
@@ -48,14 +48,14 @@ export async function GET(req: Request): Promise<Response> {
               if (c) {
                 return {
                   nama: c.name,
-                  wa: c.phone ? localPhone(String(c.phone)) : localPhone(String(tv.customer_phone)),
+                  wa: c.phone ? formPhone(String(c.phone)) : formPhone(String(tv.customer_phone)),
                   alamat: (c.address ?? '').replace(/, Indonesia$/, '') || null,
                 };
               }
             } catch { /* phone resolve failed — use the vehicle-row owner below */ }
           }
           return tv.customer_name
-            ? { nama: tv.customer_name, wa: tv.customer_phone ? localPhone(String(tv.customer_phone)) : null, alamat: null }
+            ? { nama: tv.customer_name, wa: tv.customer_phone ? formPhone(String(tv.customer_phone)) : null, alamat: null }
             : null;
         })(),
         source: 'turboly',
@@ -68,7 +68,7 @@ export async function GET(req: Request): Promise<Response> {
     .spk()
     .findOne({ 'vehicle.plateVariants': key }, { sort: { createdAt: -1 }, projection: { customer: 1 } });
   const customer = lastSpk?.customer
-    ? { nama: lastSpk.customer.nama, wa: lastSpk.customer.waE164 ? localPhone(lastSpk.customer.waE164) : null, alamat: lastSpk.customer.alamat ?? null }
+    ? { nama: lastSpk.customer.nama, wa: lastSpk.customer.waE164 ? formPhone(lastSpk.customer.waE164) : null, alamat: lastSpk.customer.alamat ?? null }
     : null;
   return NextResponse.json({ vehicle: cached, customer, source: 'mongo' });
 }
