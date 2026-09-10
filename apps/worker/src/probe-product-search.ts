@@ -49,6 +49,27 @@ async function main(): Promise<void> {
       console.log(`\n— kendaraan ${VEHICLE} di Turboly → ${rows.length} record —`);
       for (const v of rows) console.log(`  id=${v.id}  plat="${v.registration}"  pemilik="${v.customer_name ?? ''}"  telp=${v.customer_phone ?? '(kosong)'}`);
       if (!rows.length) console.log('  (tidak ada — lookup tidak menemukan plat ini)');
+      // Which FIELDS does the lookup actually carry? If it names the owner's
+      // customer id, the pusher could attach by identity instead of by name.
+      if (rows[0]) console.log(`  (kolom yang tersedia: ${Object.keys(rows[0] as object).join(', ')})`);
+
+      /**
+       * The pusher attaches the order to the ORIGINAL registration's owner and
+       * looks that person up BY NAME when their record carries no phone. This
+       * prints what that name search returns, in order — the same
+       * lookup/customers.json the picker is built on. If the name is not
+       * unique, "the owner" is a guess.
+       */
+      for (const name of [...new Set(rows.map((v) => String(v.customer_name ?? '').trim()).filter(Boolean))]) {
+        const cj = (await sv.page_().evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.json() : null; },
+          `${config.turbolyBaseUrl}/lookup/customers.json?search_term=${encodeURIComponent(name)}&page_limit=30&page=1`)) as
+          { customers?: Array<{ id: number; name?: unknown; phone?: unknown }> } | null;
+        const cs = cj?.customers ?? [];
+        console.log(`\n— cari customer "${name}" (persis seperti picker) → ${cs.length} hasil —`);
+        cs.forEach((c, i) => console.log(`  ${i === 0 ? '→ TERATAS' : '         '} [${i}] id=${c.id}  "${String(c.name ?? '')}"  telp=${String(c.phone ?? '') || '(kosong)'}`));
+        const exact = cs.filter((c) => String(c.name ?? '').trim().toUpperCase() === name.toUpperCase());
+        console.log(`  nama persis "${name}": ${exact.length} record${exact.length > 1 ? ' → AMBIGU, nama saja tidak cukup' : exact.length === 1 ? ' → unik ✓' : ''}`);
+      }
     } finally { await sv.dispose().catch(() => {}); await close().catch(() => {}); }
     process.exit(0);
   }
