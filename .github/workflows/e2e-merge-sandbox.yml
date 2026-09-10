@@ -180,6 +180,10 @@ jobs:
           IN_PART_SKU: ${{ inputs.part_sku }}
           IN_PART_SKU2: ${{ inputs.part_sku2 }}
           IN_RESET: ${{ inputs.reset_db }}
+          # Harness only: print how the customer picker decided. Without it an
+          # acceptance run tells you an order was created but not WHO it landed
+          # on, which is the half that goes wrong (F1125EG).
+          PUSH_DEBUG_MATCH: '1'
           IN_MAKE: ${{ inputs.make }}
           IN_MODEL: ${{ inputs.model }}
           IN_EXTRA: ${{ inputs.extra }}

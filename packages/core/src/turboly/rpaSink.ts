@@ -631,6 +631,8 @@ export class RpaSink implements ServiceOrderSink {
     let effNama = create?.nama ?? '';
     let effPhone = create?.phone ?? '';
     const owner = await this.resolveVehicleOriginalOwner(reg);
+    /** Set only when the PLATE named the owner: then identity is known, not guessed. */
+    let ownerRef: { customerId: string; plate: string } | undefined;
     if (owner && (owner.phone || owner.name)) {
       const typedKey = effPhone ? canonPhoneKey(effPhone) : '';
       const ownerKey = owner.phone ? canonPhoneKey(owner.phone) : '';
@@ -660,10 +662,11 @@ export class RpaSink implements ServiceOrderSink {
        * owner at all — the line above already records them as "Dibawa oleh".
        */
       effPhone = owner.phone || '';
+      if (owner.customerId) ownerRef = { customerId: owner.customerId, plate: reg };
     }
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
-    const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone) : false;
+    const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone, ownerRef) : false;
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH effNama="${effNama}" effPhone="${effPhone}" custOk=${custOk} owner=${JSON.stringify(owner)}`);
     if (custOk) {
       await page.waitForTimeout(1200);
@@ -1300,7 +1303,7 @@ export class RpaSink implements ServiceOrderSink {
 
   /** The ORIGINAL registration owns the car: lowest vehicle id among exact
    * plate matches, with that row's owner name/phone (inline in the JSON). */
-  private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string; registration: string } | null> {
+  private async resolveVehicleOriginalOwner(reg: string): Promise<{ name: string; phone: string; registration: string; customerId: string } | null> {
     try {
       /**
        * Ask in Turboly's spelling as well as ours. The lookup is a prefix
@@ -1314,14 +1317,24 @@ export class RpaSink implements ServiceOrderSink {
        */
       const p = parsePlate(reg);
       const spellings = [...new Set([reg, p.display, [p.area, p.number, p.suffix].filter(Boolean).join(' ')].filter((x) => x && x.trim()))];
-      const raw: Array<{ id: number; registration: string; name: string; phone: string }> = [];
+      const raw: Array<{ id: number; registration: string; name: string; phone: string; customerId: string }> = [];
       for (const term of spellings) {
         const j = await this.lookupJson<{
-          vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }>;
+          vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string; customer_id?: number | string }>;
         }>(`/lookup/vehicles.json?search_term=${encodeURIComponent(term)}&page_limit=30&page=1`, 'cari pemilik asli kendaraan');
         for (const v of j?.vehicles ?? []) {
           if (raw.some((r) => r.id === v.id)) continue;
-          raw.push({ id: v.id, registration: String(v.registration ?? ''), name: String(v.customer_name ?? ''), phone: String(v.customer_phone ?? '') });
+          raw.push({
+            id: v.id,
+            registration: String(v.registration ?? ''),
+            name: String(v.customer_name ?? ''),
+            phone: String(v.customer_phone ?? ''),
+            // The OWNER'S IDENTITY, not just their name. Turboly has two
+            // customers called EMILY and thirty called ANDRE, so a name is a
+            // coin flip — F1125EG lost it. The lookup has carried this id all
+            // along; it was simply thrown away.
+            customerId: v.customer_id == null ? '' : String(v.customer_id),
+          });
         }
         if (raw.length) break; // found under this spelling; no need to ask again
       }
@@ -1336,7 +1349,7 @@ export class RpaSink implements ServiceOrderSink {
       // conclude the vehicle does not exist and try to ADD it, which Turboly
       // refuses with a 422 duplicate. Hand the stored form back so the caller
       // can ask the picker a question it can answer.
-      return mine[0] ? { name: mine[0].name, phone: mine[0].phone, registration: mine[0].registration } : null;
+      return mine[0] ? { name: mine[0].name, phone: mine[0].phone, registration: mine[0].registration, customerId: mine[0].customerId } : null;
     } catch (e) {
       // Logged out ≠ "plate unknown": the car would silently change owner.
       if (e instanceof TransientError) throw e;
@@ -1378,7 +1391,7 @@ export class RpaSink implements ServiceOrderSink {
    * fallback tries BOTH before it dares conclude "not here" — that conclusion
    * means create, and creating means a duplicate person.
    */
-  private async tryPickCustomerExact(nama: string, phone: string): Promise<boolean> {
+  private async tryPickCustomerExact(nama: string, phone: string, ownerRef?: { customerId: string; plate: string }): Promise<boolean> {
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
     const queries: string[] = [];
     /**
@@ -1451,7 +1464,23 @@ export class RpaSink implements ServiceOrderSink {
       // The expected name is the one that produced this query: when the record
       // was proven by phone, that is the ERP's own spelling, and checking the
       // typed spelling instead is why the row we had just found was rejected.
-      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama, nameOnly)) return true;
+      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama, nameOnly, ownerRef?.customerId ?? '')) return true;
+    }
+    /**
+     * THE PLATE NAMED THE OWNER, AND WE COULD NOT REACH THEM.
+     *
+     * Falling through here creates a customer — for a car Turboly already
+     * holds. That add is refused as a duplicate plate and the SPK dies as
+     * "sudah terdaftar atas customer LAIN", which is exactly the failure this
+     * message replaces (F1125EG, 10 Sep): the owner was EMILY, Turboly holds
+     * two EMILYs, and the pusher took the first. Say who owns the car and stop.
+     */
+    if (ownerRef) {
+      throw new DataError(
+        `Plat ${ownerRef.plate} terdaftar di Turboly atas "${nama}" (customer #${ownerRef.customerId}), ` +
+        'tapi baris customer itu tidak bisa dipastikan di daftar pilihan — order tidak dibuat, supaya tidak jatuh ke orang lain yang namanya sama. ' +
+        'Buka mobil itu di Turboly, buka pemiliknya, lalu buat order dari customer tersebut.',
+      );
     }
     /**
      * PROVEN TO EXIST, BUT UNPICKABLE — never the same thing as "not there".
@@ -1472,7 +1501,7 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** One attempt: type `query` into the customer select2 and pick the row that matches. */
-  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string, requireCompany = false): Promise<boolean> {
+  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string, requireCompany = false, wantId = ''): Promise<boolean> {
     const page = this.session.page_();
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
@@ -1527,6 +1556,23 @@ export class RpaSink implements ServiceOrderSink {
             return f.replace(/^(PT|CV|UD|PD|NV|FA)(\s+|$)/, '').trim();
           };
           var requireCompany = ${JSON.stringify(requireCompany)};
+          /**
+           * The Turboly customer id the plate named, when it named one.
+           *
+           * A name is not an identity in this database — live holds two EMILYs
+           * and thirty ANDREs — so when the id is known, the row that IS that
+           * person wins outright, and a row that merely shares the name is not
+           * taken at all. select2-v3 keeps each row's record on the <li> via
+           * jQuery; proven readable on live (customer picker, 10 Sep).
+           */
+          var wantId = ${JSON.stringify(wantId)};
+          var idOf = function (li) {
+            var d = null;
+            try { d = (typeof window !== 'undefined' && window.jQuery) ? window.jQuery(li).data('select2-data') : null; } catch (e) { d = null; }
+            if (d && d.id != null) return String(d.id);
+            var a = li.getAttribute ? (li.getAttribute('data-select2-id') || li.getAttribute('data-id')) : null;
+            return a == null ? '' : String(a);
+          };
           // Turboly's own spelling has to say "company". A person's name is not
           // an identifier — see SRO/TA12/26090099.
           var isCompany = function (rowName) {
@@ -1567,9 +1613,18 @@ export class RpaSink implements ServiceOrderSink {
             }
             return nameOk ? 1 : 0;
           };
+          // Can this build's rows be identified at all? If not (no jQuery, no
+          // attribute), nothing below changes and the old scoring decides —
+          // a matcher that cannot read ids must not start refusing rows.
+          var idsReadable = false;
+          for (var k = 0; k < lis.length; k++) { if (idOf(lis[k])) { idsReadable = true; break; } }
           var best = -1, bestScore = 0;
           for (var i = 0; i < lis.length; i++) {
+            if (wantId && idsReadable && idOf(lis[i]) === wantId) return i; // identity — nothing outranks it
             var sc = rowScore(lis[i].innerText || '');
+            // Name-only, with a known owner who is NOT this row: a different
+            // person with the same name. This is the F1125EG failure.
+            if (sc === 1 && wantId && idsReadable) sc = 0;
             if (sc > bestScore) { bestScore = sc; best = i; }
           }
           return best;

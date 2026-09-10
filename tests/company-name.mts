@@ -116,14 +116,30 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   const end = src.indexOf('return best;', start) + 'return best;'.length;
   ok(start > 0 && end > start, 'blok pencocok customer ditemukan di rpaSink');
   const raw = src.slice(start, end);
-  const matcher = (rows: string[], phoneKey: string, nama: string, requireCompany = false): number => {
+  /**
+   * `rows` are the drop's rows. A row may be written "TEXT" or "ID|TEXT" — the
+   * id is what select2 keeps on the <li>, which the matcher reads to tell two
+   * people with one name apart.
+   */
+  const matcher = (rows: string[], phoneKey: string, nama: string, requireCompany = false, wantId = ''): number => {
     const body = raw
       .replace('${JSON.stringify(phoneKey)}', JSON.stringify(phoneKey))
       .replace("${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\\s+/g, ' '))}", JSON.stringify(nama.trim().toUpperCase().replace(/\s+/g, ' ')))
       .replace("${JSON.stringify(companyNameKey(nama ?? ''))}", JSON.stringify(companyNameKey(nama)))
       .replace('${JSON.stringify(requireCompany)}', JSON.stringify(requireCompany))
+      .replace('${JSON.stringify(wantId)}', JSON.stringify(wantId))
       .replace(/\\\\/g, '\\');
-    const fakeDoc = { querySelectorAll: () => rows.map((t) => ({ innerText: t, className: 'select2-result' })) };
+    const fakeDoc = {
+      querySelectorAll: () => rows.map((r) => {
+        const bar = r.indexOf('|');
+        const id = bar > 0 ? r.slice(0, bar) : '';
+        return {
+          innerText: bar > 0 ? r.slice(bar + 1) : r,
+          className: 'select2-result',
+          getAttribute: (k: string) => (k === 'data-select2-id' && id ? id : null),
+        };
+      }),
+    };
     // eslint-disable-next-line no-new-func
     return new Function('document', body) (fakeDoc) as number;
   };
@@ -142,6 +158,29 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(matcher(['FRANKI 6281200000000'], '81200000000', 'FRANK') === 0, 'digit cocok, nama beda → tetap dipilih lewat digit (perilaku lama)');
   ok(matcher(['FRANKI'], '', 'FRANK') === -1, 'tanpa digit, FRANK tidak boleh mengambil FRANKI');
   ok(matcher([], '87779174377', 'AGNESYA DEWI T') === -1, 'tidak ada baris → -1');
+
+  // ── the plate names the owner: identity, never the namesake ────────────
+  // Live, 10 Sep: F1125EG is registered to EMILY, who has no phone in Turboly.
+  // Turboly holds TWO customers called EMILY — 4833784 (with a phone) and
+  // 4911782 (the owner) — and the pusher took the first. The car was not hers,
+  // so the vehicle add was refused and the SPK died as "sudah terdaftar atas
+  // customer LAIN".
+  const EMILYS = ['4833784|EMILY 6281211228081', '4911782|EMILY'];
+  ok(matcher(EMILYS, '', 'EMILY') === 0, 'tanpa id: perilaku lama — baris pertama (inilah bug F1125EG)');
+  ok(matcher(EMILYS, '', 'EMILY', false, '4911782') === 1, 'dengan id pemilik: EMILY yang BENAR yang dipilih');
+  ok(matcher(EMILYS, '', 'EMILY', false, '4833784') === 0, 'dan id yang lain memilih baris yang lain');
+  ok(matcher(EMILYS, '', 'EMILY', false, '4999999') === -1, 'pemilik tidak ada di daftar → tidak mengambil siapa pun');
+  // 30 people share this name on live. Without the id every one of them is a
+  // coin flip; with it, only the right one is reachable.
+  const ANDRES = ['4757876|ANDRE 6282113295585', '4758040|ANDRE 6282125020101', '4786084|ANDRE'];
+  ok(matcher(ANDRES, '', 'ANDRE', false, '4786084') === 2, 'ANDRE yang tanpa nomor pun bisa dipilih lewat id');
+  ok(matcher(ANDRES, '', 'ANDRE', false, '') === 0, 'tanpa id tetap baris pertama — tidak ada perubahan perilaku');
+  // A phone match is still identity; the id only decides between namesakes.
+  ok(matcher(['4757876|ANDRE 6282113295585', '4758040|ANDRE 6282125020101'], '82125020101', 'ANDRE', false, '4758040') === 1,
+    'nomor dan id sepakat → baris itu juga');
+  // Rows this build cannot identify must behave exactly as before.
+  ok(matcher(['EMILY 6281211228081', 'EMILY'], '', 'EMILY', false, '4911782') === 0,
+    'id tidak terbaca di baris → jatuh ke perilaku lama, bukan menolak semua');
 }
 
 console.log(`\n${passed} lulus, ${failed} gagal`);
