@@ -23,6 +23,10 @@ on:
         description: 'Store Turboly yang dipakai untuk membuka form'
         type: string
         default: 'Nawilis Bekasi'
+      customer:
+        description: 'CEK PICKER CUSTOMER: nama — baris apa saja yang muncul di picker, dengan id Turboly-nya'
+        type: string
+        default: ''
       vehicle:
         description: 'CEK PEMILIK: nomor polisi — siapa pemilik mobil ini menurut Turboly'
         type: string
@@ -144,9 +148,11 @@ jobs:
           IN_STORE: ${{ inputs.store }}
           IN_CUSTOMERS: ${{ inputs.customers }}
           IN_VEHICLE: ${{ inputs.vehicle }}
+          IN_CUSTOMER: ${{ inputs.customer }}
         run: |
           node --import tsx apps/worker/src/probe-product-search.ts \
             --q="$IN_Q" \
             --store="$IN_STORE" \
             --customers="$IN_CUSTOMERS" \
-            --vehicle="$IN_VEHICLE"
+            --vehicle="$IN_VEHICLE" \
+            --customer="$IN_CUSTOMER"

@@ -24,6 +24,14 @@ const arg = (k: string): string | undefined => process.argv.find((a) => a.starts
 const QUERIES = (arg('q') ?? '').split('|').map((s) => s.trim()).filter(Boolean);
 /** --customers=<phone>: how many customer records carry this number? */
 const CUSTOMERS = (arg('customers') ?? '').trim();
+/**
+ * --customer=<nama>: what does the CUSTOMER picker actually show for this name,
+ * and can each row's Turboly customer id be read? The pusher picks by NAME when
+ * the plate's owner has no phone, and two people with one name are one coin
+ * flip — F1125EG died that way. If the id is readable here, the pusher can pick
+ * the right person instead of the first one.
+ */
+const CUSTOMER = (arg('customer') ?? '').trim();
 /** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
 const VEHICLE = (arg('vehicle') ?? '').toUpperCase().replace(/\s/g, '');
 const STORE = arg('store') ?? 'Nawilis Bekasi';
@@ -155,6 +163,43 @@ async function main(): Promise<void> {
     const store = stores.find((s) => s.t.toUpperCase() === STORE.toUpperCase());
     if (store) { await page.selectOption('#store-id', { value: store.v }); await page.waitForTimeout(2000); }
     console.log(`\nstore: ${store ? `${store.t} (${store.v})` : '(tidak dipilih)'}`);
+
+    // --customer: the CUSTOMER picker, row by row, with the id behind each row.
+    if (CUSTOMER) {
+      await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
+      await page.waitForTimeout(500);
+      await page.locator('#select2-drop input.select2-input, .select2-drop-active input.select2-input')
+        .first().fill(CUSTOMER).catch(async () => { await page.keyboard.insertText(CUSTOMER); });
+      let rows: Array<{ text: string; id: string }> = [];
+      for (let i = 0; i < 30; i++) {
+        // String-form evaluate: a named arrow here is compiled to a __name()
+        // call that does not exist in the browser (see rpaSink).
+        rows = (await page.evaluate(`(() => {
+          var lis = Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
+            .filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); });
+          return lis.map(function (li) {
+            var d = null;
+            try { d = window.jQuery ? window.jQuery(li).data('select2-data') : null; } catch (e) { d = null; }
+            if (!d) { try { d = li.__select2Data || null; } catch (e2) { d = null; } }
+            return {
+              text: (li.innerText || '').replace(/\s+/g, ' ').trim(),
+              id: d && d.id != null ? String(d.id) : '(tidak terbaca)',
+            };
+          });
+        })()`)) as Array<{ text: string; id: string }>;
+        if (rows.length) break;
+        await page.waitForTimeout(700);
+      }
+      console.log(`\n— picker customer "${CUSTOMER}" → ${rows.length} baris —`);
+      rows.forEach((r, i) => console.log(`  ${i === 0 ? '→ DIPILIH SEKARANG' : '                  '} [${i}] id=${r.id}  ${r.text}`));
+      if (!rows.length) console.log('  (tidak ada hasil)');
+      await page.keyboard.press('Escape').catch(() => {});
+      await page.waitForTimeout(300);
+      console.log('\n(tidak ada yang disimpan — form tidak pernah di-submit)');
+      await session.dispose().catch(() => {});
+      await close().catch(() => {});
+      process.exit(0);
+    }
 
     // Open the pane exactly as addLinesOnOpenForm does — the add-links sit
     // hidden until this tab is clicked, so the click may no-op but is required.
