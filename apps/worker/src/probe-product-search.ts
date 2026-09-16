@@ -58,7 +58,8 @@ async function main(): Promise<void> {
           if (e.type === 'hidden' && !/vehicle|customer/i.test(e.name || '')) continue;
           var lab = '';
           if (e.id) { var l = document.querySelector('label[for="' + e.id + '"]'); if (l) lab = (l.innerText || '').replace(/\\s+/g, ' ').trim(); }
-          out.push([e.tagName.toLowerCase(), e.type || '', e.id || '', e.name || '', e.required ? 'REQUIRED' : '', lab].join(' | '));
+          var val = e.tagName === 'SELECT' ? (e.selectedIndex >= 0 && e.options[e.selectedIndex] ? '= ' + (e.options[e.selectedIndex].text || '').trim() : '') : (e.type !== 'password' && e.value ? '= ' + String(e.value).slice(0, 40) : '');
+          out.push([e.tagName.toLowerCase(), e.type || '', e.id || '', e.name || '', e.required ? 'REQUIRED' : '', lab, val].join(' | '));
         }
         var btns = Array.prototype.map.call(document.querySelectorAll('form input[type=submit], form button'), function (b) { return 'BUTTON | ' + (b.value || b.innerText || '').trim() + ' | ' + (b.className || ''); });
         return out.concat(btns);
