@@ -788,7 +788,7 @@ export class RpaSink implements ServiceOrderSink {
     })()`).catch(() => '')) as string;
     // Annotated on purpose: the field was nulled at the top of this method and
     // set again inside awaited calls, which TypeScript's narrowing cannot see.
-    const wanted: { id: string; name: string } | null = this.pickedCustomer;
+    const wanted = this.pickedCustomer as { id: string; name: string } | null;
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH form customer_id=${formCustomerId || '(kosong)'} wanted=${wanted?.id ?? '(tidak ditentukan)'}`);
     if (wanted?.id && formCustomerId && formCustomerId !== wanted.id) {
       throw new DataError(
