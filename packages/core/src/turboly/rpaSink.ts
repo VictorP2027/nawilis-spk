@@ -813,23 +813,19 @@ export class RpaSink implements ServiceOrderSink {
       await page.waitForTimeout(1500);
       formCustomerId = await readFormCustomerId();
     }
-    if (this.pickedCustomer && !formCustomerId) {
-      // The hidden id could not be read on this build: fall back to the NAME
-      // select2 shows as chosen, and never let the check pass unnoticed.
-      const chosen = ((await page.locator('#s2id_select2-input-customer .select2-chosen').first().innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
-      const wantName = (this.pickedCustomer as { name: string }).name.trim().toUpperCase();
-      console.log(`  ⚠ id customer di form order tidak terbaca — dicek lewat nama: form="${chosen}" diminta="${wantName}"`);
-      if (chosen && wantName && !chosen.toUpperCase().startsWith(wantName)) {
-        throw new DataError(`customer di form order ("${chosen}") bukan customer yang dimaksud ("${wantName}") — order TIDAK disimpan supaya tidak jatuh ke orang lain`);
-      }
-    }
+    // Diagnostic only: the chosen text, for the message below. A name can
+    // never stand in for the id — namesakes are the whole problem.
+    const chosen = ((await page.locator('#s2id_select2-input-customer .select2-chosen').first().innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
     // Annotated on purpose: the field was nulled at the top of this method and
     // set again inside awaited calls, which TypeScript's narrowing cannot see.
     const wanted = this.pickedCustomer as { id: string; name: string } | null;
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH form customer_id=${formCustomerId || '(kosong)'} wanted=${wanted?.id ?? '(tidak ditentukan)'}`);
-    if (wanted?.id && formCustomerId && formCustomerId !== wanted.id) {
+    // FAIL CLOSED: an id that cannot be read is not a pass. If this build ever
+    // hides the field, the first push parks with this message — visible and
+    // reversible — instead of saving an irreversible order on a guess.
+    if (wanted?.id && formCustomerId !== wanted.id) {
       throw new DataError(
-        `customer di form order (#${formCustomerId}) bukan customer yang dimaksud (#${wanted.id} "${wanted.name}") — order TIDAK disimpan supaya tidak jatuh ke orang lain`,
+        `customer di form order (${formCustomerId ? `#${formCustomerId}` : 'id tidak terbaca'}${chosen ? `, tampil "${chosen}"` : ''}) bukan / tidak bisa dipastikan customer yang dimaksud (#${wanted.id} "${wanted.name}") — order TIDAK disimpan supaya tidak jatuh ke orang lain`,
       );
     }
 
@@ -1576,6 +1572,13 @@ export class RpaSink implements ServiceOrderSink {
          * person.
          */
         expectName = orig.name.trim();
+        // The PHONE is the key. A remembered id is a hint from an earlier
+        // attempt; if a person since moved the number to another record
+        // (merge, correction), the number wins.
+        if (ownerRef?.why === 'known' && orig.id !== wantId) {
+          if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH nomor kini tercatat pada #${orig.id}, bukan #${wantId} yang diingat — mengikuti nomor`);
+          wantId = orig.id;
+        }
         wantId = wantId || orig.id;
         const stored = orig.phone.trim();
         if (stored.startsWith('+')) queries.push(orig.name.trim(), localPhone(phone), stored);
@@ -1614,8 +1617,11 @@ export class RpaSink implements ServiceOrderSink {
      * message replaces (F1125EG, 10 Sep): the owner was EMILY, Turboly holds
      * two EMILYs, and the pusher took the first. Say who owns the car and stop.
      */
-    if (ownerRef && this.createdThisPush?.id === ownerRef.customerId) {
-      throw new TransientError(`customer #${ownerRef.customerId} baru saja dibuat dan belum muncul di daftar pilihan form order — dicoba ulang otomatis`);
+    if (ownerRef && (this.createdThisPush?.id === ownerRef.customerId || ownerRef.why === 'known')) {
+      // Created moments ago (this push) or remembered from the previous
+      // attempt (minutes ago): a picker that cannot list them yet is index
+      // lag. Retry — the refund cap bounds it — never park or re-create.
+      throw new TransientError(`customer #${ownerRef.customerId} ${ownerRef.why === 'known' ? 'yang tercatat untuk SPK ini' : 'baru saja dibuat'} belum muncul di daftar pilihan form order — dicoba ulang otomatis`);
     }
     if (ownerRef) {
       throw new DataError(
@@ -1645,7 +1651,7 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** One attempt: type `query` into the customer select2 and pick the row that matches. */
-  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string, requireCompany = false, wantId = ''): Promise<boolean> {
+  private async pickCustomerInSelect2(query: string, phoneKey: string, nama: string, requireCompany = false, wantId = '', retry = false): Promise<boolean> {
     const page = this.session.page_();
     try {
       await page.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
@@ -1786,6 +1792,18 @@ export class RpaSink implements ServiceOrderSink {
       }
       await page.locator('#select2-drop .select2-results li:not(.select2-no-results):not(.select2-searching):not(.select2-selection-limit):not(.select2-disabled):not(.select2-more-results)').nth(idx).click({ timeout: 4000 });
       await page.waitForTimeout(500);
+      if (wantId) {
+        // The row was chosen in one step and clicked in another; a select2
+        // re-render in between can move the rows. Read back what the form
+        // holds and try once more if it is another customer.
+        const got = (await page.evaluate(`(() => { var el = document.querySelector('#select2-input-customer'); return el && el.value != null ? String(el.value) : ''; })()`).catch(() => '')) as string;
+        if (got && got !== wantId) {
+          if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH pick landed on #${got}, wanted #${wantId} — ${retry ? 'giving up' : 'retrying once'}`);
+          await page.keyboard.press('Escape').catch(() => {});
+          await page.waitForTimeout(400);
+          return retry ? false : this.pickCustomerInSelect2(query, phoneKey, nama, requireCompany, wantId, true);
+        }
+      }
       return true;
     } catch (e) {
       if (e instanceof TransientError) throw e;
@@ -1843,13 +1861,17 @@ export class RpaSink implements ServiceOrderSink {
     const fill = async (withAddress: boolean): Promise<{ tax: string; addressRow: boolean }> => {
       await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(2500);
+      await this.assertSessionAlive('buka halaman customer baru');
       const body0 = ((await page.textContent('body').catch(() => '')) ?? '');
       if (/sorry you can't view|you are not authorized|tidak berhak/i.test(body0) || !(await page.locator('#customer_name').count())) {
         throw new DataError(`halaman customer baru (/customers/new) tidak bisa dibuka oleh akun robot — beri izin menu Customers pada user Turboly ini (halaman: ${page.url()})`);
       }
-      await page.fill('#customer_name', nama);
-      await page.fill('#customer_group_name', nama).catch(() => {});
-      if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone));
+      await page.fill('#customer_name', nama, { timeout: 8000 });
+      await page.fill('#customer_group_name', nama, { timeout: 4000 }).catch(() => {});
+      if (c?.phone) {
+        const phoneOk = await page.fill('#customer_phone', e164Phone(c.phone), { timeout: 8000 }).then(() => true).catch(() => false);
+        if (!phoneOk) throw new DataError('kontrol PHONE (#customer_phone) tidak ditemukan di halaman customer baru — bentuk halaman Turboly berubah');
+      }
 
       // STORE — must take.
       const storeOk = await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).then(() => true).catch(() => false);
@@ -1868,11 +1890,12 @@ export class RpaSink implements ServiceOrderSink {
         var want = null;
         for (var i = 0; i < s.options.length; i++) { if (/^ppn$/i.test((s.options[i].textContent || '').trim())) { want = s.options[i]; break; } }
         if (want) { s.value = want.value; s.dispatchEvent(new Event('change', { bubbles: true })); try { if (window.jQuery) window.jQuery(s).trigger('change'); } catch (e) {} }
-        if (!s.value) { for (var k = 0; k < s.options.length; k++) { if (s.options[k].value) { s.value = s.options[k].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } }
+        // No PPN and nothing pre-selected: refuse below — a first option is
+        // not a tax choice (set-customer-tax.ts exists because of that).
         var o = s.options[s.selectedIndex];
         return { ok: !!s.value, t: o ? (o.textContent || '').trim() : '', options: options };
       })()`)) as { ok: boolean; t: string; options: string[] };
-      if (!tax.ok) throw new DataError(`SALES TAX tidak bisa diset di halaman customer baru — pilihan: ${tax.options.join(', ') || '(kosong)'}`);
+      if (!tax.ok) throw new DataError(`SALES TAX di halaman customer baru tidak punya pilihan "PPN" dan tidak ada yang terpilih — pilihan: ${tax.options.join(', ') || '(kosong)'}. Periksa pengaturan pajak store di Turboly.`);
 
       if (c?.alamat) await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
       let addressRow = false;
@@ -1925,6 +1948,8 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     })()`);
     if (!clicked) throw new DataError('tombol Save di halaman customer baru tidak ditemukan');
+    await page.waitForTimeout(800);
+    await this.confirmModals().catch(() => {}); // a "save anyway?" prompt, if this build raises one
     // Wait for the redirect, not a fixed pause — a slow save is not a refusal.
     let m: RegExpExecArray | null = null;
     for (let i = 0; i < 24 && !m; i++) {
@@ -1938,7 +1963,14 @@ export class RpaSink implements ServiceOrderSink {
       // else retry. Never "rejected" on a guess: that parks the SPK and the
       // next attempt would create the same person again.
       await this.assertSessionAlive('simpan customer baru');
-      const err = await this.readInlineError(page).catch(() => null);
+      let err = await this.readInlineError(page).catch(() => null);
+      // Bootstrap-2 per-field hints, read only here where a form was just refused.
+      const hints = (await page.evaluate(`(() => {
+        var out = []; var nodes = document.querySelectorAll('.help-inline, .has-error .help-block, .field_with_errors + .help-block');
+        for (var i = 0; i < nodes.length; i++) { var r = nodes[i].getBoundingClientRect(); var t = (nodes[i].innerText || '').replace(/\\s+/g, ' ').trim(); if (r.width > 0 && t && out.indexOf(t) < 0) out.push(t); }
+        return out.slice(0, 6).join(' | ');
+      })()`).catch(() => '')) as string;
+      if (hints) err = err ? `${err} | ${hints}` : hints;
       await this.snapshot(page, `${payload.spkId}-customer-only-unconfirmed`).catch(() => null);
       if (err) throw new DataError(`customer baru "${nama}" ditolak Turboly: ${err}`);
       const found = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
@@ -1949,15 +1981,38 @@ export class RpaSink implements ServiceOrderSink {
       }
       throw new TransientError(`halaman customer baru tidak berpindah setelah Save dan nomornya belum terlihat di daftar — status belum pasti, dicoba ulang otomatis (halaman: ${page.url()})`);
     }
-    // The record Turboly opened must be the person we typed: its page has to
-    // carry the typed number. If the page resolved the NAME to someone else
-    // (the popup did exactly that on live), stop here — nothing is attached.
-    const bodyDigits = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\D/g, '');
-    if (!bodyDigits.includes(phoneKey)) {
+    /**
+     * The record Turboly opened must be the person we typed. Proof is the
+     * customers LIST filtered by the typed number (database-backed, immediate):
+     * it must name exactly this id. Page text is not proof — the show page
+     * renders the number inside controls (sandbox V1, 16 Sep: a good create
+     * was refused as "record lama"). If the list names ANOTHER id, the page
+     * resolved the NAME to someone else — the popup did exactly that on live —
+     * and nothing is attached. If the list cannot answer, look for the digits
+     * in the page's controls and text; still unproven → retry, never a guess.
+     */
+    const newId = m[1]!;
+    const proof = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
+    if (proof && proof.id !== newId) {
       await this.snapshot(page, `${payload.spkId}-customer-only-other-record`).catch(() => null);
-      throw new DataError(`setelah Save, Turboly membuka customer #${m[1]} yang TIDAK memuat nomor yang diketik — kemungkinan nama diarahkan ke record lama; order tidak dibuat. Periksa customer #${m[1]} di Turboly.`);
+      throw new DataError(`setelah Save, Turboly membuka customer #${newId} tetapi nomor yang diketik tercatat pada customer #${proof.id} "${proof.name}" — kemungkinan nama diarahkan ke record lain; order tidak dibuat. Periksa kedua customer di Turboly.`);
     }
-    this.pickedCustomer = { id: m[1]!, name: nama };
+    if (!proof) {
+      const digitsOnPage = (await page.evaluate(`(() => {
+        var t = (document.body && document.body.innerText) || '';
+        var els = document.querySelectorAll('input, textarea');
+        for (var i = 0; i < els.length; i++) { if (els[i].type !== 'password') t += ' ' + (els[i].value || ''); }
+        return t.replace(/\\D/g, '');
+      })()`).catch(() => '')) as string;
+      if (!digitsOnPage.includes(phoneKey)) {
+        await this.snapshot(page, `${payload.spkId}-customer-only-unproven`).catch(() => null);
+        if (proof === null) {
+          throw new DataError(`setelah Save, Turboly membuka customer #${newId} yang TIDAK memuat nomor yang diketik, dan nomor itu tidak ada di daftar customer — order tidak dibuat. Periksa customer #${newId} di Turboly.`);
+        }
+        throw new TransientError(`customer #${newId} tersimpan tetapi nomornya belum bisa dibuktikan (daftar customer tidak menjawab) — dicoba ulang otomatis`);
+      }
+    }
+    this.pickedCustomer = { id: newId, name: nama };
     this.createdThisPush = this.pickedCustomer;
   }
 
@@ -2312,11 +2367,14 @@ export class RpaSink implements ServiceOrderSink {
       }
       if (at >= 0) idx = at;
       else if (at === -2) {
-        // This build hides row ids. One row is unambiguous; more than one is
-        // exactly the "car registered to the first namesake" failure
-        // (SRO/RDA/26090478) and must not be guessed.
+        // This build hides row ids, so no row can be proven to be #wantId —
+        // not even a single one: a fresh record missing from the search with
+        // one namesake listed is exactly the "car registered to the first
+        // namesake" failure (SRO/RDA/26090478). Ids are readable on live's
+        // pickers (proven 10 Sep), so this is a guard, not a path.
         const n = await page.locator(results).count();
-        if (n > 1) throw new DataError(`customer #${wantId} ("${q}"): ${n} baris bernama sama dan id barisnya tidak terbaca — kendaraan tidak didaftarkan ke tebakan. Tambahkan plat ke customer #${wantId} di Turboly, lalu tekan "Coba lagi".`);
+        if (this.createdThisPush?.id === wantId) throw new TransientError(`customer #${wantId} ("${q}") baru dibuat dan id baris pencarian tidak terbaca (${n} baris) — dicoba ulang otomatis, tidak ditebak`);
+        throw new DataError(`customer #${wantId} ("${q}"): id baris pencarian tidak terbaca (${n} baris bernama sama) — kendaraan tidak didaftarkan ke tebakan. Tambahkan plat ke customer #${wantId} di Turboly, lalu tekan "Coba lagi".`);
       }
     }
     await page.locator(results).nth(idx).click({ timeout: 5000 });
@@ -2828,7 +2886,7 @@ export class RpaSink implements ServiceOrderSink {
   private async readInlineError(page: Page): Promise<string | null> {
     // Turboly's validation banner is Bootstrap-2 era (.alert-error), e.g.
     // "Can't create Service Order: Error — Service Advisor can't be blank".
-    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger', '.help-inline', '.field_with_errors + .help-block', '.has-error .help-block']) {
+    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
       const loc = page.locator(sel);
       const n = await loc.count();
       for (let i = 0; i < n; i++) {
