@@ -1831,57 +1831,90 @@ export class RpaSink implements ServiceOrderSink {
       return;
     }
 
-    await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
-    const body0 = ((await page.textContent('body').catch(() => '')) ?? '');
-    if (/sorry you can't view|you are not authorized|tidak berhak/i.test(body0) || !(await page.locator('#customer_name').count())) {
-      throw new DataError(`halaman customer baru (/customers/new) tidak bisa dibuka oleh akun robot — beri izin menu Customers pada user Turboly ini (halaman: ${page.url()})`);
-    }
-    await page.fill('#customer_name', nama);
-    await page.fill('#customer_group_name', nama).catch(() => {});
-    if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone));
+    /**
+     * Fill the whole form. The address is a nested row behind "Add Address"
+     * (a modal for type/country, then the row), and Turboly refuses the save
+     * with "Main Address must be one" unless exactly one row is marked main —
+     * the mark is a RADIO the page's own JS handles, which Playwright's check()
+     * cannot always reach (sandbox V1-V4, 16 Sep: four rejections). So the
+     * row is only kept when the mark is proven; otherwise the form is filled
+     * again WITHOUT the row and the address lives in NOTES.
+     */
+    const fill = async (withAddress: boolean): Promise<{ tax: string; addressRow: boolean }> => {
+      await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(2500);
+      const body0 = ((await page.textContent('body').catch(() => '')) ?? '');
+      if (/sorry you can't view|you are not authorized|tidak berhak/i.test(body0) || !(await page.locator('#customer_name').count())) {
+        throw new DataError(`halaman customer baru (/customers/new) tidak bisa dibuka oleh akun robot — beri izin menu Customers pada user Turboly ini (halaman: ${page.url()})`);
+      }
+      await page.fill('#customer_name', nama);
+      await page.fill('#customer_group_name', nama).catch(() => {});
+      if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone));
 
-    // STORE — must take.
-    const storeOk = await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).then(() => true).catch(() => false);
-    if (!storeOk) {
-      const opts = (await page.$$eval('#customer_store_id option', (els) => els.map((e) => `${(e as HTMLOptionElement).value}:${(e.textContent ?? '').trim()}`).filter((x) => !x.startsWith(':'))).catch(() => [])) as string[];
-      throw new DataError(`store ${payload.storeTurbolyId} tidak bisa dipilih di halaman customer baru — pilihan: ${opts.slice(0, 20).join(', ') || '(tidak terbaca)'}`);
-    }
-    await page.waitForTimeout(1200);
+      // STORE — must take.
+      const storeOk = await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).then(() => true).catch(() => false);
+      if (!storeOk) {
+        const opts = (await page.$$eval('#customer_store_id option', (els) => els.map((e) => `${(e as HTMLOptionElement).value}:${(e.textContent ?? '').trim()}`).filter((x) => !x.startsWith(':'))).catch(() => [])) as string[];
+        throw new DataError(`store ${payload.storeTurbolyId} tidak bisa dipilih di halaman customer baru — pilihan: ${opts.slice(0, 20).join(', ') || '(tidak terbaca)'}`);
+      }
+      await page.waitForTimeout(1200);
 
-    // SALES TAX — PPN by name when the form offers it; otherwise whatever the
-    // store pre-selects (the sandbox tenant offers "Always Use Tax" only).
-    const tax = (await page.evaluate(`(() => {
-      var s = document.querySelector('#customer_service_tax_id');
-      if (!s) return { ok: false, t: '(kontrol tidak ada)', options: [] };
-      var options = Array.prototype.map.call(s.options, function (o) { return (o.textContent || '').trim(); });
-      var want = null;
-      for (var i = 0; i < s.options.length; i++) { if (/^ppn$/i.test((s.options[i].textContent || '').trim())) { want = s.options[i]; break; } }
-      if (want) { s.value = want.value; s.dispatchEvent(new Event('change', { bubbles: true })); try { if (window.jQuery) window.jQuery(s).trigger('change'); } catch (e) {} }
-      if (!s.value) { for (var k = 0; k < s.options.length; k++) { if (s.options[k].value) { s.value = s.options[k].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } }
-      var o = s.options[s.selectedIndex];
-      return { ok: !!s.value, t: o ? (o.textContent || '').trim() : '', options: options };
-    })()`)) as { ok: boolean; t: string; options: string[] };
-    if (!tax.ok) throw new DataError(`SALES TAX tidak bisa diset di halaman customer baru — pilihan: ${tax.options.join(', ') || '(kosong)'}`);
+      // SALES TAX — PPN by name when the form offers it; otherwise whatever the
+      // store pre-selects. Never silently empty.
+      const tax = (await page.evaluate(`(() => {
+        var s = document.querySelector('#customer_service_tax_id');
+        if (!s) return { ok: false, t: '(kontrol tidak ada)', options: [] };
+        var options = Array.prototype.map.call(s.options, function (o) { return (o.textContent || '').trim(); });
+        var want = null;
+        for (var i = 0; i < s.options.length; i++) { if (/^ppn$/i.test((s.options[i].textContent || '').trim())) { want = s.options[i]; break; } }
+        if (want) { s.value = want.value; s.dispatchEvent(new Event('change', { bubbles: true })); try { if (window.jQuery) window.jQuery(s).trigger('change'); } catch (e) {} }
+        if (!s.value) { for (var k = 0; k < s.options.length; k++) { if (s.options[k].value) { s.value = s.options[k].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } }
+        var o = s.options[s.selectedIndex];
+        return { ok: !!s.value, t: o ? (o.textContent || '').trim() : '', options: options };
+      })()`)) as { ok: boolean; t: string; options: string[] };
+      if (!tax.ok) throw new DataError(`SALES TAX tidak bisa diset di halaman customer baru — pilihan: ${tax.options.join(', ') || '(kosong)'}`);
 
-    // ADDRESS — the page has no plain address field; "Add Address" appends a
-    // row. Best effort: the typed address is also kept in NOTES.
-    if (c?.alamat) {
-      await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
-      const addressOk = await (async () => {
-        const add = page.locator('a.add_fields, a:has-text("Add Address")').first();
-        if (!(await add.count())) return false;
-        await add.click({ timeout: 4000 }).catch(() => {});
-        await page.waitForTimeout(800);
-        const field = page.locator('textarea[name*="[address]"], input[name*="[address]"], #address_address').last();
-        if (!(await field.count())) return false;
-        await field.fill(c.alamat!).catch(() => {});
-        await page.locator('input[name="main_address_index"], input[name*="main_address"]').last().check({ timeout: 2000 }).catch(() => {});
-        return true;
-      })().catch(() => false);
-      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly: alamat ${addressOk ? 'di baris Add Address + Notes' : 'hanya di Notes'}`);
+      if (c?.alamat) await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
+      let addressRow = false;
+      if (withAddress && c?.alamat) {
+        // Same sequence flowSink.registerRetailCustomer proved on live (4 Aug):
+        // reveal → fill → close the modal → mark main.
+        await page.evaluate(`(() => {
+          var el = document.querySelector('#address_address'); var r = el && el.getBoundingClientRect();
+          if (r && r.width > 0 && r.height > 0) return;
+          var hit = Array.prototype.find.call(document.querySelectorAll('a, button'), function (n) { return /add\\s*address/i.test(n.innerText || '') && n.offsetParent !== null; });
+          if (hit) hit.click();
+        })()`).catch(() => {});
+        await page.waitForTimeout(1500);
+        const field = page.locator('#address_address, textarea[name*="[address]"], input[name*="[address]"]').last();
+        if (await field.count()) {
+          await field.fill(c.alamat).catch(() => {});
+          await page.evaluate(`(() => {
+            var open = Array.prototype.filter.call(document.querySelectorAll('.modal, .modal-scrollable'), function (m) { return getComputedStyle(m).display !== 'none'; });
+            var modal = open.find(function (m) { return /address\\s*type|\\bcountry\\b/i.test(m.innerText || ''); }) || open[open.length - 1];
+            if (!modal) return false;
+            var btn = Array.prototype.find.call(modal.querySelectorAll('a, button, input[type=button], input[type=submit]'), function (n) { return /^(save|simpan|ok|add|tambah)$/i.test(((n.innerText || n.value) || '').trim()); });
+            if (btn) { btn.click(); return true; }
+            return false;
+          })()`).catch(() => false);
+          await page.waitForTimeout(1600);
+          addressRow = (await page.evaluate(`(() => {
+            var radios = Array.prototype.filter.call(document.querySelectorAll('input[type=radio]'), function (r) { return /main_address/i.test(r.name || r.id || ''); });
+            var free = radios.find(function (r) { return !r.disabled; });
+            if (free) { if (!free.checked) free.click(); return radios.filter(function (r) { return r.checked; }).length === 1; }
+            return false;
+          })()`).catch(() => false)) as boolean;
+        }
+      }
+      return { tax: tax.t, addressRow };
+    };
+    let filled = await fill(true);
+    if (c?.alamat && !filled.addressRow) {
+      // The row could not be marked main: Turboly would refuse the whole save.
+      // Fill again without the row; the address stays in NOTES.
+      filled = await fill(false);
     }
-    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${tax.t}"`);
+    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${filled.tax}" alamat=${c?.alamat ? (filled.addressRow ? 'baris Add Address + Notes' : 'hanya Notes') : '-'}`);
 
     const before = page.url();
     const clicked = await page.evaluate(`(() => {
