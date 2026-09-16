@@ -623,7 +623,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
           {!plateOk && <div className="req-note">⚠ wajib diisi</div>}
           {plateBad && <div className="warn-note">⚠ Format tidak wajar (contoh: B 1234 XYZ) — boleh lanjut.</div>}
           {ownerMismatch && plateOwner && (
-            <div className="warn-note">⚠ Plat ini milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Order Turboly <b>tetap atas nama {plateOwner.nama}</b>; orang di form ini dicatat sebagai pembawa kendaraan di Notes.</div>
+            <div className="warn-note">⚠ Plat ini milik <b>{plateOwner.nama}</b> ({plateOwner.wa}) — WA berbeda. Nomor WA adalah kunci customer: order dibuat atas nama <b>customer di form ini</b> (nomor ini), dan mobil ikut didaftarkan ke customer ini. Pastikan nomornya benar.</div>
           )}
           {hist && (
             <div className="ok-sm" style={{ color: '#55627a' }}>

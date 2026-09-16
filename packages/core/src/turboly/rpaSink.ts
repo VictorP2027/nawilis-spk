@@ -74,6 +74,8 @@ export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
   /** The customer the order form attached to, when identity was proven — the add-vehicle page must use the same one. */
   private pickedCustomer: { id: string; name: string } | null = null;
+  /** This push created the customer (customer-only) and still owes the car a registration. */
+  private justCreated = false;
 
   constructor(
     private readonly session: TurbolySession,
@@ -645,6 +647,7 @@ export class RpaSink implements ServiceOrderSink {
     // someone else (sister, driver) brings it in. The carrier becomes a notes
     // line, never a second owner.
     this.pickedCustomer = null;
+    this.justCreated = false;
     let effNama = create?.nama ?? '';
     let effPhone = create?.phone ?? '';
     const ownerRaw = await this.resolveVehicleOriginalOwner(reg);
@@ -721,7 +724,7 @@ export class RpaSink implements ServiceOrderSink {
       }
     }
     if (!attached) {
-      await this.createCustomerAndVehicle(payload);
+      await this.createCustomerAndVehicle(payload, { customerOnly: !!ownerRaw });
       await page.waitForTimeout(1200);
       await this.dismissModals();
     }
@@ -978,8 +981,10 @@ export class RpaSink implements ServiceOrderSink {
     // Fallback spelling only: if resolveOriginalCustomer answers, its exact
     // stored form replaces this. E.164 first — that is what we write now.
     let q = (phoneKey && cr?.phone ? e164Phone(cr.phone) : '') || cr?.nama || payload.customer.existingQuery;
+    let origId = '';
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
+      if (orig) origId = orig.id;
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
       // Same reason as tryPickCustomerExact — but stronger on live: the select2
       // cannot search ANY phone spelling, not even the exact stored form
@@ -1002,10 +1007,16 @@ export class RpaSink implements ServiceOrderSink {
      */
     const picked = this.pickedCustomer;
     if (picked) q = picked.name || q;
+    const wantAddId = picked?.id || origId;
+    if (this.justCreated && !wantAddId) {
+      // We created this person seconds ago and the phone lookup cannot see them
+      // yet. Registering the car by name would take the first namesake.
+      throw new TransientError('customer baru belum terbaca lewat nomor telepon — kendaraan didaftarkan pada percobaan berikutnya');
+    }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
-    await this.modalSelect2Pick('s2id_select2-input-customer', q, picked?.id ?? ''); // same container id as the SO form
+    await this.modalSelect2Pick('s2id_select2-input-customer', q, wantAddId); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
     await this.pickMakeWithTypeFallback(page, payload);
@@ -1709,7 +1720,7 @@ export class RpaSink implements ServiceOrderSink {
    * let Turboly auto-select them into the Service Order. Store/Service Tax/Country
    * are pre-filled by Turboly (we picked the store already). Proven live 2026-08-01.
    */
-  private async createCustomerAndVehicle(payload: TurbolyServiceOrderPayload): Promise<void> {
+  private async createCustomerAndVehicle(payload: TurbolyServiceOrderPayload, opts: { customerOnly?: boolean } = {}): Promise<void> {
     const page = this.session.page_();
     const c = payload.customer.create;
     // Open the modal (the control is an <a>/<button>/<input> labelled "Add New Customer").
@@ -1726,6 +1737,16 @@ export class RpaSink implements ServiceOrderSink {
 
     // Vehicle
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
+    /**
+     * THE PLATE IS ALREADY IN TURBOLY UNDER SOMEONE ELSE.
+     *
+     * This popup refuses a registration that exists (sandbox T2, 16 Sep:
+     * "new-customer create rejected" for a new phone on a known car), so a
+     * different person bringing a known car could never be created here. Create
+     * the CUSTOMER alone, and let the add-vehicle page register the car to them
+     * — that page accepts a second registration (T1, SRO/BKS/26090189).
+     */
+    if (!opts.customerOnly) {
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
     await this.pickMakeWithTypeFallback(page, payload);
     await page.waitForTimeout(900);
@@ -1737,6 +1758,7 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#customer_vehicles_attributes_0_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
     // "Month next service default" is a NUMBER of months, not a date.
     await page.fill('#customer_vehicles_attributes_0_next_service_date_default', '3').catch(() => {});
+    }
 
     // Save the modal (its own submit button, class starts turbo-btn-save-cust*; a
     // DOM click bypasses the fixed-footer actionability quirk). NOT the SO's save.
@@ -1804,6 +1826,10 @@ export class RpaSink implements ServiceOrderSink {
         `new-customer create rejected${err ? `: ${err}` : ''}`
         + ` [merk="${payload.vehicleMake}" model="${payload.vehicleModel}" tahun="${payload.vehicleYear}" warna="${payload.vehicleColor}" nopol="${payload.vehicleRegistration}"]`,
       );
+    }
+    if (opts.customerOnly) {
+      this.justCreated = true;
+      throw new NeedAddVehicleError(`customer "${c?.nama ?? ''}" dibuat; plat ${reg} sudah terdaftar atas customer lain — didaftarkan terpisah`);
     }
   }
 
