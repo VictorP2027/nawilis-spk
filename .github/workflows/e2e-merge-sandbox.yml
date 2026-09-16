@@ -205,3 +205,15 @@ jobs:
           if [ -n "$IN_EXTRA" ]; then args+=(--extra="$IN_EXTRA"); fi
           node --import tsx apps/worker/src/e2e-merge-sandbox.ts \
             --branch="$IN_BRANCH" --advisor="$IN_ADVISOR" --kind="$IN_KIND" "${args[@]}"
+
+      # Harness only: what the robot saw when a step was refused. The pusher
+      # already writes these; without uploading them a rejected popup is a
+      # one-line mystery ("new-customer create rejected", no reason given).
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: .turboly-state/screenshots
+          if-no-files-found: ignore
+          retention-days: 7

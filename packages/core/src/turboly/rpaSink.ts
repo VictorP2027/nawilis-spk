@@ -1781,7 +1781,21 @@ export class RpaSink implements ServiceOrderSink {
       }),
     );
     if (stillOpen) {
-      const err = await this.readInlineError(page).catch(() => null);
+      let err = await this.readInlineError(page).catch(() => null);
+      // The popup's own field errors — readInlineError reads the page, and the
+      // popup's reasons were never in that text, so every refusal looked alike.
+      const modalErr = (await page.evaluate(`(() => {
+        var out = [];
+        var nodes = document.querySelectorAll('.modal .has-error, .modal .help-block, .modal .alert-danger, .modal .error, .modal .parsley-errors-list li, .modal .field_with_errors, .modal .invalid-feedback');
+        for (var i = 0; i < nodes.length; i++) {
+          var r = nodes[i].getBoundingClientRect();
+          var t = (nodes[i].innerText || '').replace(/\\s+/g, ' ').trim();
+          if (r.width > 0 && r.height > 0 && t && out.indexOf(t) < 0) out.push(t);
+        }
+        return out.slice(0, 6).join(' | ');
+      })()`).catch(() => '')) as string;
+      if (modalErr) err = err ? `${err} | ${modalErr}` : modalErr;
+      await this.snapshot(page, `${payload.spkId}-newcust-rejected`).catch(() => null);
 
       /**
        * A REJECTED CREATE IS EVIDENCE THE RECORD ALREADY EXISTS.
