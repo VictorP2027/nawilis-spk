@@ -32,6 +32,8 @@ const CUSTOMERS = (arg('customers') ?? '').trim();
  * the right person instead of the first one.
  */
 const CUSTOMER = (arg('customer') ?? '').trim();
+/** --form=/customers/new: list a page's fields (id, name, required, label) — read-only, never submits. */
+const FORM = (arg('form') ?? '').trim();
 /** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
 const VEHICLE = (arg('vehicle') ?? '').toUpperCase().replace(/\s/g, '');
 const STORE = arg('store') ?? 'Nawilis Bekasi';
@@ -39,6 +41,32 @@ const STORE = arg('store') ?? 'Nawilis Bekasi';
 async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   console.log(`base=${config.turbolyBaseUrl} db=${config.mongoDb}`);
+
+  // --form: what a Turboly page asks for, without ever saving it.
+  if (FORM) {
+    const sf = new TurbolySession({ baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state', userAgentSuffix: 'probe-form', branchCode: 'PROBE' });
+    await sf.start(); await sf.ensureLoggedIn();
+    try {
+      await sf.page_().goto(`${config.turbolyBaseUrl}${FORM}`, { waitUntil: 'domcontentloaded' });
+      await sf.page_().waitForTimeout(3000);
+      console.log(`\n— ${FORM} → ${sf.page_().url()} —`);
+      const fields = (await sf.page_().evaluate(`(() => {
+        var out = [];
+        var els = document.querySelectorAll('form input, form select, form textarea');
+        for (var i = 0; i < els.length; i++) {
+          var e = els[i];
+          if (e.type === 'hidden' && !/vehicle|customer/i.test(e.name || '')) continue;
+          var lab = '';
+          if (e.id) { var l = document.querySelector('label[for="' + e.id + '"]'); if (l) lab = (l.innerText || '').replace(/\\s+/g, ' ').trim(); }
+          out.push([e.tagName.toLowerCase(), e.type || '', e.id || '', e.name || '', e.required ? 'REQUIRED' : '', lab].join(' | '));
+        }
+        var btns = Array.prototype.map.call(document.querySelectorAll('form input[type=submit], form button'), function (b) { return 'BUTTON | ' + (b.value || b.innerText || '').trim() + ' | ' + (b.className || ''); });
+        return out.concat(btns);
+      })()`)) as string[];
+      for (const f of fields) console.log(`  ${f}`);
+    } finally { await sf.dispose().catch(() => {}); await close().catch(() => {}); }
+    process.exit(0);
+  }
 
   // --vehicle: the owner check, via the exact lookup resolveVehicleOriginalOwner uses.
   if (VEHICLE) {
