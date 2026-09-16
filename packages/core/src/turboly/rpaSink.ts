@@ -721,18 +721,26 @@ export class RpaSink implements ServiceOrderSink {
       }
     }
     if (!attached) {
-      if (ownerRaw) {
-        // The plate is already registered to someone else, and the New Customer
-        // popup refuses a registration that exists — and cannot save a customer
-        // without one (sandbox T2/T2c, 16 Sep). Create the customer on their own
-        // page, then register the car on the add-vehicle page, which accepts a
-        // second registration (T1, SRO/BKS/26090189).
-        await this.createCustomerOnly(payload);
-        throw new NeedAddVehicleError(`customer "${create?.nama ?? ''}" dibuat; plat ${reg} sudah terdaftar atas customer lain — didaftarkan terpisah`);
-      }
-      await this.createCustomerAndVehicle(payload);
-      await page.waitForTimeout(1200);
-      await this.dismissModals();
+      /**
+       * A NEW CUSTOMER IS NEVER CREATED THROUGH THE ORDER FORM'S POPUP.
+       *
+       * SRO/RDA/26090478 (live, 16 Sep): FAHRIAN TEST typed with a number
+       * Turboly had never seen, on a car Turboly had never seen. The phone
+       * search correctly said "new person"; the "Add New Customer" popup was
+       * then given that name, that number and that car — and the order came out
+       * on the OLD FAHRIAN TEST (#4932852, another number), with the car
+       * registered to him and no customer for the new number anywhere. The
+       * popup resolved the name to the existing record on its own (the sandbox
+       * tenant does not), and dismissModals() would have accepted any "use
+       * existing?" prompt it raised. Nothing we send that popup can stop that.
+       *
+       * The customer page has no such matching: create the person there, take
+       * the id Turboly redirects to, register the car to THAT id on the
+       * add-vehicle page, and rebuild — the order then attaches by id, and the
+       * guard before Save refuses any other customer.
+       */
+      await this.createCustomerOnly(payload);
+      throw new NeedAddVehicleError(`customer "${create?.nama ?? ''}" dibuat di /customers/new — kendaraan ${reg} didaftarkan terpisah`);
     }
 
     // 4. Odometer, reference token, plan date/time.
@@ -763,6 +771,30 @@ export class RpaSink implements ServiceOrderSink {
     await this.addLinesOnOpenForm(page, payload);
 
     const screenshotRef = await this.snapshot(page, `${payload.spkId}-presave`);
+
+    /**
+     * THE CUSTOMER ON THE FORM MUST BE THE CUSTOMER WE MEANT.
+     *
+     * Everything above chooses a customer by id. This reads back which id the
+     * order form actually holds, and refuses to save if it is another one —
+     * whatever put it there. An order on the wrong person cannot be deleted
+     * (SRO/RDA/26090478); a parked SPK costs a minute.
+     */
+    const formCustomerId = (await page.evaluate(`(() => {
+      var el = document.querySelector('#select2-input-customer')
+        || document.querySelector('input[name="service_order[customer_id]"]')
+        || document.querySelector('input[name="customer_id"]');
+      return el && el.value != null ? String(el.value) : '';
+    })()`).catch(() => '')) as string;
+    // Annotated on purpose: the field was nulled at the top of this method and
+    // set again inside awaited calls, which TypeScript's narrowing cannot see.
+    const wanted: { id: string; name: string } | null = this.pickedCustomer;
+    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH form customer_id=${formCustomerId || '(kosong)'} wanted=${wanted?.id ?? '(tidak ditentukan)'}`);
+    if (wanted?.id && formCustomerId && formCustomerId !== wanted.id) {
+      throw new DataError(
+        `customer di form order (#${formCustomerId}) bukan customer yang dimaksud (#${wanted.id} "${wanted.name}") — order TIDAK disimpan supaya tidak jatuh ke orang lain`,
+      );
+    }
 
     // 6. Save — irreversible; re-assert the lease first.
     this.assertLease(ctx);
@@ -1769,6 +1801,10 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /**
+   * NO LONGER CALLED for creation — see the comment at the call site that used
+   * to be in buildAndSaveOrder (SRO/RDA/26090478): on live this popup resolves
+   * a typed name to an EXISTING customer. Kept only until the next cleanup.
+   *
    * Create a brand-new customer + vehicle via the "Add New Customer" modal, then
    * let Turboly auto-select them into the Service Order. Store/Service Tax/Country
    * are pre-filled by Turboly (we picked the store already). Proven live 2026-08-01.
@@ -2097,7 +2133,11 @@ export class RpaSink implements ServiceOrderSink {
         return readable ? -1 : -2;
       })()`)) as number;
       if (at === -1) {
-        throw new DataError(`customer #${wantId} ("${q}") tidak muncul di pencarian halaman tambah kendaraan — kendaraan tidak didaftarkan ke orang lain yang namanya sama`);
+        // The record exists — its id came from Turboly itself — so a search
+        // that does not list it yet is an index that has not caught up (a
+        // customer created seconds ago, observed 2026-08-11). Retry later;
+        // never register the car to another row with the same name.
+        throw new TransientError(`customer #${wantId} ("${q}") belum muncul di pencarian halaman tambah kendaraan — dicoba ulang otomatis, tidak didaftarkan ke orang lain yang namanya sama`);
       }
       if (at >= 0) idx = at; // -2: this build hides row ids — the old first-row behaviour
     }
