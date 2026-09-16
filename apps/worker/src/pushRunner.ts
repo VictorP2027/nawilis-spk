@@ -727,6 +727,13 @@ export async function pushQueued(
         const res = await branchSinks.withSink(claimed.branchCode, (sink) =>
           sink.pushServiceOrder(payload, { workerId, epoch, approve: config.approveAfterSave, leaseExpiresAt }),
         );
+        // A customer the push created is this document's customer from now on —
+        // recorded whether or not the order got saved, so a retry attaches by
+        // id instead of creating the same person again.
+        if (res.createdCustomerId) {
+          await collections.spk().updateOne({ _id: doc._id }, { $set: { 'customer.turbolyCustomerId': res.createdCustomerId } }).catch(() => {});
+          log(`  · ${doc._id}: customer baru #${res.createdCustomerId} dicatat di dokumen`);
+        }
         if (!res.ok) {
           out.failed++;
           // A transient failure is the TENANT's outage (deploy window, 429

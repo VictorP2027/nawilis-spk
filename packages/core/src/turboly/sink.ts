@@ -11,7 +11,12 @@ export interface TurbolyServiceOrderPayload {
   storeName: string;
   storeTurbolyId: string; // numeric option value for <select id="store-id">, e.g. "8339"
   type: string; // default "General"
-  customer: { existingQuery: string | null; create: { nama: string; phone: string; alamat: string } | null };
+  customer: {
+    existingQuery: string | null;
+    create: { nama: string; phone: string; alamat: string } | null;
+    /** The Turboly customer id this document is already bound to (recorded by a previous push) — identity, never a search. */
+    knownId?: string | null;
+  };
   vehicleRegistration: string; // display plate, matching Turboly spacing
   /** No-space plate for the create-vehicle form + search, e.g. "B1234SZA". */
   vehiclePlateFull?: string;
@@ -74,6 +79,8 @@ export interface PushResult {
     store: string | null;
   } | null;
   failureClass?: 'transient' | 'auth' | 'data' | 'structural' | 'infra';
+  /** A Turboly customer this push CREATED. The runner records it on the document so a retry attaches to it instead of creating again. */
+  createdCustomerId?: string | null;
   error?: string;
   /** Evidence: path to a screenshot taken at submit. */
   screenshotRef?: string | null;

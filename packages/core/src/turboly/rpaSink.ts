@@ -74,6 +74,8 @@ export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
   /** The customer the order form attached to, when identity was proven — the add-vehicle page must use the same one. */
   private pickedCustomer: { id: string; name: string } | null = null;
+  /** A customer THIS push created on /customers/new — reported on every result so a retry attaches to it instead of creating again. */
+  private createdThisPush: { id: string; name: string } | null = null;
 
   constructor(
     private readonly session: TurbolySession,
@@ -101,7 +103,11 @@ export class RpaSink implements ServiceOrderSink {
       return fail('infra', errMsg(e));
     }
 
-    return this.runPush(payload, ctx, 0);
+    this.createdThisPush = null;
+    const res = await this.runPush(payload, ctx, 0);
+    // Cast: nulled above, set inside awaited calls — narrowing cannot see that.
+    const created = this.createdThisPush as { id: string; name: string } | null;
+    return created ? { ...res, createdCustomerId: created.id } : res;
   }
 
   /**
@@ -563,7 +569,14 @@ export class RpaSink implements ServiceOrderSink {
     try {
       return await this.buildAndSaveOrder(payload, ctx);
     } catch (e) {
-      if (depth >= 3) return this.classifyFailure(e, payload.spkId);
+      if (depth >= 3) {
+        // Three rebuilds could not attach the car: that is a data fact for a
+        // person, not a structural fault to retry every minute.
+        if (e instanceof NeedAddVehicleError || e instanceof PlateTakenError) {
+          return this.classifyFailure(new DataError(`kendaraan tidak bisa dipasang ke customer setelah 3 percobaan: ${errMsg(e)} — periksa data customer/kendaraan di Turboly lalu tekan "Coba lagi"`), payload.spkId);
+        }
+        return this.classifyFailure(e, payload.spkId);
+      }
       if (e instanceof NeedCreateMakeError) {
         try {
           await this.ensureMakeExists(payload.vehicleMake ?? '', payload.vehicleModel ?? '');
@@ -658,7 +671,15 @@ export class RpaSink implements ServiceOrderSink {
     const owner = ownerRaw && !isPlaceholderOwner(ownerRaw.name) ? ownerRaw : null;
     if (ownerRaw && !owner && process.env.PUSH_DEBUG_MATCH) console.log(`MATCH owner "${ownerRaw.name}" is a placeholder — ignored`);
     /** Set only when the PLATE named the owner: then identity is known, not guessed. */
-    let ownerRef: { customerId: string; plate: string } | undefined;
+    let ownerRef: { customerId: string; plate: string; why: 'plate' | 'known' } | undefined;
+    /**
+     * A previous attempt of THIS document created (or attached to) a customer
+     * and recorded the id. That is who this SPK belongs to — search by id, and
+     * never create again. Without this a retry after a half-finished push made
+     * the same person twice (review finding, 16 Sep).
+     */
+    const knownId = payload.customer.knownId ?? '';
+    if (knownId) ownerRef = { customerId: knownId, plate: reg, why: 'known' };
     if (owner && (owner.phone || owner.name)) {
       /**
        * THE PHONE IS THE CUSTOMER KEY — the plate does not override it.
@@ -680,7 +701,7 @@ export class RpaSink implements ServiceOrderSink {
       if (samePerson) {
         effNama = owner.name;
         effPhone = owner.phone || effPhone;
-        if (owner.customerId) ownerRef = { customerId: owner.customerId, plate: reg };
+        if (owner.customerId && !ownerRef) ownerRef = { customerId: owner.customerId, plate: reg, why: 'plate' };
       } else if (process.env.PUSH_DEBUG_MATCH) {
         console.log(`MATCH plate owner "${owner.name}" has another phone — the typed customer is used`);
       }
@@ -780,12 +801,18 @@ export class RpaSink implements ServiceOrderSink {
      * whatever put it there. An order on the wrong person cannot be deleted
      * (SRO/RDA/26090478); a parked SPK costs a minute.
      */
-    const formCustomerId = (await page.evaluate(`(() => {
+    const readFormCustomerId = async (): Promise<string> => (await page.evaluate(`(() => {
       var el = document.querySelector('#select2-input-customer')
         || document.querySelector('input[name="service_order[customer_id]"]')
         || document.querySelector('input[name="customer_id"]');
       return el && el.value != null ? String(el.value) : '';
     })()`).catch(() => '')) as string;
+    let formCustomerId = await readFormCustomerId();
+    if (this.pickedCustomer && formCustomerId && formCustomerId !== (this.pickedCustomer as { id: string }).id) {
+      // A select2 re-render can lag the pick by a moment — read once more.
+      await page.waitForTimeout(1500);
+      formCustomerId = await readFormCustomerId();
+    }
     // Annotated on purpose: the field was nulled at the top of this method and
     // set again inside awaited calls, which TypeScript's narrowing cannot see.
     const wanted = this.pickedCustomer as { id: string; name: string } | null;
@@ -1464,7 +1491,7 @@ export class RpaSink implements ServiceOrderSink {
    * fallback tries BOTH before it dares conclude "not here" — that conclusion
    * means create, and creating means a duplicate person.
    */
-  private async tryPickCustomerExact(nama: string, phone: string, ownerRef?: { customerId: string; plate: string }): Promise<boolean> {
+  private async tryPickCustomerExact(nama: string, phone: string, ownerRef?: { customerId: string; plate: string; why: 'plate' | 'known' }): Promise<boolean> {
     const phoneKey = phone && canonPhoneKey(phone).length >= 8 ? canonPhoneKey(phone) : '';
     const queries: string[] = [];
     /**
@@ -1574,9 +1601,11 @@ export class RpaSink implements ServiceOrderSink {
      */
     if (ownerRef) {
       throw new DataError(
-        `Plat ${ownerRef.plate} terdaftar di Turboly atas "${nama}" (customer #${ownerRef.customerId}), ` +
+        (ownerRef.why === 'plate'
+          ? `Plat ${ownerRef.plate} terdaftar di Turboly atas "${nama}" (customer #${ownerRef.customerId}), `
+          : `Customer #${ownerRef.customerId} "${nama}" sudah dibuat untuk SPK ini, `) +
         'tapi baris customer itu tidak bisa dipastikan di daftar pilihan — order tidak dibuat, supaya tidak jatuh ke orang lain yang namanya sama. ' +
-        'Buka mobil itu di Turboly, buka pemiliknya, lalu buat order dari customer tersebut.',
+        'Buka customer itu di Turboly, pastikan plat kendaraan ada di datanya, lalu tekan "Coba lagi".',
       );
     }
     /**
@@ -1762,6 +1791,10 @@ export class RpaSink implements ServiceOrderSink {
     const c = payload.customer.create;
     const nama = (c?.nama || '').trim();
     if (!nama) throw new DataError('customer baru tanpa nama — tidak bisa dibuat');
+    // The phone is the only key a retry can find this person by again. Without
+    // one, every retry would create them once more.
+    const phoneKey = canonPhoneKey(c?.phone ?? '');
+    if (phoneKey.length < 8) throw new DataError('customer baru tanpa nomor telepon tidak dibuat otomatis — nomor WA adalah kunci customer; lengkapi nomornya lalu tekan "Coba lagi"');
     await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
     await page.fill('#customer_name', nama);
@@ -1790,14 +1823,36 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     })()`);
     if (!clicked) throw new DataError('tombol Save di halaman customer baru tidak ditemukan');
-    await page.waitForTimeout(4500);
-    const m = /\/customers\/(\d+)(?:[/?#]|$)/.exec(page.url());
-    if (!m || page.url() === before) {
+    // Wait for the redirect, not a fixed 4.5 s — a slow save is not a refusal.
+    let m: RegExpExecArray | null = null;
+    for (let i = 0; i < 20 && !m; i++) {
+      await page.waitForTimeout(750);
+      m = /\/customers\/(\d+)(?:[/?#]|$)/.exec(page.url());
+    }
+    if (!m) {
+      // Not on the new record's page. Three different things look like this
+      // and only one of them is Turboly saying no:
+      //   1. kicked out / maintenance → transient (assertSessionAlive throws);
+      //   2. a validation error on the form → data, with Turboly's own words;
+      //   3. saved but not redirected (or still saving) → the record may
+      //      exist: find it by phone and carry on, else retry later. Never
+      //      "rejected" — that verdict parks the SPK and the next attempt
+      //      would create the same person again.
+      await this.assertSessionAlive('simpan customer baru');
       const err = await this.readInlineError(page).catch(() => null);
-      await this.snapshot(page, `${payload.spkId}-customer-only-rejected`).catch(() => null);
-      throw new DataError(`customer baru "${nama}" ditolak Turboly${err ? `: ${err}` : ''} (halaman: ${page.url()})`);
+      await this.snapshot(page, `${payload.spkId}-customer-only-unconfirmed`).catch(() => null);
+      if (err && page.url() !== before) throw new DataError(`customer baru "${nama}" ditolak Turboly: ${err}`);
+      if (err) throw new DataError(`customer baru "${nama}" ditolak Turboly: ${err}`);
+      const found = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
+      if (found) {
+        this.pickedCustomer = { id: found.id, name: found.name.trim() || nama };
+        this.createdThisPush = this.pickedCustomer;
+        return;
+      }
+      throw new TransientError(`halaman customer baru tidak berpindah setelah Save dan nomornya belum terlihat di daftar — status belum pasti, dicoba ulang otomatis (halaman: ${page.url()})`);
     }
     this.pickedCustomer = { id: m[1]!, name: nama };
+    this.createdThisPush = this.pickedCustomer;
   }
 
   /**
@@ -2133,11 +2188,15 @@ export class RpaSink implements ServiceOrderSink {
         return readable ? -1 : -2;
       })()`)) as number;
       if (at === -1) {
-        // The record exists — its id came from Turboly itself — so a search
-        // that does not list it yet is an index that has not caught up (a
-        // customer created seconds ago, observed 2026-08-11). Retry later;
-        // never register the car to another row with the same name.
-        throw new TransientError(`customer #${wantId} ("${q}") belum muncul di pencarian halaman tambah kendaraan — dicoba ulang otomatis, tidak didaftarkan ke orang lain yang namanya sama`);
+        // The record exists — its id came from Turboly itself. A search that
+        // does not list it is either an index that has not caught up (a
+        // customer created seconds ago: retry) or a name with more namesakes
+        // than the search returns (permanent: a person has to attach the car).
+        // Never register the car to another row with the same name.
+        const fresh = this.createdThisPush?.id === wantId;
+        const msg = `customer #${wantId} ("${q}") tidak muncul di pencarian halaman tambah kendaraan — kendaraan tidak didaftarkan ke orang lain yang namanya sama`;
+        if (fresh) throw new TransientError(`${msg}; customer baru saja dibuat, dicoba ulang otomatis`);
+        throw new DataError(`${msg}. Buka customer #${wantId} di Turboly, tambahkan plat kendaraan ini ke datanya, lalu tekan "Coba lagi".`);
       }
       if (at >= 0) idx = at; // -2: this build hides row ids — the old first-row behaviour
     }

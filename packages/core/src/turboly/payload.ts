@@ -112,6 +112,7 @@ export function buildTurbolyPayload(input: ResolveInput): TurbolyServiceOrderPay
     customer: {
       existingQuery: customerExisting,
       create: { nama: doc.customer.nama, phone: doc.customer.waE164 ?? '', alamat: doc.customer.alamat ?? '' },
+      knownId: doc.customer.turbolyCustomerId && /^\d+$/.test(doc.customer.turbolyCustomerId) ? doc.customer.turbolyCustomerId : null,
     },
     vehicleRegistration: doc.vehicle.noPolisi.display,
     vehiclePlateFull: doc.vehicle.noPolisi.full,
