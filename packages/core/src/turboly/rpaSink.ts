@@ -74,8 +74,6 @@ export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
   /** The customer the order form attached to, when identity was proven — the add-vehicle page must use the same one. */
   private pickedCustomer: { id: string; name: string } | null = null;
-  /** This push created the customer (customer-only) and still owes the car a registration. */
-  private justCreated = false;
 
   constructor(
     private readonly session: TurbolySession,
@@ -647,7 +645,6 @@ export class RpaSink implements ServiceOrderSink {
     // someone else (sister, driver) brings it in. The carrier becomes a notes
     // line, never a second owner.
     this.pickedCustomer = null;
-    this.justCreated = false;
     let effNama = create?.nama ?? '';
     let effPhone = create?.phone ?? '';
     const ownerRaw = await this.resolveVehicleOriginalOwner(reg);
@@ -724,7 +721,16 @@ export class RpaSink implements ServiceOrderSink {
       }
     }
     if (!attached) {
-      await this.createCustomerAndVehicle(payload, { customerOnly: !!ownerRaw });
+      if (ownerRaw) {
+        // The plate is already registered to someone else, and the New Customer
+        // popup refuses a registration that exists — and cannot save a customer
+        // without one (sandbox T2/T2c, 16 Sep). Create the customer on their own
+        // page, then register the car on the add-vehicle page, which accepts a
+        // second registration (T1, SRO/BKS/26090189).
+        await this.createCustomerOnly(payload);
+        throw new NeedAddVehicleError(`customer "${create?.nama ?? ''}" dibuat; plat ${reg} sudah terdaftar atas customer lain — didaftarkan terpisah`);
+      }
+      await this.createCustomerAndVehicle(payload);
       await page.waitForTimeout(1200);
       await this.dismissModals();
     }
@@ -1008,11 +1014,6 @@ export class RpaSink implements ServiceOrderSink {
     const picked = this.pickedCustomer;
     if (picked) q = picked.name || q;
     const wantAddId = picked?.id || origId;
-    if (this.justCreated && !wantAddId) {
-      // We created this person seconds ago and the phone lookup cannot see them
-      // yet. Registering the car by name would take the first namesake.
-      throw new TransientError('customer baru belum terbaca lewat nomor telepon — kendaraan didaftarkan pada percobaan berikutnya');
-    }
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
@@ -1716,11 +1717,63 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /**
+   * Create a customer WITHOUT a vehicle, on Turboly's own /customers/new page.
+   *
+   * Fields proven on sandbox (probe --form=/customers/new, 16 Sep): NAME, PHONE,
+   * STORE (required), SERVICE TAX (required). Addresses live in a separate
+   * address form there, so the typed address is carried in NOTES. Hands the new
+   * record's id to the add-vehicle page via pickedCustomer — identity by id, as
+   * everywhere else, so the car cannot be registered to a namesake.
+   */
+  private async createCustomerOnly(payload: TurbolyServiceOrderPayload): Promise<void> {
+    const page = this.session.page_();
+    const c = payload.customer.create;
+    const nama = (c?.nama || '').trim();
+    if (!nama) throw new DataError('customer baru tanpa nama — tidak bisa dibuat');
+    await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2500);
+    await page.fill('#customer_name', nama);
+    if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone));
+    if (c?.alamat) await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
+    await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).catch(() => {});
+    await page.waitForTimeout(1500);
+    // Service Tax is required. Keep what Turboly pre-selects for the store; only
+    // when nothing is selected take the first real option, and say which.
+    const tax = (await page.evaluate(`(() => {
+      var s = document.querySelector('#customer_service_tax_id');
+      if (!s) return { v: '', t: '(no field)' };
+      if (!s.value) {
+        for (var i = 0; i < s.options.length; i++) { if (s.options[i].value) { s.value = s.options[i].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } }
+      }
+      var o = s.options[s.selectedIndex];
+      return { v: s.value, t: o ? (o.text || '').trim() : '' };
+    })()`)) as { v: string; t: string };
+    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${tax.t}"`);
+    const before = page.url();
+    const clicked = await page.evaluate(`(() => {
+      var f = document.querySelector('#customer_name') && document.querySelector('#customer_name').form;
+      var b = f && (f.querySelector('input[type=submit][name=commit]') || f.querySelector('input[type=submit], button[type=submit]'));
+      if (!b) b = document.querySelector('button.turbo-btn-save');
+      if (b) { b.click(); return true; }
+      return false;
+    })()`);
+    if (!clicked) throw new DataError('tombol Save di halaman customer baru tidak ditemukan');
+    await page.waitForTimeout(4500);
+    const m = /\/customers\/(\d+)(?:[/?#]|$)/.exec(page.url());
+    if (!m || page.url() === before) {
+      const err = await this.readInlineError(page).catch(() => null);
+      await this.snapshot(page, `${payload.spkId}-customer-only-rejected`).catch(() => null);
+      throw new DataError(`customer baru "${nama}" ditolak Turboly${err ? `: ${err}` : ''} (halaman: ${page.url()})`);
+    }
+    this.pickedCustomer = { id: m[1]!, name: nama };
+  }
+
+  /**
    * Create a brand-new customer + vehicle via the "Add New Customer" modal, then
    * let Turboly auto-select them into the Service Order. Store/Service Tax/Country
    * are pre-filled by Turboly (we picked the store already). Proven live 2026-08-01.
    */
-  private async createCustomerAndVehicle(payload: TurbolyServiceOrderPayload, opts: { customerOnly?: boolean } = {}): Promise<void> {
+  private async createCustomerAndVehicle(payload: TurbolyServiceOrderPayload): Promise<void> {
     const page = this.session.page_();
     const c = payload.customer.create;
     // Open the modal (the control is an <a>/<button>/<input> labelled "Add New Customer").
@@ -1737,16 +1790,6 @@ export class RpaSink implements ServiceOrderSink {
 
     // Vehicle
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
-    /**
-     * THE PLATE IS ALREADY IN TURBOLY UNDER SOMEONE ELSE.
-     *
-     * This popup refuses a registration that exists (sandbox T2, 16 Sep:
-     * "new-customer create rejected" for a new phone on a known car), so a
-     * different person bringing a known car could never be created here. Create
-     * the CUSTOMER alone, and let the add-vehicle page register the car to them
-     * — that page accepts a second registration (T1, SRO/BKS/26090189).
-     */
-    if (!opts.customerOnly) {
     await page.fill('#customer_vehicles_attributes_0_registration', reg);
     await this.pickMakeWithTypeFallback(page, payload);
     await page.waitForTimeout(900);
@@ -1758,7 +1801,6 @@ export class RpaSink implements ServiceOrderSink {
     await page.fill('#customer_vehicles_attributes_0_km_next_service_default', String((Number(payload.odometer) || 0) + 5000)).catch(() => {});
     // "Month next service default" is a NUMBER of months, not a date.
     await page.fill('#customer_vehicles_attributes_0_next_service_date_default', '3').catch(() => {});
-    }
 
     // Save the modal (its own submit button, class starts turbo-btn-save-cust*; a
     // DOM click bypasses the fixed-footer actionability quirk). NOT the SO's save.
@@ -1840,10 +1882,6 @@ export class RpaSink implements ServiceOrderSink {
         `new-customer create rejected${err ? `: ${err}` : ''}`
         + ` [merk="${payload.vehicleMake}" model="${payload.vehicleModel}" tahun="${payload.vehicleYear}" warna="${payload.vehicleColor}" nopol="${payload.vehicleRegistration}"]`,
       );
-    }
-    if (opts.customerOnly) {
-      this.justCreated = true;
-      throw new NeedAddVehicleError(`customer "${c?.nama ?? ''}" dibuat; plat ${reg} sudah terdaftar atas customer lain — didaftarkan terpisah`);
     }
   }
 
