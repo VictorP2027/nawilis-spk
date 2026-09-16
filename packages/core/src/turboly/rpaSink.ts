@@ -660,35 +660,30 @@ export class RpaSink implements ServiceOrderSink {
     /** Set only when the PLATE named the owner: then identity is known, not guessed. */
     let ownerRef: { customerId: string; plate: string } | undefined;
     if (owner && (owner.phone || owner.name)) {
+      /**
+       * THE PHONE IS THE CUSTOMER KEY — the plate does not override it.
+       *
+       * The plate's registered owner is used only when the counter typed THAT
+       * owner's number (or typed none). A different number is a different
+       * customer, even with the same name on the same car: SRO/TA12/26090231
+       * attached FAHRIAN TEST (+62813…1000) to the FAHRIAN TEST registered on
+       * A1520RN with +62812…5610 and wrote him down as "Dibawa oleh". Victor,
+       * 16 Sep: same name must not add to the existing one.
+       *
+       * An owner record with no phone cannot be proven to be this person
+       * either, so the typed customer stands; Turboly accepts the same plate
+       * under a second customer.
+       */
       const typedKey = effPhone ? canonPhoneKey(effPhone) : '';
       const ownerKey = owner.phone ? canonPhoneKey(owner.phone) : '';
-      const differs = ownerKey
-        ? typedKey !== '' && typedKey !== ownerKey
-        : effNama.trim().toUpperCase() !== owner.name.trim().toUpperCase();
-      if (differs) {
-        this.notesExtra.push(`Dibawa oleh: ${effNama || '-'} (${effPhone ? e164Phone(effPhone) : '-'}) — kendaraan tetap atas nama ${owner.name}`);
+      const samePerson = typedKey === '' || (ownerKey !== '' && ownerKey === typedKey);
+      if (samePerson) {
+        effNama = owner.name;
+        effPhone = owner.phone || effPhone;
+        if (owner.customerId) ownerRef = { customerId: owner.customerId, plate: reg };
+      } else if (process.env.PUSH_DEBUG_MATCH) {
+        console.log(`MATCH plate owner "${owner.name}" has another phone — the typed customer is used`);
       }
-      effNama = owner.name;
-      /**
-       * The plate has already named the owner, so the CARRIER's phone must not be
-       * used to look them up.
-       *
-       * Turboly records created before phones were captured have none, and
-       * tryPickCustomerExact treats a phone it cannot find as a verdict — "not in
-       * Turboly, therefore new" — so it took the create path for a customer it had
-       * just identified by registration. Turboly then refused the create, because
-       * that plate is already registered to that very person, and the SPK sat in
-       * `failed` for good: no retry can fix a mismatch. ROMYADI (B9046BAX) and
-       * NUGROHO (B618NS) both died exactly here, and both had a phone-less record.
-       *
-       * So the owner's phone is used when Turboly HAS one, and otherwise the phone
-       * is cleared, which sends the matcher down its exact-NAME branch against the
-       * name the plate itself gave us. Clearing is also the more correct reading:
-       * the typed phone belongs to whoever brought the car in, who may not be the
-       * owner at all — the line above already records them as "Dibawa oleh".
-       */
-      effPhone = owner.phone || '';
-      if (owner.customerId) ownerRef = { customerId: owner.customerId, plate: reg };
     }
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
