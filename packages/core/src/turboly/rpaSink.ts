@@ -678,7 +678,7 @@ export class RpaSink implements ServiceOrderSink {
      * never create again. Without this a retry after a half-finished push made
      * the same person twice (review finding, 16 Sep).
      */
-    const knownId = payload.customer.knownId ?? '';
+    const knownId = payload.customer.knownId ?? this.createdThisPush?.id ?? '';
     if (knownId) ownerRef = { customerId: knownId, plate: reg, why: 'known' };
     if (owner && (owner.phone || owner.name)) {
       /**
@@ -812,6 +812,16 @@ export class RpaSink implements ServiceOrderSink {
       // A select2 re-render can lag the pick by a moment — read once more.
       await page.waitForTimeout(1500);
       formCustomerId = await readFormCustomerId();
+    }
+    if (this.pickedCustomer && !formCustomerId) {
+      // The hidden id could not be read on this build: fall back to the NAME
+      // select2 shows as chosen, and never let the check pass unnoticed.
+      const chosen = ((await page.locator('#s2id_select2-input-customer .select2-chosen').first().innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim();
+      const wantName = (this.pickedCustomer as { name: string }).name.trim().toUpperCase();
+      console.log(`  ⚠ id customer di form order tidak terbaca — dicek lewat nama: form="${chosen}" diminta="${wantName}"`);
+      if (chosen && wantName && !chosen.toUpperCase().startsWith(wantName)) {
+        throw new DataError(`customer di form order ("${chosen}") bukan customer yang dimaksud ("${wantName}") — order TIDAK disimpan supaya tidak jatuh ke orang lain`);
+      }
     }
     // Annotated on purpose: the field was nulled at the top of this method and
     // set again inside awaited calls, which TypeScript's narrowing cannot see.
@@ -1504,6 +1514,11 @@ export class RpaSink implements ServiceOrderSink {
       const raw = n.trim();
       const core = companyNameKey(raw);
       if (!core) return raw ? [raw] : [];
+      // A one-word name is a first name far more often than a company, and
+      // "SURYA" must not be widened into "CV SURYA" — that attaches a person
+      // to a company on a name alone (review finding, 16 Sep). Spelling
+      // variants are for the counter typing "ANGKASA PURA" for PT ANGKASA PURA.
+      if (core.split(' ').filter(Boolean).length < 2) return [...new Set([raw, core])];
       return [...new Set([raw, core, `PT ${core}`, `PT. ${core}`, `CV ${core}`, `CV. ${core}`])];
     };
     /** Whose name the picked row must carry. Set when a record was proven. */
@@ -1599,6 +1614,9 @@ export class RpaSink implements ServiceOrderSink {
      * message replaces (F1125EG, 10 Sep): the owner was EMILY, Turboly holds
      * two EMILYs, and the pusher took the first. Say who owns the car and stop.
      */
+    if (ownerRef && this.createdThisPush?.id === ownerRef.customerId) {
+      throw new TransientError(`customer #${ownerRef.customerId} baru saja dibuat dan belum muncul di daftar pilihan form order — dicoba ulang otomatis`);
+    }
     if (ownerRef) {
       throw new DataError(
         (ownerRef.why === 'plate'
@@ -1780,11 +1798,19 @@ export class RpaSink implements ServiceOrderSink {
   /**
    * Create a customer WITHOUT a vehicle, on Turboly's own /customers/new page.
    *
-   * Fields proven on sandbox (probe --form=/customers/new, 16 Sep): NAME, PHONE,
-   * STORE (required), SERVICE TAX (required). Addresses live in a separate
-   * address form there, so the typed address is carried in NOTES. Hands the new
-   * record's id to the add-vehicle page via pickedCustomer — identity by id, as
-   * everywhere else, so the car cannot be registered to a namesake.
+   * The form facts come from the live-discovered registration paths
+   * (httpRegister.registerRetailHttp, flowSink.registerRetailCustomer, 4 Aug):
+   * NAME; a GROUP NAME mirroring it (Turboly wants one); PHONE; STORE, which
+   * must take or the person is filed under the robot user's home store; SALES
+   * TAX = PPN chosen explicitly, because live once saved customers with the
+   * wrong tax (set-customer-tax.ts exists for that); the address through the
+   * "Add Address" row, with the typed text also kept in NOTES.
+   *
+   * After Save the record Turboly opens is checked to carry the TYPED PHONE —
+   * the one fact that says "this is the person we meant", whatever the page
+   * did with the name. Hands the id to the add-vehicle page via
+   * pickedCustomer and remembers it in createdThisPush, so a failure later in
+   * this push, or a retry, attaches to it and never creates them again.
    */
   private async createCustomerOnly(payload: TurbolyServiceOrderPayload): Promise<void> {
     const page = this.session.page_();
@@ -1795,25 +1821,68 @@ export class RpaSink implements ServiceOrderSink {
     // one, every retry would create them once more.
     const phoneKey = canonPhoneKey(c?.phone ?? '');
     if (phoneKey.length < 8) throw new DataError('customer baru tanpa nomor telepon tidak dibuat otomatis — nomor WA adalah kunci customer; lengkapi nomornya lalu tekan "Coba lagi"');
+
+    // Look once more by phone before creating: a previous attempt may have
+    // saved this person and died before it could say so.
+    const dup = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
+    if (dup) {
+      this.pickedCustomer = { id: dup.id, name: dup.name.trim() || nama };
+      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly: nomor sudah ada → #${dup.id} "${dup.name}" dipakai, tidak dibuat lagi`);
+      return;
+    }
+
     await page.goto(`${this.baseUrl}/customers/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
+    const body0 = ((await page.textContent('body').catch(() => '')) ?? '');
+    if (/sorry you can't view|you are not authorized|tidak berhak/i.test(body0) || !(await page.locator('#customer_name').count())) {
+      throw new DataError(`halaman customer baru (/customers/new) tidak bisa dibuka oleh akun robot — beri izin menu Customers pada user Turboly ini (halaman: ${page.url()})`);
+    }
     await page.fill('#customer_name', nama);
+    await page.fill('#customer_group_name', nama).catch(() => {});
     if (c?.phone) await page.fill('#customer_phone', e164Phone(c.phone));
-    if (c?.alamat) await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
-    await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).catch(() => {});
-    await page.waitForTimeout(1500);
-    // Service Tax is required. Keep what Turboly pre-selects for the store; only
-    // when nothing is selected take the first real option, and say which.
+
+    // STORE — must take.
+    const storeOk = await page.selectOption('#customer_store_id', { value: payload.storeTurbolyId }).then(() => true).catch(() => false);
+    if (!storeOk) {
+      const opts = (await page.$$eval('#customer_store_id option', (els) => els.map((e) => `${(e as HTMLOptionElement).value}:${(e.textContent ?? '').trim()}`).filter((x) => !x.startsWith(':'))).catch(() => [])) as string[];
+      throw new DataError(`store ${payload.storeTurbolyId} tidak bisa dipilih di halaman customer baru — pilihan: ${opts.slice(0, 20).join(', ') || '(tidak terbaca)'}`);
+    }
+    await page.waitForTimeout(1200);
+
+    // SALES TAX — PPN by name when the form offers it; otherwise whatever the
+    // store pre-selects (the sandbox tenant offers "Always Use Tax" only).
     const tax = (await page.evaluate(`(() => {
       var s = document.querySelector('#customer_service_tax_id');
-      if (!s) return { v: '', t: '(no field)' };
-      if (!s.value) {
-        for (var i = 0; i < s.options.length; i++) { if (s.options[i].value) { s.value = s.options[i].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } }
-      }
+      if (!s) return { ok: false, t: '(kontrol tidak ada)', options: [] };
+      var options = Array.prototype.map.call(s.options, function (o) { return (o.textContent || '').trim(); });
+      var want = null;
+      for (var i = 0; i < s.options.length; i++) { if (/^ppn$/i.test((s.options[i].textContent || '').trim())) { want = s.options[i]; break; } }
+      if (want) { s.value = want.value; s.dispatchEvent(new Event('change', { bubbles: true })); try { if (window.jQuery) window.jQuery(s).trigger('change'); } catch (e) {} }
+      if (!s.value) { for (var k = 0; k < s.options.length; k++) { if (s.options[k].value) { s.value = s.options[k].value; s.dispatchEvent(new Event('change', { bubbles: true })); break; } } }
       var o = s.options[s.selectedIndex];
-      return { v: s.value, t: o ? (o.text || '').trim() : '' };
-    })()`)) as { v: string; t: string };
+      return { ok: !!s.value, t: o ? (o.textContent || '').trim() : '', options: options };
+    })()`)) as { ok: boolean; t: string; options: string[] };
+    if (!tax.ok) throw new DataError(`SALES TAX tidak bisa diset di halaman customer baru — pilihan: ${tax.options.join(', ') || '(kosong)'}`);
+
+    // ADDRESS — the page has no plain address field; "Add Address" appends a
+    // row. Best effort: the typed address is also kept in NOTES.
+    if (c?.alamat) {
+      await page.fill('#customer_notes', `Alamat: ${c.alamat}`).catch(() => {});
+      const addressOk = await (async () => {
+        const add = page.locator('a.add_fields, a:has-text("Add Address")').first();
+        if (!(await add.count())) return false;
+        await add.click({ timeout: 4000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        const field = page.locator('textarea[name*="[address]"], input[name*="[address]"], #address_address').last();
+        if (!(await field.count())) return false;
+        await field.fill(c.alamat!).catch(() => {});
+        await page.locator('input[name="main_address_index"], input[name*="main_address"]').last().check({ timeout: 2000 }).catch(() => {});
+        return true;
+      })().catch(() => false);
+      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly: alamat ${addressOk ? 'di baris Add Address + Notes' : 'hanya di Notes'}`);
+    }
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${tax.t}"`);
+
     const before = page.url();
     const clicked = await page.evaluate(`(() => {
       var f = document.querySelector('#customer_name') && document.querySelector('#customer_name').form;
@@ -1823,25 +1892,21 @@ export class RpaSink implements ServiceOrderSink {
       return false;
     })()`);
     if (!clicked) throw new DataError('tombol Save di halaman customer baru tidak ditemukan');
-    // Wait for the redirect, not a fixed 4.5 s — a slow save is not a refusal.
+    // Wait for the redirect, not a fixed pause — a slow save is not a refusal.
     let m: RegExpExecArray | null = null;
-    for (let i = 0; i < 20 && !m; i++) {
+    for (let i = 0; i < 24 && !m; i++) {
       await page.waitForTimeout(750);
-      m = /\/customers\/(\d+)(?:[/?#]|$)/.exec(page.url());
+      m = /\/(?:retail_)?customers\/(\d+)(?:[/?#]|$)/.exec(page.url());
     }
     if (!m) {
-      // Not on the new record's page. Three different things look like this
-      // and only one of them is Turboly saying no:
-      //   1. kicked out / maintenance → transient (assertSessionAlive throws);
-      //   2. a validation error on the form → data, with Turboly's own words;
-      //   3. saved but not redirected (or still saving) → the record may
-      //      exist: find it by phone and carry on, else retry later. Never
-      //      "rejected" — that verdict parks the SPK and the next attempt
-      //      would create the same person again.
+      // Not on a customer record. Three things look like this and only one
+      // is Turboly saying no: kicked/maintenance → transient; a form error →
+      // data, in Turboly's words; saved-but-not-redirected → find by phone,
+      // else retry. Never "rejected" on a guess: that parks the SPK and the
+      // next attempt would create the same person again.
       await this.assertSessionAlive('simpan customer baru');
       const err = await this.readInlineError(page).catch(() => null);
       await this.snapshot(page, `${payload.spkId}-customer-only-unconfirmed`).catch(() => null);
-      if (err && page.url() !== before) throw new DataError(`customer baru "${nama}" ditolak Turboly: ${err}`);
       if (err) throw new DataError(`customer baru "${nama}" ditolak Turboly: ${err}`);
       const found = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
       if (found) {
@@ -1850,6 +1915,14 @@ export class RpaSink implements ServiceOrderSink {
         return;
       }
       throw new TransientError(`halaman customer baru tidak berpindah setelah Save dan nomornya belum terlihat di daftar — status belum pasti, dicoba ulang otomatis (halaman: ${page.url()})`);
+    }
+    // The record Turboly opened must be the person we typed: its page has to
+    // carry the typed number. If the page resolved the NAME to someone else
+    // (the popup did exactly that on live), stop here — nothing is attached.
+    const bodyDigits = ((await page.textContent('body').catch(() => '')) ?? '').replace(/\D/g, '');
+    if (!bodyDigits.includes(phoneKey)) {
+      await this.snapshot(page, `${payload.spkId}-customer-only-other-record`).catch(() => null);
+      throw new DataError(`setelah Save, Turboly membuka customer #${m[1]} yang TIDAK memuat nomor yang diketik — kemungkinan nama diarahkan ke record lama; order tidak dibuat. Periksa customer #${m[1]} di Turboly.`);
     }
     this.pickedCustomer = { id: m[1]!, name: nama };
     this.createdThisPush = this.pickedCustomer;
@@ -2167,6 +2240,12 @@ export class RpaSink implements ServiceOrderSink {
         // "No results" from a select2 fed sign-in HTML looks identical to a real
         // no-match — and here it would go on to CREATE a duplicate make.
         await this.assertSessionAlive(`cari "${q}"`);
+        // A customer created seconds ago can be missing from this search
+        // entirely (index lag, observed 2026-08-11): that is not "no such
+        // customer" — the id came from Turboly. Retry later.
+        if (wantId && this.createdThisPush?.id === wantId) {
+          throw new TransientError(`customer #${wantId} ("${q}") baru saja dibuat dan belum muncul di pencarian halaman tambah kendaraan — dicoba ulang otomatis`);
+        }
         throw new DataError(`no Turboly match for "${q}"`);
       }
       await page.waitForTimeout(500);
@@ -2198,7 +2277,14 @@ export class RpaSink implements ServiceOrderSink {
         if (fresh) throw new TransientError(`${msg}; customer baru saja dibuat, dicoba ulang otomatis`);
         throw new DataError(`${msg}. Buka customer #${wantId} di Turboly, tambahkan plat kendaraan ini ke datanya, lalu tekan "Coba lagi".`);
       }
-      if (at >= 0) idx = at; // -2: this build hides row ids — the old first-row behaviour
+      if (at >= 0) idx = at;
+      else if (at === -2) {
+        // This build hides row ids. One row is unambiguous; more than one is
+        // exactly the "car registered to the first namesake" failure
+        // (SRO/RDA/26090478) and must not be guessed.
+        const n = await page.locator(results).count();
+        if (n > 1) throw new DataError(`customer #${wantId} ("${q}"): ${n} baris bernama sama dan id barisnya tidak terbaca — kendaraan tidak didaftarkan ke tebakan. Tambahkan plat ke customer #${wantId} di Turboly, lalu tekan "Coba lagi".`);
+      }
     }
     await page.locator(results).nth(idx).click({ timeout: 5000 });
     await page.waitForTimeout(500);
@@ -2709,7 +2795,7 @@ export class RpaSink implements ServiceOrderSink {
   private async readInlineError(page: Page): Promise<string | null> {
     // Turboly's validation banner is Bootstrap-2 era (.alert-error), e.g.
     // "Can't create Service Order: Error — Service Advisor can't be blank".
-    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger']) {
+    for (const sel of ['.alert-error', '.alert-danger', '#error_explanation', '.invalid-feedback', '[role="alert"]', '.text-danger', '.help-inline', '.field_with_errors + .help-block', '.has-error .help-block']) {
       const loc = page.locator(sel);
       const n = await loc.count();
       for (let i = 0; i < n; i++) {
