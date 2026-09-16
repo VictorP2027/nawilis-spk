@@ -91,8 +91,19 @@ export class RpaSink implements ServiceOrderSink {
   /** Extra note lines accumulated during a push (e.g. model-fallback substitutions). */
   private notesExtra: string[] = [];
 
+  /**
+   * Match-decision trail. Always on for a customer whose name says TEST — the
+   * branches' test customer (FAHRIAN TEST) is how a push is checked on live,
+   * and its trail is worth nothing after the fact. Real customers' phones stay
+   * out of the public log unless PUSH_DEBUG_MATCH is set for a manual run.
+   */
+  private debugThisPush = false;
+  private dbg(): boolean { return !!process.env.PUSH_DEBUG_MATCH || this.debugThisPush; }
+
   async pushServiceOrder(payload: TurbolyServiceOrderPayload, ctx: PushContext): Promise<PushResult> {
     this.notesExtra = [];
+    this.debugThisPush = /(^|\s)(TEST|TES|UJI|COBA)(\s|$)/i.test(payload.customer.create?.nama ?? '');
+    if (this.debugThisPush) console.log(`MATCH trail on: customer uji "${payload.customer.create?.nama ?? ''}"`);
     let page: Page;
     try {
       await this.session.ensureLoggedIn();
@@ -669,7 +680,7 @@ export class RpaSink implements ServiceOrderSink {
      * this visit.
      */
     const owner = ownerRaw && !isPlaceholderOwner(ownerRaw.name) ? ownerRaw : null;
-    if (ownerRaw && !owner && process.env.PUSH_DEBUG_MATCH) console.log(`MATCH owner "${ownerRaw.name}" is a placeholder — ignored`);
+    if (ownerRaw && !owner && this.dbg()) console.log(`MATCH owner "${ownerRaw.name}" is a placeholder — ignored`);
     /** Set only when the PLATE named the owner: then identity is known, not guessed. */
     let ownerRef: { customerId: string; plate: string; why: 'plate' | 'known' } | undefined;
     /**
@@ -702,14 +713,14 @@ export class RpaSink implements ServiceOrderSink {
         effNama = owner.name;
         effPhone = owner.phone || effPhone;
         if (owner.customerId && !ownerRef) ownerRef = { customerId: owner.customerId, plate: reg, why: 'plate' };
-      } else if (process.env.PUSH_DEBUG_MATCH) {
+      } else if (this.dbg()) {
         console.log(`MATCH plate owner "${owner.name}" has another phone — the typed customer is used`);
       }
     }
     // Match an existing customer only on EXACT name or matching phone (never a
     // partial/first result), so a new "FRANK" isn't merged into existing "FRANKI".
     const custOk = effNama || effPhone ? await this.tryPickCustomerExact(effNama, effPhone, ownerRef) : false;
-    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH effNama="${effNama}" effPhone="${effPhone}" custOk=${custOk} owner=${JSON.stringify(owner)}`);
+    if (this.dbg()) console.log(`MATCH effNama="${effNama}" effPhone="${effPhone}" custOk=${custOk} owner=${JSON.stringify(owner)}`);
     if (custOk) {
       await page.waitForTimeout(1200);
       /**
@@ -819,7 +830,7 @@ export class RpaSink implements ServiceOrderSink {
     // Annotated on purpose: the field was nulled at the top of this method and
     // set again inside awaited calls, which TypeScript's narrowing cannot see.
     const wanted = this.pickedCustomer as { id: string; name: string } | null;
-    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH form customer_id=${formCustomerId || '(kosong)'} wanted=${wanted?.id ?? '(tidak ditentukan)'}`);
+    if (this.dbg()) console.log(`MATCH form customer_id=${formCustomerId || '(kosong)'} wanted=${wanted?.id ?? '(tidak ditentukan)'}`);
     // FAIL CLOSED: an id that cannot be read is not a pass. If this build ever
     // hides the field, the first push parks with this message — visible and
     // reversible — instead of saving an irreversible order on a guess.
@@ -1056,7 +1067,7 @@ export class RpaSink implements ServiceOrderSink {
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (orig) origId = orig.id;
-      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
+      if (this.dbg()) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
       // Same reason as tryPickCustomerExact — but stronger on live: the select2
       // cannot search ANY phone spelling, not even the exact stored form
       // (measured 2026-08-13: Jane's stored "+6287736513601" returns 0 rows).
@@ -1378,7 +1389,7 @@ export class RpaSink implements ServiceOrderSink {
     // contains those digits.
     const mine = rows.filter((r) => canonPhoneKey(r.phone) === phoneKey).sort((a, b) => a.id - b.id);
     const hit = mine[0];
-    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH listFilter(${phoneKey}) -> ${JSON.stringify(hit ?? null)}`);
+    if (this.dbg()) console.log(`MATCH listFilter(${phoneKey}) -> ${JSON.stringify(hit ?? null)}`);
     return hit ? { id: String(hit.id), name: hit.name, phone: hit.phone } : null;
   }
 
@@ -1533,7 +1544,7 @@ export class RpaSink implements ServiceOrderSink {
     let wantId = ownerRef?.customerId ?? '';
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
-      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
+      if (this.dbg()) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
       /**
        * A phone we cannot find is a verdict about the NUMBER, not the person.
        * Returning here is what made every corporate duplicate: the company IS
@@ -1576,7 +1587,7 @@ export class RpaSink implements ServiceOrderSink {
         // attempt; if a person since moved the number to another record
         // (merge, correction), the number wins.
         if (ownerRef?.why === 'known' && orig.id !== wantId) {
-          if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH nomor kini tercatat pada #${orig.id}, bukan #${wantId} yang diingat — mengikuti nomor`);
+          if (this.dbg()) console.log(`MATCH nomor kini tercatat pada #${orig.id}, bukan #${wantId} yang diingat — mengikuti nomor`);
           wantId = orig.id;
         }
         wantId = wantId || orig.id;
@@ -1680,7 +1691,7 @@ export class RpaSink implements ServiceOrderSink {
         }
         await page.waitForTimeout(600);
       }
-      if (process.env.PUSH_DEBUG_MATCH) {
+      if (this.dbg()) {
         const dbg = await page.evaluate(() => ({
           dropVisible: !!document.querySelector('#select2-drop'),
           inputVal: (document.querySelector('#select2-drop input') as HTMLInputElement | null)?.value ?? '(no input)',
@@ -1783,7 +1794,7 @@ export class RpaSink implements ServiceOrderSink {
           return best;
         })()`,
       )) as number;
-      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH idx=${idx}`);
+      if (this.dbg()) console.log(`MATCH idx=${idx}`);
       if (idx < 0) {
         // No match here means "create a new customer" — a verdict we may not
         // reach on a drop that was empty only because we'd been kicked.
@@ -1798,7 +1809,7 @@ export class RpaSink implements ServiceOrderSink {
         // holds and try once more if it is another customer.
         const got = (await page.evaluate(`(() => { var el = document.querySelector('#select2-input-customer'); return el && el.value != null ? String(el.value) : ''; })()`).catch(() => '')) as string;
         if (got && got !== wantId) {
-          if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH pick landed on #${got}, wanted #${wantId} — ${retry ? 'giving up' : 'retrying once'}`);
+          if (this.dbg()) console.log(`MATCH pick landed on #${got}, wanted #${wantId} — ${retry ? 'giving up' : 'retrying once'}`);
           await page.keyboard.press('Escape').catch(() => {});
           await page.waitForTimeout(400);
           return retry ? false : this.pickCustomerInSelect2(query, phoneKey, nama, requireCompany, wantId, true);
@@ -1845,7 +1856,7 @@ export class RpaSink implements ServiceOrderSink {
     const dup = await this.findCustomerByPhoneAnyFormat(phoneKey).catch(() => undefined);
     if (dup) {
       this.pickedCustomer = { id: dup.id, name: dup.name.trim() || nama };
-      if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly: nomor sudah ada → #${dup.id} "${dup.name}" dipakai, tidak dibuat lagi`);
+      if (this.dbg()) console.log(`MATCH createCustomerOnly: nomor sudah ada → #${dup.id} "${dup.name}" dipakai, tidak dibuat lagi`);
       return;
     }
 
@@ -1937,7 +1948,7 @@ export class RpaSink implements ServiceOrderSink {
       // Fill again without the row; the address stays in NOTES.
       filled = await fill(false);
     }
-    if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${filled.tax}" alamat=${c?.alamat ? (filled.addressRow ? 'baris Add Address + Notes' : 'hanya Notes') : '-'}`);
+    if (this.dbg()) console.log(`MATCH createCustomerOnly "${nama}" store=${payload.storeTurbolyId} serviceTax="${filled.tax}" alamat=${c?.alamat ? (filled.addressRow ? 'baris Add Address + Notes' : 'hanya Notes') : '-'}`);
 
     const before = page.url();
     const clicked = await page.evaluate(`(() => {
