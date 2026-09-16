@@ -51,11 +51,11 @@ async function main(): Promise<void> {
       await sv.page_().waitForTimeout(800);
       const j = (await sv.page_().evaluate(async (u) => { const r = await fetch(u, { credentials: 'include' }); return r.ok ? await r.json() : null; },
         `${config.turbolyBaseUrl}/lookup/vehicles.json?search_term=${encodeURIComponent(VEHICLE)}&page_limit=30&page=1`)) as
-        { vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string }> } | null;
+        { vehicles?: Array<{ id: number; registration?: string; customer_name?: string; customer_phone?: string; customer_id?: number | string }> } | null;
       const norm = (x: string) => (x ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const rows = (j?.vehicles ?? []).filter((v) => norm(String(v.registration ?? '')) === VEHICLE).sort((a, b) => a.id - b.id);
       console.log(`\n— kendaraan ${VEHICLE} di Turboly → ${rows.length} record —`);
-      for (const v of rows) console.log(`  id=${v.id}  plat="${v.registration}"  pemilik="${v.customer_name ?? ''}"  telp=${v.customer_phone ?? '(kosong)'}`);
+      for (const v of rows) console.log(`  id=${v.id}  plat="${v.registration}"  pemilik="${v.customer_name ?? ''}"  telp=${v.customer_phone || '(kosong)'}  customer_id=${v.customer_id ?? '(kosong)'}`);
       if (!rows.length) console.log('  (tidak ada — lookup tidak menemukan plat ini)');
       // Which FIELDS does the lookup actually carry? If it names the owner's
       // customer id, the pusher could attach by identity instead of by name.
