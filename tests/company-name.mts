@@ -181,6 +181,49 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   // Rows this build cannot identify must behave exactly as before.
   ok(matcher(['EMILY 6281211228081', 'EMILY'], '', 'EMILY', false, '4911782') === 0,
     'id tidak terbaca di baris → jatuh ke perilaku lama, bukan menolak semua');
+
+  // ── NOMOR TELEPON ADALAH KUNCI — nama sama ≠ orang sama ────────────────
+  // Live, 16 Sep: B1199KRF. The SPK's phone 6281382378973 belongs to RYAN
+  // #4910147, but the picker renders thirty rows as the bare word "RYAN" — no
+  // digits anywhere — so every row scored alike and the first stranger won.
+  const RYANS = [
+    '4760021|RYAN', '4760946|RYAN', '4762351|RYAN', '4780189|RYAN', '4791912|RYAN',
+    '4833055|RYAN', '4839444|RYAN', '4840401|RYAN', '4848393|RYAN', '4860048|RYAN',
+    '4869800|RYAN', '4873170|RYAN', '4879794|RYAN', '4882054|RYAN', '4908342|RYAN',
+    '4910147|RYAN', '4920499|RYAN', '4923235|RYAN',
+  ];
+  ok(matcher(RYANS, '81382378973', 'RYAN') === 0, 'tanpa id: 30 RYAN tanpa digit → yang pertama (inilah bug B1199KRF)');
+  ok(matcher(RYANS, '81382378973', 'RYAN', false, '4910147') === 15, 'dengan id dari nomor telepon: RYAN #4910147 di baris 15');
+
+  // Same name, a DIFFERENT number, nothing proven: a new person. Never adopt.
+  ok(matcher(['4757876|ANDRE 6282113295585'], '81999999999', 'ANDRE', true) === -1,
+    'nama sama, nomor beda, tidak terbukti → tidak diambil (buat customer baru)');
+  ok(matcher(['4757876|ANDRE'], '81999999999', 'ANDRE', true) === -1,
+    'nama sama, baris tanpa nomor, tidak terbukti → tetap tidak diambil');
+  // When identity IS proven, the id is the only acceptable row — even a row
+  // carrying the same number on a duplicate record is someone else's record.
+  ok(matcher(['4900001|AGNESYA DEWI 6287779174377', '4900002|AGNESYA DEWI T 6287779174377'], '87779174377', 'AGNESYA DEWI T', false, '4900002') === 1,
+    'dua record satu nomor: id yang terbukti yang dipilih');
+  ok(matcher(['4900001|AGNESYA DEWI 6287779174377'], '87779174377', 'AGNESYA DEWI', false, '4900002') === -1,
+    'digit cocok tapi id beda → bukan customer yang diminta');
+  // Companies without phone proof still resolve by name — the corporate fix stays.
+  ok(matcher(['PT ANGKASA PURA LOGISTIK 0215551234 Jakarta'], '81999999999', 'ANGKASA PURA LOGISTIK', true) === 0,
+    'perusahaan tetap bisa ditemukan lewat nama (perbaikan korporat tidak rusak)');
+}
+
+// ── "UMUM" is not a car owner ─────────────────────────────────────────────
+{
+  const src = readFileSync(new URL('../packages/core/src/turboly/rpaSink.ts', import.meta.url), 'utf8');
+  ok(/export function isPlaceholderOwner/.test(src), 'isPlaceholderOwner ada di rpaSink');
+}
+{
+  const { isPlaceholderOwner } = await import('@spk/core/turboly');
+  // B1312HOD, 14 Sep: both registrations of the car say UMUM, and live has
+  // thirty UMUMs — the rule "keep the car with its owner" handed the visit to one.
+  for (const n of ['UMUM', 'umum', ' Umum ', 'PELANGGAN UMUM', 'CASH', 'Walk-In', 'WALK IN', '-', '', 'TAMU', 'X'])
+    ok(isPlaceholderOwner(n), `"${n}" bukan pemilik`);
+  for (const n of ['UMUMI', 'RYAN', 'EMILY', 'PT UMUM JAYA', 'CASHWIN', 'TAMUDIN', 'SYAAKA'])
+    ok(!isPlaceholderOwner(n), `"${n}" adalah orang/perusahaan sungguhan`);
 }
 
 console.log(`\n${passed} lulus, ${failed} gagal`);

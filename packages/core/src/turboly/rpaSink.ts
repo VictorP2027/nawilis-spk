@@ -56,8 +56,24 @@ export function resultIndexForSku(texts: ReadonlyArray<string>, sku: string): nu
   });
 }
 
+/**
+ * Walk-in placeholders the branches type when nobody gave a name. They are not
+ * customers, so they cannot own a car: the plate rule must not hand a visit to
+ * one of them. Matched on the whole name only — "UMUMI" is a person.
+ */
+const PLACEHOLDER_OWNERS = new Set([
+  '', '-', '--', '.', 'X', 'XX', 'XXX', 'NA', 'N A', 'NN', 'NONAME', 'NO NAME',
+  'UMUM', 'PELANGGAN', 'PELANGGAN UMUM', 'CUSTOMER', 'CUSTOMER UMUM', 'CASH',
+  'WALK IN', 'WALKIN', 'GUEST', 'TAMU', 'TES', 'TEST',
+]);
+export function isPlaceholderOwner(name: string): boolean {
+  return PLACEHOLDER_OWNERS.has((name ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim());
+}
+
 export class RpaSink implements ServiceOrderSink {
   readonly mode = 'rpa' as const;
+  /** The customer the order form attached to, when identity was proven — the add-vehicle page must use the same one. */
+  private pickedCustomer: { id: string; name: string } | null = null;
 
   constructor(
     private readonly session: TurbolySession,
@@ -628,9 +644,19 @@ export class RpaSink implements ServiceOrderSink {
     // Turboly, the SO attaches to the ORIGINAL registration's owner — even when
     // someone else (sister, driver) brings it in. The carrier becomes a notes
     // line, never a second owner.
+    this.pickedCustomer = null;
     let effNama = create?.nama ?? '';
     let effPhone = create?.phone ?? '';
-    const owner = await this.resolveVehicleOriginalOwner(reg);
+    const ownerRaw = await this.resolveVehicleOriginalOwner(reg);
+    /**
+     * "UMUM" is not a person, it is "nobody recorded". A car registered to it
+     * has no owner to keep it for — and following the rule anyway attached the
+     * order to one of thirty UMUMs and then searched for the typed customer on
+     * the add-vehicle page (B1312HOD / SYAAKA). The person at the counter owns
+     * this visit.
+     */
+    const owner = ownerRaw && !isPlaceholderOwner(ownerRaw.name) ? ownerRaw : null;
+    if (ownerRaw && !owner && process.env.PUSH_DEBUG_MATCH) console.log(`MATCH owner "${ownerRaw.name}" is a placeholder — ignored`);
     /** Set only when the PLATE named the owner: then identity is known, not guessed. */
     let ownerRef: { customerId: string; plate: string } | undefined;
     if (owner && (owner.phone || owner.name)) {
@@ -973,10 +999,18 @@ export class RpaSink implements ServiceOrderSink {
       // the SO form moments ago — ask for the same name here.
       else if (q && q.startsWith('+') && cr?.nama) q = cr.nama.trim();
     }
+    /**
+     * Register the car to the customer the ORDER FORM picked — by id. This page
+     * used to take the first search result, so a common name registered the
+     * car to a stranger, and a carrier's name (SYAAKA, B1312HOD) searched for
+     * someone who was never the picked customer at all.
+     */
+    const picked = this.pickedCustomer;
+    if (picked) q = picked.name || q;
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
     await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
-    await this.modalSelect2Pick('s2id_select2-input-customer', q); // same container id as the SO form
+    await this.modalSelect2Pick('s2id_select2-input-customer', q, picked?.id ?? ''); // same container id as the SO form
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
     await this.pickMakeWithTypeFallback(page, payload);
@@ -1217,7 +1251,7 @@ export class RpaSink implements ServiceOrderSink {
    * page.evaluate is compiled to a __name(...) call that does not exist in the
    * browser, which silently turned a whole callback into "no match" once.
    */
-  private async findCustomerByPhoneAnyFormat(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
+  private async findCustomerByPhoneAnyFormat(phoneKey: string): Promise<{ id: string; name: string; phone: string } | null | undefined> {
     if (phoneKey.length < 8) return null;
     const page = this.session.page_();
     const rows = (await page.evaluate(
@@ -1273,10 +1307,10 @@ export class RpaSink implements ServiceOrderSink {
     const mine = rows.filter((r) => canonPhoneKey(r.phone) === phoneKey).sort((a, b) => a.id - b.id);
     const hit = mine[0];
     if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH listFilter(${phoneKey}) -> ${JSON.stringify(hit ?? null)}`);
-    return hit ? { name: hit.name, phone: hit.phone } : null;
+    return hit ? { id: String(hit.id), name: hit.name, phone: hit.phone } : null;
   }
 
-  private async resolveOriginalCustomer(phoneKey: string): Promise<{ name: string; phone: string } | null | undefined> {
+  private async resolveOriginalCustomer(phoneKey: string): Promise<{ id: string; name: string; phone: string } | null | undefined> {
     try {
       const all: Array<{ id: number; name: string; phone: string }> = [];
       for (const t of ['0' + phoneKey, phoneKey, '62' + phoneKey, '+62' + phoneKey]) {
@@ -1289,7 +1323,7 @@ export class RpaSink implements ServiceOrderSink {
       const mine = all
         .filter((c) => canonPhoneKey(c.phone) === phoneKey)
         .sort((a, b) => a.id - b.id);
-      if (mine[0]) return mine[0];
+      if (mine[0]) return { id: String(mine[0].id), name: mine[0].name, phone: mine[0].phone };
       // The select2 endpoint cannot see a "+62…" record at all, so its silence
       // is not an answer about whether this person exists. Ask the list.
       return await this.findCustomerByPhoneAnyFormat(phoneKey);
@@ -1410,6 +1444,16 @@ export class RpaSink implements ServiceOrderSink {
     let expectName = '';
     /** No phone proof: only a row Turboly itself marks as a COMPANY may be taken. */
     let nameOnly = false;
+    /**
+     * THE TURBOLY CUSTOMER WE ARE ALLOWED TO PICK — by id, never by name.
+     *
+     * The phone is the primary key. When it (or the plate) proves a record,
+     * that record's id is the ONLY row this push may attach to. The dropdown
+     * renders a person as a bare name with no digits — live shows thirty rows
+     * of "RYAN" — so without the id, "same name" silently became "same
+     * person" and orders landed on strangers (B1199KRF, F1125EG, LANA).
+     */
+    let wantId = ownerRef?.customerId ?? '';
     if (phoneKey) {
       const orig = await this.resolveOriginalCustomer(phoneKey);
       if (process.env.PUSH_DEBUG_MATCH) console.log(`MATCH resolveOriginalCustomer(${phoneKey}) -> ${JSON.stringify(orig)}`);
@@ -1451,20 +1495,34 @@ export class RpaSink implements ServiceOrderSink {
          * person.
          */
         expectName = orig.name.trim();
+        wantId = wantId || orig.id;
         const stored = orig.phone.trim();
         if (stored.startsWith('+')) queries.push(orig.name.trim(), localPhone(phone), stored);
         else queries.push(stored, orig.name.trim());
+      } else if (wantId) {
+        // Lookup hiccup, but the PLATE already proved who this is.
+        queries.push(nama.trim());
       } else {
-        queries.push(e164Phone(phone), localPhone(phone), nama.trim()); // endpoint hiccup
+        /**
+         * The phone lookup did not answer, so identity cannot be proven. Guessing
+         * by name attaches to a namesake; creating risks a duplicate of someone
+         * who exists. Neither is acceptable for a key this important — retry in
+         * a few minutes, when the lookup answers.
+         */
+        throw new TransientError('pencarian customer lewat nomor telepon tidak menjawab — identitas belum bisa dipastikan, dicoba ulang otomatis');
       }
     } else if (nama) {
       queries.push(...nameQueries(nama));
+      nameOnly = !wantId; // no phone at all: a person is never taken by name
     }
     for (const q of [...new Set(queries.filter((x) => x && x.length >= 3))]) {
       // The expected name is the one that produced this query: when the record
       // was proven by phone, that is the ERP's own spelling, and checking the
       // typed spelling instead is why the row we had just found was rejected.
-      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama, nameOnly, ownerRef?.customerId ?? '')) return true;
+      if (await this.pickCustomerInSelect2(q, phoneKey, expectName || nama, nameOnly, wantId)) {
+        this.pickedCustomer = wantId ? { id: wantId, name: (expectName || nama).trim() } : null;
+        return true;
+      }
     }
     /**
      * THE PLATE NAMED THE OWNER, AND WE COULD NOT REACH THEM.
@@ -1618,13 +1676,16 @@ export class RpaSink implements ServiceOrderSink {
           // a matcher that cannot read ids must not start refusing rows.
           var idsReadable = false;
           for (var k = 0; k < lis.length; k++) { if (idOf(lis[k])) { idsReadable = true; break; } }
+          // Identity proven: that row, or nothing. Another row with the same
+          // name — or even the same number on a duplicate record — is not the
+          // customer this push was told to use.
+          if (wantId && idsReadable) {
+            for (var j = 0; j < lis.length; j++) { if (idOf(lis[j]) === wantId) return j; }
+            return -1;
+          }
           var best = -1, bestScore = 0;
           for (var i = 0; i < lis.length; i++) {
-            if (wantId && idsReadable && idOf(lis[i]) === wantId) return i; // identity — nothing outranks it
             var sc = rowScore(lis[i].innerText || '');
-            // Name-only, with a known owner who is NOT this row: a different
-            // person with the same name. This is the F1125EG failure.
-            if (sc === 1 && wantId && idsReadable) sc = 0;
             if (sc > bestScore) { bestScore = sc; best = i; }
           }
           return best;
@@ -1927,7 +1988,7 @@ export class RpaSink implements ServiceOrderSink {
   }
 
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
-  private async modalSelect2Pick(containerId: string, query: string): Promise<void> {
+  private async modalSelect2Pick(containerId: string, query: string, wantId = ''): Promise<void> {
     const page = this.session.page_();
     const q = query.trim(); // a trailing space can hang Turboly's remote search forever
     await page.locator(`#${containerId} .select2-choice, #${containerId} .select2-choices, #${containerId}`).first().click({ timeout: 8000 });
@@ -1948,7 +2009,26 @@ export class RpaSink implements ServiceOrderSink {
     }
     // Search never resolved (stuck "Searching…") — a data/timeout condition, not a broken page.
     if (!found) throw new TransientError(`Turboly search for "${q}" returned no results (timed out)`);
-    await page.locator(results).first().click({ timeout: 5000 });
+    let idx = 0;
+    if (wantId) {
+      // String-form evaluate (see pickCustomerInSelect2): select2 keeps each row's record on the <li>.
+      const at = (await page.evaluate(`(() => {
+        var lis = Array.prototype.slice.call(document.querySelectorAll('.select2-drop .select2-results li, #select2-drop .select2-results li'))
+          .filter(function (x) { return x.offsetParent !== null && !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); });
+        var readable = false;
+        for (var i = 0; i < lis.length; i++) {
+          var d = null;
+          try { d = window.jQuery ? window.jQuery(lis[i]).data('select2-data') : null; } catch (e) { d = null; }
+          if (d && d.id != null) { readable = true; if (String(d.id) === ${JSON.stringify(wantId)}) return i; }
+        }
+        return readable ? -1 : -2;
+      })()`)) as number;
+      if (at === -1) {
+        throw new DataError(`customer #${wantId} ("${q}") tidak muncul di pencarian halaman tambah kendaraan — kendaraan tidak didaftarkan ke orang lain yang namanya sama`);
+      }
+      if (at >= 0) idx = at; // -2: this build hides row ids — the old first-row behaviour
+    }
+    await page.locator(results).nth(idx).click({ timeout: 5000 });
     await page.waitForTimeout(500);
   }
 
