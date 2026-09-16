@@ -45,6 +45,18 @@ ok(companyNameKey('PT') === '', 'hanya bentuk hukum → tidak ada inti');
 ok(!same('PT', 'CV'), 'dua nama kosong tidak boleh dianggap sama');
 ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum yang dipotong');
 
+/**
+ * The in-page matcher is a TEMPLATE LITERAL in rpaSink. What the browser runs
+ * is the COOKED string — "\\s" becomes "s", "\\." becomes "." — so a lift that
+ * reads the raw source is not the code that runs. SRO/RDA/26090483 (16 Sep):
+ * isCompany's regex had single backslashes, cooked to "(^|s)(FA)(s|$|.)", and
+ * "FAHRIAN" matched "FA" + any character — a person became a company and was
+ * attached by name. The old lift here passed. Cook exactly like JavaScript.
+ */
+const cook = (tpl: string, params: Record<string, unknown> = {}): string =>
+  // eslint-disable-next-line no-new-func
+  (new Function(...Object.keys(params), 'return `' + tpl + '`;') as (...a: unknown[]) => string)(...Object.values(params));
+
 // ── the browser copy must not drift ──────────────────────────────────────
 // pickCustomerInSelect2 matches rows INSIDE the page, so it carries its own
 // copy of this rule as a string. Two copies of one rule is how a matcher
@@ -53,8 +65,7 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   const src = readFileSync(new URL('../packages/core/src/turboly/rpaSink.ts', import.meta.url), 'utf8');
   const m = /var keyOf = function \(t\) \{([\s\S]*?)\};/.exec(src);
   ok(!!m, 'salinan keyOf ditemukan di rpaSink');
-  // The source escapes backslashes for the template literal; undo that to run it.
-  const body = (m?.[1] ?? '').replace(/\\\\/g, '\\');
+  const body = cook(m?.[1] ?? '');
   // eslint-disable-next-line no-new-func
   const browserKey = new Function('t', body) as (t: string) => string;
   const NAMES = [
@@ -78,7 +89,7 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   const src = readFileSync(new URL('../packages/core/src/turboly/rpaSink.ts', import.meta.url), 'utf8');
   const m = /var isCompany = function \(rowName\) \{([\s\S]*?)\};/.exec(src);
   ok(!!m, 'penjaga isCompany ada di rpaSink');
-  const body = (m?.[1] ?? '').replace(/\\\\/g, '\\');
+  const body = cook(m?.[1] ?? '');
   // eslint-disable-next-line no-new-func
   const isCompany = new Function('rowName', body) as (n: string) => boolean;
 
@@ -97,6 +108,10 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(!isCompany('PTERODAKTIL'), 'PTERODAKTIL bukan PT');
   ok(!isCompany('CVETKOVIC'), 'CVETKOVIC bukan CV');
   ok(!isCompany('UDIN'), 'UDIN bukan UD');
+  ok(!isCompany('FAHRIAN TEST'), 'FAHRIAN bukan FA + huruf apa saja — inilah bug SRO/RDA/26090483');
+  ok(!isCompany('FAJAR'), 'FAJAR bukan perusahaan');
+  ok(!isCompany('PTOLEMY'), 'PTOLEMY bukan PT');
+  ok(isCompany('FA SUMBER REJEKI'), 'FA sebagai kata utuh memang firma');
   // PDAM is a company, but the rule only sees a legal form as a WHOLE word, so
   // it is not detected — and that errs the safe way: the push creates a record
   // rather than risking the wrong one. Only 'PD' standing alone counts.
@@ -122,13 +137,8 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
    * people with one name apart.
    */
   const matcher = (rows: string[], phoneKey: string, nama: string, requireCompany = false, wantId = ''): number => {
-    const body = raw
-      .replace('${JSON.stringify(phoneKey)}', JSON.stringify(phoneKey))
-      .replace("${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\\s+/g, ' '))}", JSON.stringify(nama.trim().toUpperCase().replace(/\s+/g, ' ')))
-      .replace("${JSON.stringify(companyNameKey(nama ?? ''))}", JSON.stringify(companyNameKey(nama)))
-      .replace('${JSON.stringify(requireCompany)}', JSON.stringify(requireCompany))
-      .replace('${JSON.stringify(wantId)}', JSON.stringify(wantId))
-      .replace(/\\\\/g, '\\');
+    // Cooked exactly as the runtime cooks it, interpolations included.
+    const body = cook(raw, { phoneKey, nama, companyNameKey, requireCompany, wantId });
     const fakeDoc = {
       querySelectorAll: () => rows.map((r) => {
         const bar = r.indexOf('|');
@@ -158,6 +168,10 @@ ok(companyNameKey('PT PT ANGKASA') === 'PT ANGKASA', 'hanya satu bentuk hukum ya
   ok(matcher(['FRANKI 6281200000000'], '81200000000', 'FRANK') === 0, 'digit cocok, nama beda → tetap dipilih lewat digit (perilaku lama)');
   ok(matcher(['FRANKI'], '', 'FRANK') === -1, 'tanpa digit, FRANK tidak boleh mengambil FRANKI');
   ok(matcher([], '87779174377', 'AGNESYA DEWI T') === -1, 'tidak ada baris → -1');
+  // SRO/RDA/26090483, live 16 Sep: FAHRIAN TEST typed with a number Turboly
+  // does not hold; the only row is the OLD FAHRIAN TEST with another number.
+  ok(matcher(['4932852|FAHRIAN TEST 6281287955610'], '89677009431', 'FAHRIAN TEST', true, '') === -1,
+    'orang bernama FAHRIAN dengan nomor lain tidak boleh diambil lewat nama');
 
   // ── the plate names the owner: identity, never the namesake ────────────
   // Live, 10 Sep: F1125EG is registered to EMILY, who has no phone in Turboly.

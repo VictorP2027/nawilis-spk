@@ -1706,6 +1706,10 @@ export class RpaSink implements ServiceOrderSink {
       // customer was created again. A string is never transformed.
       const idx = (await page.evaluate(
         `(() => {
+          // THIS IS A TEMPLATE LITERAL: every regex backslash must be doubled
+          // (\\s, \\d, \\.). A single "\s" cooks to "s" and "\." to "." before
+          // the browser sees it — isCompany then read "FAHRIAN" as "FA" + any
+          // char and called a person a company (SRO/RDA/26090483, 16 Sep).
           var want = ${JSON.stringify(phoneKey)};
           var wantName = ${JSON.stringify((nama ?? '').trim().toUpperCase().replace(/\s+/g, ' '))};
           // Same rule as companyNameKey() in indonesia.ts, inlined because this
@@ -1713,8 +1717,8 @@ export class RpaSink implements ServiceOrderSink {
           // company name can never swallow a shorter one.
           var wantKey = ${JSON.stringify(companyNameKey(nama ?? ''))};
           var keyOf = function (t) {
-            var f = (t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
-            return f.replace(/^(PT|CV|UD|PD|NV|FA)(\s+|$)/, '').trim();
+            var f = (t || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim().replace(/\\s+/g, ' ');
+            return f.replace(/^(PT|CV|UD|PD|NV|FA)(\\s+|$)/, '').trim();
           };
           var requireCompany = ${JSON.stringify(requireCompany)};
           /**
@@ -1737,7 +1741,7 @@ export class RpaSink implements ServiceOrderSink {
           // Turboly's own spelling has to say "company". A person's name is not
           // an identifier — see SRO/TA12/26090099.
           var isCompany = function (rowName) {
-            return /(^|\s)(PT|CV|UD|PD|NV|FA|TBK|PERSERO|KOPERASI)(\s|$|\.)/i.test(rowName || '');
+            return /(^|\\s)(PT|CV|UD|PD|NV|FA|TBK|PERSERO|KOPERASI)(\\s|$|\\.)/i.test(rowName || '');
           };
           var nameHit = function (rowName) {
             if (requireCompany && !isCompany(rowName)) return false;
