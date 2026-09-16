@@ -50,13 +50,15 @@ async function main(): Promise<void> {
   console.log(`base=${config.turbolyBaseUrl} db=${config.mongoDb}`);
 
   if (SPK) {
-    const doc = await collections.spk().findOne({ _id: SPK } as never) as { customer?: { nama?: string; waE164?: string } } | null;
+    const doc = await collections.spk().findOne({ _id: SPK } as never) as { state?: string; branchCode?: string; createdAt?: string; customer?: { nama?: string; waE164?: string; turbolyCustomerId?: string | null }; vehicle?: { noPolisi?: { full?: string } }; turboly?: { serviceOrderNo?: string | null }; push?: { attempt?: number; failureClass?: string | null; lastError?: string | null } } | null;
     if (!doc) { console.log(`SPK ${SPK} tidak ada`); process.exit(1); }
     const nama = (doc.customer?.nama ?? '').trim();
     const raw = doc.customer?.waE164 ?? '';
     const key = raw.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
     const mask = (x: string) => { const d = String(x ?? '').replace(/\D/g, ''); return d.length > 6 ? `${d.slice(0, 5)}…${d.slice(-3)}` : d || '(kosong)'; };
     console.log(`\nSPK ${SPK}: nama="${nama}" telp=${mask(raw)} key=${mask(key)} (${key.length} digit)`);
+    console.log(`  cabang=${doc.branchCode ?? '-'} dibuat=${doc.createdAt ?? '-'} state=${doc.state ?? '-'} plat=${doc.vehicle?.noPolisi?.full ?? '-'} SO=${doc.turboly?.serviceOrderNo ?? '(belum)'}`);
+    console.log(`  customer.turbolyCustomerId=${doc.customer?.turbolyCustomerId ?? '(tidak ada)'}  push.attempt=${doc.push?.attempt ?? 0} class=${doc.push?.failureClass ?? '-'} lastError=${(doc.push?.lastError ?? '-').slice(0, 120)}`);
     const ss = new TurbolySession({ baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state', userAgentSuffix: 'probe-spk-cust', branchCode: 'PROBE' });
     await ss.start(); await ss.ensureLoggedIn();
     const pg = ss.page_();
