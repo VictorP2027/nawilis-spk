@@ -23,6 +23,10 @@ on:
         description: 'Store Turboly yang dipakai untuk membuka form'
         type: string
         default: 'Nawilis Bekasi'
+      spk:
+        description: 'CEK KEPUTUSAN CUSTOMER: id SPK — ulangi pencarian customer seperti pusher (baca saja, nomor disamarkan)'
+        type: string
+        default: ''
       form:
         description: 'CEK FORM: path halaman, mis. /customers/new — daftar field (tanpa menyimpan)'
         type: string
@@ -154,6 +158,7 @@ jobs:
           IN_VEHICLE: ${{ inputs.vehicle }}
           IN_CUSTOMER: ${{ inputs.customer }}
           IN_FORM: ${{ inputs.form }}
+          IN_SPK: ${{ inputs.spk }}
         run: |
           node --import tsx apps/worker/src/probe-product-search.ts \
             --q="$IN_Q" \
@@ -161,4 +166,5 @@ jobs:
             --customers="$IN_CUSTOMERS" \
             --vehicle="$IN_VEHICLE" \
             --customer="$IN_CUSTOMER" \
-            --form="$IN_FORM"
+            --form="$IN_FORM" \
+            --spk="$IN_SPK"

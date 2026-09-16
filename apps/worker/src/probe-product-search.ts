@@ -32,6 +32,13 @@ const CUSTOMERS = (arg('customers') ?? '').trim();
  * the right person instead of the first one.
  */
 const CUSTOMER = (arg('customer') ?? '').trim();
+/**
+ * --spk=<id>: replay the CUSTOMER DECISION for one SPK, read-only — the same
+ * three questions the pusher asks (phone lookup, customers list, name picker),
+ * with phone digits masked. Built for SRO/RDA/26090478, where a typed number
+ * that is not FAHRIAN TEST's still landed on FAHRIAN TEST.
+ */
+const SPK = (arg('spk') ?? '').trim();
 /** --form=/customers/new: list a page's fields (id, name, required, label) — read-only, never submits. */
 const FORM = (arg('form') ?? '').trim();
 /** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
@@ -41,6 +48,87 @@ const STORE = arg('store') ?? 'Nawilis Bekasi';
 async function main(): Promise<void> {
   await connect(config.mongoUri, config.mongoDb);
   console.log(`base=${config.turbolyBaseUrl} db=${config.mongoDb}`);
+
+  if (SPK) {
+    const doc = await collections.spk().findOne({ _id: SPK } as never) as { customer?: { nama?: string; waE164?: string } } | null;
+    if (!doc) { console.log(`SPK ${SPK} tidak ada`); process.exit(1); }
+    const nama = (doc.customer?.nama ?? '').trim();
+    const raw = doc.customer?.waE164 ?? '';
+    const key = raw.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '');
+    const mask = (x: string) => { const d = String(x ?? '').replace(/\D/g, ''); return d.length > 6 ? `${d.slice(0, 5)}…${d.slice(-3)}` : d || '(kosong)'; };
+    console.log(`\nSPK ${SPK}: nama="${nama}" telp=${mask(raw)} key=${mask(key)} (${key.length} digit)`);
+    const ss = new TurbolySession({ baseUrl: config.turbolyBaseUrl, stateDir: './.turboly-state', userAgentSuffix: 'probe-spk-cust', branchCode: 'PROBE' });
+    await ss.start(); await ss.ensureLoggedIn();
+    const pg = ss.page_();
+    try {
+      await pg.goto(`${config.turbolyBaseUrl}/`, { waitUntil: 'domcontentloaded' });
+      await pg.waitForTimeout(800);
+      // 1. lookup/customers.json, four spellings — resolveOriginalCustomer
+      const look = (await pg.evaluate(async (k) => {
+        const out: Array<{ t: string; n: number; hits: Array<{ id: number; name: string; phone: string }> }> = [];
+        for (const t of ['0' + k, k, '62' + k, '+62' + k]) {
+          const r = await fetch('/lookup/customers.json?search_term=' + encodeURIComponent(t) + '&page_limit=30&page=1', { credentials: 'include' });
+          const j = r.ok ? await r.json() : { customers: [] };
+          const cs = (j.customers || []) as Array<{ id: number; name?: string; phone?: string }>;
+          out.push({ t, n: cs.length, hits: cs.map((c) => ({ id: c.id, name: String(c.name ?? ''), phone: String(c.phone ?? '') })) });
+        }
+        return out;
+      }, key)) as Array<{ t: string; n: number; hits: Array<{ id: number; name: string; phone: string }> }>;
+      console.log('\n— 1. lookup/customers.json (resolveOriginalCustomer) —');
+      for (const l of look) {
+        const mine = l.hits.filter((h) => h.phone.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '') === key);
+        console.log(`  search "${mask(l.t)}" → ${l.n} baris, cocok kunci: ${mine.map((m) => `#${m.id} "${m.name}"`).join(', ') || '-'}`);
+      }
+      // 2. customers list filter — findCustomerByPhoneAnyFormat
+      const list = (await pg.evaluate(async (k) => {
+        const res: Array<{ how: string; status: number; rows: Array<{ id: number; cells: string[] }> }> = [];
+        for (const how of ['phone_start', 'phone_cont']) {
+          const r = await fetch('/customers?q%5B' + how + '%5D=' + encodeURIComponent(k), { credentials: 'include' });
+          const rows: Array<{ id: number; cells: string[] }> = [];
+          if (r.ok) {
+            const d = new DOMParser().parseFromString(await r.text(), 'text/html');
+            for (const tr of Array.from(d.querySelectorAll('table tr'))) {
+              const a = tr.querySelector('a[href*="/customers/"]'); if (!a) continue;
+              const id = parseInt((a.getAttribute('href') || '').split('/customers/')[1] ?? '', 10); if (!id) continue;
+              rows.push({ id, cells: Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent || '').trim()).filter(Boolean) });
+            }
+          }
+          res.push({ how, status: r.status, rows });
+        }
+        return res;
+      }, key)) as Array<{ how: string; status: number; rows: Array<{ id: number; cells: string[] }> }>;
+      console.log('\n— 2. /customers list filter (findCustomerByPhoneAnyFormat) —');
+      for (const l of list) {
+        const mine = l.rows.filter((r) => r.cells.some((c) => c.replace(/\D/g, '').replace(/^62/, '').replace(/^0/, '') === key));
+        console.log(`  q[${l.how}] → HTTP ${l.status}, ${l.rows.length} baris, cocok kunci: ${mine.map((m) => `#${m.id} "${m.cells[0] ?? ''}"`).join(', ') || '-'}`);
+      }
+      // 3. the picker rows for the typed name, and whether their digits contain the key
+      await pg.goto(`${config.turbolyBaseUrl}/service_orders/new`, { waitUntil: 'domcontentloaded' });
+      await pg.waitForTimeout(2500);
+      await pg.locator('#s2id_select2-input-customer .select2-choice, #s2id_select2-input-customer').first().click();
+      await pg.waitForTimeout(500);
+      const inp = pg.locator('#select2-drop input').first();
+      await inp.waitFor({ state: 'visible', timeout: 8000 });
+      await inp.type(nama, { delay: 25 });
+      let rows: Array<{ id: string; text: string }> = [];
+      for (let i = 0; i < 30; i++) {
+        rows = (await pg.evaluate(`(() => Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
+          .filter(function (x) { return !/select2-(no-results|searching|selection-limit|disabled|more-results)/.test(x.className); })
+          .map(function (li) { var d = null; try { d = window.jQuery ? window.jQuery(li).data('select2-data') : null; } catch (e) {}
+            return { id: d && d.id != null ? String(d.id) : '?', text: (li.innerText || '').replace(/\s+/g, ' ').trim() }; }))()`)) as Array<{ id: string; text: string }>;
+        if (rows.length) break;
+        await pg.waitForTimeout(700);
+      }
+      console.log(`\n— 3. picker "${nama}" → ${rows.length} baris —`);
+      for (const r of rows) {
+        const digits = r.text.replace(/\D/g, '');
+        console.log(`  #${r.id}  "${r.text.replace(/\d{6,}/g, (d) => mask(d))}"  digitsHit=${key.length >= 8 && digits.includes(key)}`);
+      }
+      await pg.keyboard.press('Escape').catch(() => {});
+      console.log('\n(read-only — tidak ada yang disimpan)');
+    } finally { await ss.dispose().catch(() => {}); await close().catch(() => {}); }
+    process.exit(0);
+  }
 
   // --form: what a Turboly page asks for, without ever saving it.
   if (FORM) {
