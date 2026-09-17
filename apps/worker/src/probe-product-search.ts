@@ -39,6 +39,13 @@ const CUSTOMER = (arg('customer') ?? '').trim();
  * that is not FAHRIAN TEST's still landed on FAHRIAN TEST.
  */
 const SPK = (arg('spk') ?? '').trim();
+/**
+ * --setcust=<id>|<name>: on the order form, set the customer select2 BY ID
+ * (no search) and report what the form holds afterwards and whether the
+ * vehicle picker then answers. Never saves. Built for HERU/F1772FBF: a new
+ * customer with 30+ namesakes never appears in the picker's first page.
+ */
+const SETCUST = (arg('setcust') ?? '').trim();
 /** --form=/customers/new: list a page's fields (id, name, required, label) — read-only, never submits. */
 const FORM = (arg('form') ?? '').trim();
 /** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
@@ -317,6 +324,45 @@ async function main(): Promise<void> {
       console.log('\n(tidak ada yang disimpan — form tidak pernah di-submit)');
       await session.dispose().catch(() => {});
       await close().catch(() => {});
+      process.exit(0);
+    }
+
+    if (SETCUST) {
+      const [id, ...rest] = SETCUST.split('|'); const name = rest.join('|') || `#${id}`;
+      const r = (await page.evaluate(`(() => {
+        var out = { jq: !!window.jQuery, before: '', after: '', chosen: '', err: '' };
+        var el = document.querySelector('#select2-input-customer');
+        out.before = el ? String(el.value || '') : '(no #select2-input-customer)';
+        try {
+          if (!window.jQuery) throw new Error('no jQuery');
+          window.jQuery('#select2-input-customer').select2('data', { id: ${JSON.stringify(id)}, text: ${JSON.stringify(name)} }, true);
+        } catch (e) { out.err = String(e && e.message || e); }
+        el = document.querySelector('#select2-input-customer');
+        out.after = el ? String(el.value || '') : '';
+        var c = document.querySelector('#s2id_select2-input-customer .select2-chosen');
+        out.chosen = c ? (c.innerText || '').trim() : '';
+        return out;
+      })()`)) as { jq: boolean; before: string; after: string; chosen: string; err: string };
+      console.log(`\n— set customer by id ${id} —\n  jQuery=${r.jq} before="${r.before}" after="${r.after}" chosen="${r.chosen}" err="${r.err || '-'}"`);
+      await page.waitForTimeout(2500);
+      // Does the vehicle picker now answer for this customer?
+      await page.locator('#s2id_select2-input-vehicle .select2-choice, #s2id_select2-input-vehicle').first().click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      const inp = page.locator('#select2-drop input').first();
+      await inp.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
+      await inp.type('B', { delay: 30 }).catch(() => {});
+      let rows: string[] = [];
+      for (let i = 0; i < 20; i++) {
+        rows = (await page.evaluate(`(() => Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
+          .filter(function (x) { return !/select2-(searching)/.test(x.className); })
+          .map(function (li) { return (li.innerText || '').replace(/\\s+/g, ' ').trim(); }))()`)) as string[];
+        if (rows.length) break;
+        await page.waitForTimeout(600);
+      }
+      console.log(`  vehicle picker after set → ${rows.length} baris: ${rows.slice(0, 6).join(' | ')}`);
+      await page.keyboard.press('Escape').catch(() => {});
+      console.log('\n(tidak ada yang disimpan — form tidak pernah di-submit)');
+      await session.dispose().catch(() => {}); await close().catch(() => {});
       process.exit(0);
     }
 
