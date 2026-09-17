@@ -345,6 +345,25 @@ async function main(): Promise<void> {
       })()`)) as { jq: boolean; before: string; after: string; chosen: string; err: string };
       console.log(`\n— set customer by id ${id} —\n  jQuery=${r.jq} before="${r.before}" after="${r.after}" chosen="${r.chosen}" err="${r.err || '-'}"`);
       await page.waitForTimeout(2500);
+      // How does the VEHICLE picker build its request? Dump its select2 ajax
+      // config source and record the URLs it actually calls while we type.
+      const cfg = (await page.evaluate(`(() => {
+        var out = { url: '', data: '', hooked: false };
+        try {
+          var s2 = window.jQuery('#select2-input-vehicle').data('select2');
+          var ajax = s2 && s2.opts && s2.opts.ajax;
+          if (ajax) { out.url = String(ajax.url); out.data = String(ajax.data).slice(0, 600); }
+        } catch (e) { out.url = 'err: ' + e; }
+        try {
+          window.__probeUrls = [];
+          var open = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function (m, u) { try { window.__probeUrls.push(String(u)); } catch (e) {} return open.apply(this, arguments); };
+          var of = window.fetch; if (of) { window.fetch = function (u) { try { window.__probeUrls.push(String(u && u.url || u)); } catch (e) {} return of.apply(this, arguments); }; }
+          out.hooked = true;
+        } catch (e) {}
+        return out;
+      })()`)) as { url: string; data: string; hooked: boolean };
+      console.log(`  vehicle select2 ajax.url = ${cfg.url}\n  vehicle select2 ajax.data = ${cfg.data.replace(/\s+/g, ' ')}`);
       // Does the vehicle picker now answer for this customer?
       await page.locator('#s2id_select2-input-vehicle .select2-choice, #s2id_select2-input-vehicle').first().click({ timeout: 8000 }).catch(() => {});
       await page.waitForTimeout(500);
@@ -360,6 +379,8 @@ async function main(): Promise<void> {
         await page.waitForTimeout(600);
       }
       console.log(`  vehicle picker after set → ${rows.length} baris: ${rows.slice(0, 6).join(' | ')}`);
+      const urls = (await page.evaluate(`(() => (window.__probeUrls || []).filter(function (u) { return /vehicle|customer/i.test(u); }).slice(-5))()`).catch(() => [])) as string[];
+      console.log(`  requests while typing: ${urls.join(' | ') || '(none captured)'}`);
       await page.keyboard.press('Escape').catch(() => {});
       console.log('\n(tidak ada yang disimpan — form tidak pernah di-submit)');
       await session.dispose().catch(() => {}); await close().catch(() => {});
