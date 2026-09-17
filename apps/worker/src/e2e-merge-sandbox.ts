@@ -90,6 +90,13 @@ const PHONE = arg('phone') ?? `+62812${digits}${digits}`;
  * session). Refuses any database whose name does not say it is scratch.
  */
 const RESET = arg('reset') === '1';
+/**
+ * --name=: the customer's name, instead of "UJI GABUNG <tag>". Lets a run use
+ * a name shaped like the ones that broke on live — "FAHRIAN …" read as a
+ * company by a cooked regex (SRO/RDA/26090483) — so the sandbox can prove the
+ * matcher on the name itself, not only on the tag.
+ */
+const NAME = (arg('name') ?? '').trim();
 
 const log = (m: string): void => console.log(`[e2e-merge ${TAG}] ${m}`);
 const fail = (m: string): never => {
@@ -171,7 +178,7 @@ async function capture(kind: 'SPK' | 'CHECKGO'): Promise<string> {
     spkNumber: `E2E-${TAG}-${kind}`,
     qrPayload: null,
     capturedAt: now,
-    customer: { nama: `UJI GABUNG ${TAG}`, wa: PHONE, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
+    customer: { nama: NAME || `UJI GABUNG ${TAG}`, wa: PHONE, alamat: 'Jl. Uji Sandbox 1', kontakLain: null, turbolyCustomerId: null },
     vehicle: { noPolisi: PLATE, merk: MAKE, tipe: MODEL, tahun: 2021, warna: 'Silver', km: '31000', kind: KIND, createMakeConfirmed: false },
     complaint: kind === 'SPK' ? 'bunyi roda depan' : 'cek rutin',
     jobLines:

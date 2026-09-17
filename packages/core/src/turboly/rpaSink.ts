@@ -1091,9 +1091,26 @@ export class RpaSink implements ServiceOrderSink {
     if (picked) q = picked.name || q;
     const wantAddId = picked?.id || origId;
     if (!q) throw new DataError('cannot add vehicle: no customer identifier');
-    await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(2500);
-    await this.modalSelect2Pick('s2id_select2-input-customer', q, wantAddId); // same container id as the SO form
+    /**
+     * /vehicles/new?customer_id=<id> binds the customer server-side (proven on
+     * sandbox: the form's hidden vehicle[customer_id] carries it), so a known
+     * id needs no search — the search lists 30 namesakes in id order and a
+     * new customer is past them (HERU #4933516). The picker remains the path
+     * when no id is known, or if the binding did not take.
+     */
+    let bound = false;
+    if (wantAddId) {
+      await page.goto(`${this.baseUrl}/vehicles/new?customer_id=${encodeURIComponent(wantAddId)}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(2500);
+      const held = (await page.evaluate(`(() => { var el = document.querySelector('#vehicle_customer_id, input[name="vehicle[customer_id]"]'); return el && el.value != null ? String(el.value) : ''; })()`).catch(() => '')) as string;
+      bound = held === wantAddId;
+      if (this.dbg()) console.log(`MATCH /vehicles/new?customer_id=${wantAddId} → form holds "${held}" ${bound ? '✓' : '— fallback ke picker'}`);
+    }
+    if (!bound) {
+      await page.goto(`${this.baseUrl}/vehicles/new`, { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(2500);
+      await this.modalSelect2Pick('s2id_select2-input-customer', q, wantAddId); // same container id as the SO form
+    }
     const reg = (payload.vehiclePlateFull || payload.vehicleRegistration).replace(/\s/g, '');
     await page.fill('#vehicle_registration', reg);
     await this.pickMakeWithTypeFallback(page, payload);
@@ -1610,10 +1627,6 @@ export class RpaSink implements ServiceOrderSink {
       queries.push(...nameQueries(nama));
       nameOnly = !wantId; // no phone at all: a person is never taken by name
     }
-    if (wantId && await this.selectCustomerById(this.session.page_(), 'select2-input-customer', wantId, (expectName || nama).trim())) {
-      this.pickedCustomer = { id: wantId, name: (expectName || nama).trim() };
-      return true;
-    }
     for (const q of [...new Set(queries.filter((x) => x && x.length >= 3))]) {
       // The expected name is the one that produced this query: when the record
       // was proven by phone, that is the ERP's own spelling, and checking the
@@ -1694,6 +1707,34 @@ export class RpaSink implements ServiceOrderSink {
           empties = 0;
         }
         await page.waitForTimeout(600);
+      }
+      /**
+       * THE WANTED CUSTOMER MAY BE PAST THE FIRST PAGE.
+       *
+       * The lookup answers 30 rows per page in id order, so a customer created
+       * today with thirty namesakes is never on page one — HERU #4933516
+       * (F1772FBF, 17 Sep) could not be reached by name at all. Setting the
+       * hidden input by id does not help: Turboly's own selection handler is
+       * what scopes the vehicle picker (t.customerId), and only a real pick
+       * runs it. So page through select2's "more results" until the id shows
+       * (or the list ends), then click the row like a person would.
+       */
+      if (wantId) {
+        for (let pageNo = 1; pageNo <= 25; pageNo++) {
+          const st = (await page.evaluate(`(() => {
+            var lis = Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'));
+            var found = false, more = false;
+            for (var i = 0; i < lis.length; i++) {
+              if (/select2-more-results/.test(lis[i].className)) { more = true; continue; }
+              var d = null; try { d = window.jQuery ? window.jQuery(lis[i]).data('select2-data') : null; } catch (e) {}
+              if (d && String(d.id) === ${JSON.stringify(wantId)}) found = true;
+            }
+            if (!found && more) { var box = document.querySelector('#select2-drop .select2-results'); if (box) box.scrollTop = box.scrollHeight; }
+            return { found: found, more: more, n: lis.length };
+          })()`).catch(() => ({ found: false, more: false, n: 0 }))) as { found: boolean; more: boolean; n: number };
+          if (st.found || !st.more) { if (this.dbg() && pageNo > 1) console.log(`MATCH picker paged ${pageNo}× (${st.n} baris) — #${wantId} ${st.found ? 'ditemukan' : 'tidak ada sampai akhir'}`); break; }
+          await page.waitForTimeout(900);
+        }
       }
       if (this.dbg()) {
         const dbg = await page.evaluate(() => ({
@@ -2331,37 +2372,10 @@ export class RpaSink implements ServiceOrderSink {
     }
   }
 
-  /**
-   * Choose a customer BY ID, without searching.
-   *
-   * The pickers' search returns 30 rows in id order: a brand-new customer
-   * with 30 namesakes is never on that page — HERU #4933516 (F1772FBF, 17
-   * Sep) could not be reached by name at all, and the push would have retried
-   * forever. When the id is already proven (phone, plate, or created by this
-   * push) select2 is told the answer directly; the hidden input the form
-   * posts is read back to make sure it took. Proven read-only on sandbox
-   * (probe --setcust): the hidden value becomes the id.
-   */
-  private async selectCustomerById(page: Page, hiddenInputId: string, id: string, name: string): Promise<boolean> {
-    const got = (await page.evaluate(`(() => {
-      try {
-        if (!window.jQuery) return '';
-        window.jQuery('#' + ${JSON.stringify(hiddenInputId)}).select2('data', { id: ${JSON.stringify(id)}, text: ${JSON.stringify(name)} }, true);
-      } catch (e) { return ''; }
-      var el = document.querySelector('#' + ${JSON.stringify(hiddenInputId)});
-      return el && el.value != null ? String(el.value) : '';
-    })()`).catch(() => '')) as string;
-    if (got !== id) { if (this.dbg()) console.log(`MATCH set customer by id #${id} on #${hiddenInputId} → form holds "${got}" — falling back to search`); return false; }
-    await page.waitForTimeout(1500); // dependent pickers (vehicle) reload on change
-    if (this.dbg()) console.log(`MATCH customer #${id} "${name}" set by id on #${hiddenInputId}`);
-    return true;
-  }
-
   /** Select2-v3 pick inside the New Customer modal (drop is `.select2-drop`, opens on real mousedown). */
   private async modalSelect2Pick(containerId: string, query: string, wantId = ''): Promise<void> {
     const page = this.session.page_();
     const q = query.trim(); // a trailing space can hang Turboly's remote search forever
-    if (wantId && await this.selectCustomerById(page, containerId.replace(/^s2id_/, ''), wantId, q)) return;
     await page.locator(`#${containerId} .select2-choice, #${containerId} .select2-choices, #${containerId}`).first().click({ timeout: 8000 });
     await page.waitForTimeout(400);
     await page.locator('.select2-drop:visible input.select2-input, #select2-drop:visible input').first().fill(q);

@@ -56,6 +56,10 @@ on:
         description: 'Tag nama customer uji ("UJI GABUNG <tag>"). Samakan di dua run dengan nomor berbeda untuk menguji: nama sama + nomor beda = customer BARU.'
         type: string
         default: ''
+      name:
+        description: 'Nama customer uji (kosong = "UJI GABUNG <tag>"). Mis. "FAHRIAN UJI" untuk menguji nama yang diawali FA/PT/CV.'
+        type: string
+        default: ''
       reset_db:
         description: 'Kosongkan dokumen lama di database uji dulu (dokumen gagal dari run sebelumnya tidak ikut di-push lagi).'
         type: boolean
@@ -185,6 +189,7 @@ jobs:
           IN_PART_SKU2: ${{ inputs.part_sku2 }}
           IN_RESET: ${{ inputs.reset_db }}
           IN_TAG: ${{ inputs.tag }}
+          IN_NAME: ${{ inputs.name }}
           # Harness only: print how the customer picker decided. Without it an
           # acceptance run tells you an order was created but not WHO it landed
           # on, which is the half that goes wrong (F1125EG).
@@ -200,6 +205,7 @@ jobs:
           if [ -n "$IN_PART_SKU2" ]; then args+=(--part-sku2="$IN_PART_SKU2"); fi
           if [ "$IN_RESET" = "true" ]; then args+=(--reset=1); fi
           if [ -n "$IN_TAG" ]; then args+=(--tag="$IN_TAG"); fi
+          if [ -n "$IN_NAME" ]; then args+=(--name="$IN_NAME"); fi
           if [ -n "$IN_MAKE" ]; then args+=(--make="$IN_MAKE"); fi
           if [ -n "$IN_MODEL" ]; then args+=(--model="$IN_MODEL"); fi
           if [ -n "$IN_EXTRA" ]; then args+=(--extra="$IN_EXTRA"); fi
