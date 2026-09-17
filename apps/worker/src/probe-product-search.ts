@@ -328,7 +328,7 @@ async function main(): Promise<void> {
     }
 
     if (SETCUST) {
-      const [id, ...rest] = SETCUST.split('|'); const name = rest.join('|') || `#${id}`;
+      const [id, nm, platePart] = SETCUST.split('|'); const name = nm || `#${id}`; const typeIn = (platePart || 'B1').slice(0, 3);
       const r = (await page.evaluate(`(() => {
         var out = { jq: !!window.jQuery, before: '', after: '', chosen: '', err: '' };
         var el = document.querySelector('#select2-input-customer');
@@ -350,7 +350,7 @@ async function main(): Promise<void> {
       await page.waitForTimeout(500);
       const inp = page.locator('#select2-drop input').first();
       await inp.waitFor({ state: 'visible', timeout: 8000 }).catch(() => {});
-      await inp.type('B', { delay: 30 }).catch(() => {});
+      await inp.type(typeIn, { delay: 30 }).catch(() => {});
       let rows: string[] = [];
       for (let i = 0; i < 20; i++) {
         rows = (await page.evaluate(`(() => Array.prototype.slice.call(document.querySelectorAll('#select2-drop .select2-results li'))
