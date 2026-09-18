@@ -332,12 +332,15 @@ export default function CheckGoIntake() {
   // The report is OPTIONAL and long; it starts folded so the required intake
   // fields read as one screen. The header always says how much is inside.
   const [reportOpen, setReportOpen] = useState(true);
-  const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts && !it.optional).length;
+  // Optional rows (Power Steering) are optional on an EV only, for now
+  // (Victor, 18 Sep 2026) — on every other car they are required as before.
+  const isOptional = (it: { optional?: boolean }) => !!it.optional && isEV;
+  const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts && !isOptional(it)).length;
   const sectionDone = (s: Sec) =>
-    (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && !it.optional && itemVerdict[it.code]).length;
+    (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && !isOptional(it) && itemVerdict[it.code]).length;
   const sectionAllHealthy = (s: Sec) =>
     (!s.verdicts || secVerdict[s.code] === s.verdicts[0]!.code) &&
-    s.items.every((it) => !it.verdicts || it.optional || itemVerdict[it.code] === it.verdicts[0]!.code);
+    s.items.every((it) => !it.verdicts || isOptional(it) || itemVerdict[it.code] === it.verdicts[0]!.code);
   const markAllHealthy = (s: Sec) => {
     const clear = sectionAllHealthy(s);
     if (s.verdicts) setSecVerdict((p) => ({ ...p, [s.code]: clear ? '' : s.verdicts![0]!.code }));
@@ -346,7 +349,7 @@ export default function CheckGoIntake() {
       // An optional row is never filled for the checker — "Oli Power Steering:
       // Jernih" on an EPS car would tell the customer about oil that does not
       // exist. Clearing the section still clears it.
-      for (const it of s.items) if (it.verdicts && (clear || !it.optional)) n[it.code] = clear ? '' : it.verdicts[0]!.code;
+      for (const it of s.items) if (it.verdicts && (clear || !isOptional(it))) n[it.code] = clear ? '' : it.verdicts[0]!.code;
       return n;
     });
   };
@@ -798,7 +801,7 @@ export default function CheckGoIntake() {
                   && it.readings.every((r) => !(reading[`${it.code}.${r.code}`] ?? '').trim());
                 return (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !it.optional && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}{it.optional ? ' (opsional)' : ''}</span>
+                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !isOptional(it) && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}{isOptional(it) ? ' (opsional)' : ''}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (

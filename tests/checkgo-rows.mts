@@ -183,38 +183,75 @@ t('unknown codes from a stale tablet are dropped, not stored', () => {
   assert.equal(rowsFromReport(report).length, 1, 'only the genuine answer becomes a row');
 });
 
-t('Power Steering: oil and EPS lamp both optional — an EPS car and a hydraulic car can both be saved', () => {
-  const optional = CHECKGO_SECTIONS.flatMap((s) => s.items.filter((it) => it.optional).map((it) => it.code));
-  assert.deepEqual(optional, ['PS_OLI', 'PS_EPS'], 'nothing else may quietly stop being mandatory');
-  // The page's own gate, lifted from its source so the test follows the page.
-  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8').replace(/!\./g, '.');
-  const slotsSrc = src.match(/const sectionSlots = \(s: Sec\) => ([^;]+);/)?.[1];
-  const doneSrc = src.match(/const sectionDone = \(s: Sec\) =>\s*([^;]+);/)?.[1];
-  const okSrc = src.match(/const reportOk =\s*([^;]+);/)?.[1];
-  assert.ok(slotsSrc && doneSrc && okSrc, 'sectionSlots / sectionDone / reportOk not found in checkgo/page.tsx');
-  const slots = new Function('s', `return ${slotsSrc};`) as (s: { code: string }) => number;
-  const done = new Function('s', 'secVerdict', 'itemVerdict', `return ${doneSrc};`) as (s: unknown, a: object, b: object) => number;
-  const ps = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
-  assert.equal(slots(ps), 0, 'Power Steering demands no answer');
-  // A sheet complete everywhere else, Power Steering left blank, passes the page's reportOk.
+// The page's own gate, lifted from its source so the tests follow the page.
+const PAGE = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8');
+const SRC = PAGE.replace(/!\./g, '.');
+const lift = (re: RegExp, what: string): string => {
+  const m = SRC.match(re)?.[1];
+  assert.ok(m, `${what} not found in checkgo/page.tsx`);
+  return m;
+};
+/** The page's rules for one engine mode: 'oil' (every car so far) or 'ev'. */
+const rules = (engine: 'oil' | 'ev') => {
+  const isEV = engine === 'ev';
+  const isOptional = new Function('isEV', `return (it) => ${lift(/const isOptional = \(it: \{ optional\?: boolean \}\) => ([^;]+);/, 'isOptional')};`)(isEV) as (it: unknown) => boolean;
+  const slots = new Function('isOptional', 's', `return ${lift(/const sectionSlots = \(s: Sec\) => ([^;]+);/, 'sectionSlots')};`).bind(null, isOptional) as (s: unknown) => number;
+  const done = new Function('isOptional', 's', 'secVerdict', 'itemVerdict', `return ${lift(/const sectionDone = \(s: Sec\) =>\s*([^;]+);/, 'sectionDone')};`).bind(null, isOptional) as (s: unknown, a: object, b: object) => number;
+  const healthy = new Function('isOptional', 's', 'secVerdict', 'itemVerdict', `return ${lift(/const sectionAllHealthy = \(s: Sec\) =>\s*([^;]+);/, 'sectionAllHealthy')};`).bind(null, isOptional) as (s: unknown, a: object, b: object) => boolean;
+  const fill = new Function('isOptional', 's', 'clear', 'n', `for (const it of s.items) ${lift(/for \(const it of s\.items\) (if \(it\.verdicts[^\n]+;)/, 'markAllHealthy fill')} return n;`).bind(null, isOptional) as (s: unknown, clear: boolean, n: Record<string, string>) => Record<string, string>;
+  const reportOkSrc = lift(/const reportOk =\s*([^;]+);/, 'reportOk');
+  const reportOk = new Function('activeSections', 'sectionSlots', 'sectionDone', 'CHECKGO_TIRE', 'tire', `return ${reportOkSrc};`) as (...a: unknown[]) => boolean;
+  return { isOptional, slots, done, healthy, fill, reportOk };
+};
+const PS = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
+/** A sheet with every REQUIRED row of every section answered healthy (for that mode). */
+const fullSheet = (r: ReturnType<typeof rules>) => {
   const secVerdict: Record<string, string> = {};
   const itemVerdict: Record<string, string> = {};
   for (const s of CHECKGO_SECTIONS) {
     if (s.verdicts) secVerdict[s.code] = s.verdicts[0]!.code;
-    for (const it of s.items) if (it.verdicts && !it.optional) itemVerdict[it.code] = it.verdicts[0]!.code;
+    for (const it of s.items) if (it.verdicts && !r.isOptional(it)) itemVerdict[it.code] = it.verdicts[0]!.code;
   }
   const tire: Record<string, { tekanan: string }> = {};
   for (const p of CHECKGO_TIRE.positions) tire[p.code] = { tekanan: CHECKGO_TIRE.tekanan[0]!.code };
-  const reportOk = new Function('activeSections', 'sectionSlots', 'sectionDone', 'CHECKGO_TIRE', 'tire', `return ${okSrc};`) as (...a: unknown[]) => boolean;
-  const ok = (iv: Record<string, string>) => reportOk(CHECKGO_SECTIONS, slots, (s: unknown) => done(s, secVerdict, iv), CHECKGO_TIRE, tire);
-  assert.ok(ok(itemVerdict), 'Power Steering blank: the sheet can be saved');
-  assert.ok(ok({ ...itemVerdict, PS_EPS: 'MATI' }), 'EPS car (lamp only): saved');
-  assert.ok(ok({ ...itemVerdict, PS_OLI: 'JERNIH' }), 'hydraulic car (oil only): saved');
+  const ok = (iv: Record<string, string>) => r.reportOk(CHECKGO_SECTIONS, r.slots, (s: unknown) => r.done(s, secVerdict, iv), CHECKGO_TIRE, tire);
+  return { itemVerdict, ok };
+};
+
+t('only the two Power Steering rows carry the optional flag', () => {
+  const optional = CHECKGO_SECTIONS.flatMap((s) => s.items.filter((it) => it.optional).map((it) => it.code));
+  assert.deepEqual(optional, ['PS_OLI', 'PS_EPS'], 'nothing else may quietly stop being mandatory');
+});
+
+t('a normal (oil) car: Power Steering is required exactly as before', () => {
+  const r = rules('oil');
+  assert.equal(r.slots(PS), 2, 'both rows required');
+  const { itemVerdict, ok } = fullSheet(r);
+  assert.equal(itemVerdict.PS_OLI, 'JERNIH');
+  assert.ok(ok(itemVerdict), 'fully answered sheet saves');
+  const { PS_OLI: _o, ...noOil } = itemVerdict;
+  assert.ok(!ok(noOil), 'oil blank blocks the save, as before');
+  const { PS_EPS: _e, ...noLamp } = itemVerdict;
+  assert.ok(!ok(noLamp), 'EPS lamp blank blocks the save, as before');
+  assert.deepEqual(r.fill(PS, false, {}), { PS_OLI: 'JERNIH', PS_EPS: 'MATI' }, '"Semua baik" fills both rows, as before');
+  assert.ok(!r.isOptional(PS.items[0]!) && !r.isOptional(PS.items[1]!), 'no "(opsional)" label on a normal car');
+  for (const s of CHECKGO_SECTIONS) {
+    assert.equal(r.slots(s), (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length, `${s.title} unchanged`);
+  }
+});
+
+t('an EV: Power Steering optional — blank, lamp only, or oil only all save', () => {
+  const r = rules('ev');
+  assert.equal(r.slots(PS), 0, 'Power Steering demands no answer on an EV');
+  const { itemVerdict, ok } = fullSheet(r);
+  assert.ok(ok(itemVerdict), 'Power Steering blank: saves');
+  assert.ok(ok({ ...itemVerdict, PS_EPS: 'MATI' }), 'lamp only: saves');
+  assert.ok(ok({ ...itemVerdict, PS_OLI: 'JERNIH' }), 'oil only: saves');
   const { REM_MINYAK: _dropped, ...missing } = itemVerdict;
   assert.ok(!ok(missing), 'a blank REQUIRED row elsewhere still blocks the save');
-  // Every other section still counts every verdicted row, exactly as before.
   for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
-    assert.equal(slots(s), (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length, `${s.title} unchanged`);
+    assert.equal(r.slots(s), (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length, `${s.title} unchanged`);
+    assert.equal(Object.keys(r.fill(s, false, {})).length, s.items.filter((it) => it.verdicts).length, `${s.title} one-tap unchanged`);
   }
   // Blank rows produce no inspection row; an answered one does.
   const p = payload('blank') as { sections: Array<{ code: string; items: Array<{ code: string; verdict: string }> }> };
@@ -222,20 +259,13 @@ t('Power Steering: oil and EPS lamp both optional — an EPS car and a hydraulic
   const parsed = CheckReportInput.safeParse(p);
   assert.ok(parsed.success);
   const rows = rowsFromReport(normalizeReport(parsed.data)!);
-  assert.equal(rows.length, 1, `expected the EPS row only, got ${rows.map((r) => r.item).join(' | ')}`);
+  assert.equal(rows.length, 1, `expected the EPS row only, got ${rows.map((x) => x.item).join(' | ')}`);
 });
 
-t('"Semua baik" is hidden on Power Steering and fills every other section exactly as before', () => {
-  const raw = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8');
-  assert.match(raw, /\{sectionSlots\(s\) > 0 && \(\s*<button[\s\S]{0,200}markAllHealthy\(s\)/, 'the chip renders only when the section requires something');
-  const src = raw.replace(/!\./g, '.');
-  const fillSrc = src.match(/for \(const it of s\.items\) (if \(it\.verdicts[^\n]+;)/)?.[1];
-  assert.ok(fillSrc, 'markAllHealthy fill line not found');
-  const fill = new Function('s', 'clear', 'n', `for (const it of s.items) ${fillSrc} return n;`) as (s: unknown, clear: boolean, n: Record<string, string>) => Record<string, string>;
-  for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
-    const n = fill(s, false, {});
-    assert.equal(Object.keys(n).length, s.items.filter((it) => it.verdicts).length, `${s.title} one-tap unchanged`);
-  }
+t('"Semua baik" is hidden only where a section requires nothing (Power Steering on an EV)', () => {
+  assert.match(PAGE, /\{sectionSlots\(s\) > 0 && \(\s*<button[\s\S]{0,200}markAllHealthy\(s\)/, 'the chip renders only when the section requires something');
+  assert.ok(rules('oil').slots(PS) > 0, 'normal car: chip shown on Power Steering');
+  assert.equal(rules('ev').slots(PS), 0, 'EV: chip hidden on Power Steering');
 });
 
 console.log(`\ncheckgo-rows: ${passed} passed, ${failed} failed`);

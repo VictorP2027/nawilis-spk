@@ -181,7 +181,8 @@ export interface CheckgoItem {
   verdicts?: ReadonlyArray<CheckgoVerdictOpt>;
   /** Numbers/text the sheet wants written on this row (Tanggal, Km, °C, Kpa …). */
   readings?: ReadonlyArray<CheckgoReading>;
-  /** The verdict may stay blank — the row does not exist on every car. */
+  /** The verdict may stay blank — the row does not exist on every car. The
+      Check & Go page applies this on an EV only, for now. */
   optional?: boolean;
 }
 
@@ -293,7 +294,7 @@ export const CHECKGO_SECTIONS: ReadonlyArray<CheckgoSection> = [
     items: [
       // Both rows optional (Fahrian, 18 Sep 2026): electric power steering (EPS)
       // has no oil, and a hydraulic car has no EPS lamp — a car has one or the
-      // other, so neither can be demanded.
+      // other, so neither can be demanded. Applied on an EV only for now.
       { code: 'PS_OLI', label: 'Oli Power Steering', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }], optional: true },
       // Mati (off) is the healthy state for a warning lamp.
       { code: 'PS_EPS', label: 'Indikator lampu EPS', verdicts: [{ code: 'MATI', label: 'Mati' }, { code: 'NYALA', label: 'Nyala' }], optional: true },
