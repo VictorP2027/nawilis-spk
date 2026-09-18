@@ -598,7 +598,7 @@ const canonK = (s: string) => s.replace(/\D/g, '').replace(/^62/, '').replace(/^
 
         <div className="card">
           <div className="label">Nomor WhatsApp — identitas pelanggan (ketik dulu)</div>
-          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08… / 021…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
+          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="+628…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
           {!waOk && <div className="req-note">⚠ wajib — HP 08… / +62 8…, nomor kantor 021…, atau nomor luar negeri lengkap dengan + (contoh 08123456789 / 02155512345 / +6581234567)</div>}
           {waOk && <div className="ok-sm">✓ {waE164Preview}{custHint ? ` · ↩ ${custHint}` : ''}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}</div>}
           {custHint && (

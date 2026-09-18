@@ -181,6 +181,8 @@ export interface CheckgoItem {
   verdicts?: ReadonlyArray<CheckgoVerdictOpt>;
   /** Numbers/text the sheet wants written on this row (Tanggal, Km, °C, Kpa …). */
   readings?: ReadonlyArray<CheckgoReading>;
+  /** The verdict may stay blank — the row does not exist on every car. */
+  optional?: boolean;
 }
 
 export interface CheckgoRekOpt {
@@ -289,7 +291,9 @@ export const CHECKGO_SECTIONS: ReadonlyArray<CheckgoSection> = [
     code: 'PS',
     title: 'Power Steering',
     items: [
-      { code: 'PS_OLI', label: 'Oli Power Steering', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }] },
+      // Electric power steering (EPS) has no oil — optional so those cars can
+      // still be saved (Fahrian, 18 Sep 2026).
+      { code: 'PS_OLI', label: 'Oli Power Steering', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }], optional: true },
       // Mati (off) is the healthy state for a warning lamp.
       { code: 'PS_EPS', label: 'Indikator lampu EPS', verdicts: [{ code: 'MATI', label: 'Mati' }, { code: 'NYALA', label: 'Nyala' }] },
     ],
