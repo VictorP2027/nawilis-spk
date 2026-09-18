@@ -337,13 +337,16 @@ export default function CheckGoIntake() {
     (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && !it.optional && itemVerdict[it.code]).length;
   const sectionAllHealthy = (s: Sec) =>
     (!s.verdicts || secVerdict[s.code] === s.verdicts[0]!.code) &&
-    s.items.every((it) => !it.verdicts || itemVerdict[it.code] === it.verdicts[0]!.code);
+    s.items.every((it) => !it.verdicts || it.optional || itemVerdict[it.code] === it.verdicts[0]!.code);
   const markAllHealthy = (s: Sec) => {
     const clear = sectionAllHealthy(s);
     if (s.verdicts) setSecVerdict((p) => ({ ...p, [s.code]: clear ? '' : s.verdicts![0]!.code }));
     setItemVerdict((p) => {
       const n = { ...p };
-      for (const it of s.items) if (it.verdicts) n[it.code] = clear ? '' : it.verdicts[0]!.code;
+      // An optional row is never filled for the checker — "Oli Power Steering:
+      // Jernih" on an EPS car would tell the customer about oil that does not
+      // exist. Clearing the section still clears it.
+      for (const it of s.items) if (it.verdicts && (clear || !it.optional)) n[it.code] = clear ? '' : it.verdicts[0]!.code;
       return n;
     });
   };

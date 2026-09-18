@@ -211,5 +211,30 @@ t('an EPS car can be saved: Oli Power Steering is optional, and the only optiona
   assert.equal(rows.length, 1, `expected the EPS row only, got ${rows.map((r) => r.item).join(' | ')}`);
 });
 
+t('"Semua baik" never writes an oil verdict on an EPS car, and still toggles honestly', () => {
+  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8').replace(/!\./g, '.');
+  const healthySrc = src.match(/const sectionAllHealthy = \(s: Sec\) =>\s*([^;]+);/)?.[1];
+  const fillSrc = src.match(/for \(const it of s\.items\) (if \(it\.verdicts[^\n]+;)/)?.[1];
+  assert.ok(healthySrc && fillSrc, 'sectionAllHealthy / markAllHealthy fill line not found in checkgo/page.tsx');
+  const healthy = new Function('s', 'secVerdict', 'itemVerdict', `return ${healthySrc};`) as (s: unknown, a: object, b: Record<string, string>) => boolean;
+  const fill = new Function('s', 'clear', 'n', `for (const it of s.items) ${fillSrc} return n;`) as (s: unknown, clear: boolean, n: Record<string, string>) => Record<string, string>;
+  const ps = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
+  const tap = (v: Record<string, string>) => fill(ps, healthy(ps, {}, v), { ...v });
+  let v = tap({});
+  assert.deepEqual(v, { PS_EPS: 'MATI' }, 'one tap: EPS lamp healthy, oil left blank');
+  assert.ok(healthy(ps, {}, v), 'the chip shows ✓ with only the EPS lamp answered');
+  v = tap(v);
+  assert.deepEqual(v, { PS_OLI: '', PS_EPS: '' }, 'second tap clears the section');
+  v = tap({ PS_OLI: 'JERNIH' });
+  assert.equal(v.PS_OLI, 'JERNIH', 'a hydraulic car keeps the oil answer the checker gave');
+  v = tap(v);
+  assert.deepEqual(v, { PS_OLI: '', PS_EPS: '' }, 'clearing the section also clears the optional row');
+  // Every other section: one tap still fills every verdicted row, exactly as before.
+  for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
+    const n = fill(s, false, {});
+    assert.equal(Object.keys(n).length, s.items.filter((it) => it.verdicts).length, `${s.title} one-tap unchanged`);
+  }
+});
+
 console.log(`\ncheckgo-rows: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
