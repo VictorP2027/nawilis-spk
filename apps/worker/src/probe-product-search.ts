@@ -46,6 +46,13 @@ const SPK = (arg('spk') ?? '').trim();
  * customer with 30+ namesakes never appears in the picker's first page.
  */
 const SETCUST = (arg('setcust') ?? '').trim();
+/**
+ * --lookup=<wantId>|<term>|<term>…: how the CUSTOMER lookup answers, read-only.
+ * Where does a customer land when the name is shared by thousands (UMUM,
+ * B1419NLS 18 Sep)? Prints rows/page per term, whether page_limit is honoured,
+ * the page that holds wantId, and how the order form wires its pickers.
+ */
+const LOOKUP = (arg('lookup') ?? '').trim();
 /** --form=/customers/new: list a page's fields (id, name, required, label) — read-only, never submits. */
 const FORM = (arg('form') ?? '').trim();
 /** --vehicle=<plate>: who does Turboly say owns this car? Same lookup the pusher uses. */
@@ -289,6 +296,84 @@ async function main(): Promise<void> {
     const store = stores.find((s) => s.t.toUpperCase() === STORE.toUpperCase());
     if (store) { await page.selectOption('#store-id', { value: store.v }); await page.waitForTimeout(2000); }
     console.log(`\nstore: ${store ? `${store.t} (${store.v})` : '(tidak dipilih)'}`);
+
+    if (LOOKUP) {
+      const [wantIdRaw, ...terms] = LOOKUP.split('|').map((x) => x.trim()).filter(Boolean);
+      const wantId = wantIdRaw ?? ''; const base = config.turbolyBaseUrl;
+      const get = async (term: string, limit: number, pageNo: number) => (await page.evaluate(`(async () => {
+        var r = await fetch(${JSON.stringify(base + '/lookup/customers.json?search_term=')} + encodeURIComponent(${JSON.stringify(term)}) + '&page_limit=' + ${limit} + '&page=' + ${pageNo}, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' } });
+        if (!r.ok) return { status: r.status, keys: [], ids: [], extra: '' };
+        var j = await r.json();
+        var arr = Array.isArray(j) ? j : (j.customers || j.results || j.data || []);
+        var extra = {}; for (var k in j) { if (!Array.isArray(j[k])) extra[k] = j[k]; }
+        return { status: r.status, keys: Array.isArray(j) ? ['(array)'] : Object.keys(j), ids: arr.map(function (c) { return String(c.id); }), extra: JSON.stringify(extra).slice(0, 200) };
+      })()`)) as { status: number; keys: string[]; ids: string[]; extra: string };
+      console.log(`\n— lookup/customers.json, wantId=#${wantId} —`);
+      for (const t of terms) {
+        const r = await get(t, 30, 1);
+        console.log(`  "${t}" p1/30 → HTTP ${r.status} keys=${r.keys.join(',')} rows=${r.ids.length} want=${r.ids.includes(wantId) ? 'YA' : 'tidak'} first=${r.ids.slice(0, 3).join(',')} last=${r.ids.slice(-2).join(',')} extra=${r.extra}`);
+      }
+      const t0 = terms[0] ?? '';
+      let limit = 30;
+      for (const L of [100, 500, 1000]) {
+        const r = await get(t0, L, 1);
+        console.log(`  "${t0}" page_limit=${L} → rows=${r.ids.length}`);
+        if (r.ids.length > limit) limit = Math.min(L, r.ids.length);
+      }
+      let scanned = 0; let foundAt = '';
+      for (let pg = 1; pg <= 400 && !foundAt; pg++) {
+        const r = await get(t0, limit, pg);
+        if (!r.ids.length) break;
+        const i = r.ids.indexOf(wantId);
+        if (i >= 0) foundAt = `halaman ${pg} (page_limit=${limit}) baris ${i}, posisi ke-${scanned + i + 1}`;
+        scanned += r.ids.length;
+        if (r.ids.length < limit) break;
+      }
+      console.log(`  scan "${t0}": ${scanned} baris dibaca — #${wantId} ${foundAt || 'TIDAK ditemukan'}; halaman picker (30/hal) yang perlu di-scroll ≈ ${foundAt ? Math.ceil((scanned) / 30) : '?'}`);
+      const wiring = (await page.evaluate(`(() => {
+        var out = {};
+        var src = function (f) { try { return f ? String(f).replace(/[ \n\t]+/g, ' ').slice(0, 900) : ''; } catch (e) { return 'err'; } };
+        ['customer', 'vehicle'].forEach(function (k) {
+          var o = {};
+          try {
+            var el = window.jQuery('#select2-input-' + k);
+            var s2 = el.data('select2');
+            var op = s2 && s2.opts || {};
+            o.ajaxUrl = op.ajax ? String(op.ajax.url) : '';
+            o.ajaxData = op.ajax ? src(op.ajax.data) : '';
+            o.query = src(op.query);
+            var ev = window.jQuery._data(el[0], 'events') || {};
+            o.events = Object.keys(ev).map(function (n) { return n + ':' + ev[n].map(function (h) { return src(h.handler); }).join(' || '); });
+          } catch (e) { o.err = String(e); }
+          out[k] = o;
+        });
+        return out;
+      })()`)) as Record<string, Record<string, unknown>>;
+      for (const k of Object.keys(wiring)) {
+        const o = wiring[k]!;
+        console.log(`\n— picker ${k} —\n  ajax.url=${o.ajaxUrl ?? ''}\n  ajax.data=${o.ajaxData ?? ''}\n  query=${o.query ?? ''}${o.err ? `\n  err=${o.err}` : ''}`);
+        for (const e of (o.events as string[] | undefined) ?? []) console.log(`  on ${e}`);
+      }
+      const ctx = (await page.evaluate(`(async () => {
+        var hits = [];
+        var grab = function (txt, where) {
+          var re = /customerId/g, m, n = 0;
+          while ((m = re.exec(txt)) && n < 6) { hits.push(where + ' … ' + txt.slice(Math.max(0, m.index - 220), m.index + 220).replace(/[ \n\t]+/g, ' ')); n++; re.lastIndex = m.index + 400; }
+        };
+        var ss = Array.prototype.slice.call(document.scripts);
+        for (var i = 0; i < ss.length; i++) {
+          if (!ss[i].src) { grab(ss[i].textContent || '', 'inline#' + i); continue; }
+          if (ss[i].src.indexOf(location.origin) !== 0) continue;
+          try { var t = await (await fetch(ss[i].src, { credentials: 'include' })).text(); grab(t, ss[i].src.replace(location.origin, '').slice(0, 60)); } catch (e) {}
+        }
+        return hits.slice(0, 14);
+      })()`)) as string[];
+      console.log(`\n— "customerId" di JavaScript form order (${ctx.length}) —`);
+      for (const h of ctx) console.log(`  ${h}`);
+      console.log('\n(tidak ada yang disimpan — form tidak pernah di-submit)');
+      await session.dispose().catch(() => {}); await close().catch(() => {});
+      process.exit(0);
+    }
 
     // --customer: the CUSTOMER picker, row by row, with the id behind each row.
     if (CUSTOMER) {

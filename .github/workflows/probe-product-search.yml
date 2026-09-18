@@ -23,6 +23,10 @@ on:
         description: 'Store Turboly yang dipakai untuk membuka form'
         type: string
         default: 'Nawilis Bekasi'
+      lookup:
+        description: 'CEK LOOKUP: "<id>|<nama>|<istilah>…" — di halaman ke berapa customer itu muncul, dan cara form order menghubungkan picker (baca saja)'
+        type: string
+        default: ''
       setcust:
         description: 'CEK SET CUSTOMER BY ID: "<id>|<nama>" — set select2 customer di form order tanpa cari, lihat apakah form & picker kendaraan menerimanya (tanpa simpan)'
         type: string
@@ -164,6 +168,7 @@ jobs:
           IN_FORM: ${{ inputs.form }}
           IN_SPK: ${{ inputs.spk }}
           IN_SETCUST: ${{ inputs.setcust }}
+          IN_LOOKUP: ${{ inputs.lookup }}
         run: |
           node --import tsx apps/worker/src/probe-product-search.ts \
             --q="$IN_Q" \
@@ -173,4 +178,5 @@ jobs:
             --customer="$IN_CUSTOMER" \
             --form="$IN_FORM" \
             --spk="$IN_SPK" \
-            --setcust="$IN_SETCUST"
+            --setcust="$IN_SETCUST" \
+            --lookup="$IN_LOOKUP"
