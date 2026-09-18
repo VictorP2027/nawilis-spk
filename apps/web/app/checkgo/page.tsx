@@ -332,9 +332,9 @@ export default function CheckGoIntake() {
   // The report is OPTIONAL and long; it starts folded so the required intake
   // fields read as one screen. The header always says how much is inside.
   const [reportOpen, setReportOpen] = useState(true);
-  const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length;
+  const sectionSlots = (s: Sec) => (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts && !it.optional).length;
   const sectionDone = (s: Sec) =>
-    (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && itemVerdict[it.code]).length;
+    (s.verdicts && secVerdict[s.code] ? 1 : 0) + s.items.filter((it) => it.verdicts && !it.optional && itemVerdict[it.code]).length;
   const sectionAllHealthy = (s: Sec) =>
     (!s.verdicts || secVerdict[s.code] === s.verdicts[0]!.code) &&
     s.items.every((it) => !it.verdicts || itemVerdict[it.code] === it.verdicts[0]!.code);
@@ -609,7 +609,7 @@ export default function CheckGoIntake() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: '0 16px' }}>
           <div>
           <div className="label">Nomor WhatsApp — ketik dulu</div>
-          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="08…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
+          <input value={wa} onChange={(e) => setWa(e.target.value)} inputMode="tel" placeholder="+628…" style={!waOk ? { borderColor: '#dc2626' } : undefined} />
           {!waOk && <div className="req-note">⚠ wajib — HP 08… / +62 8…, nomor kantor 021…, atau nomor luar negeri lengkap dengan + (contoh 08123456789 / 02155512345 / +6581234567)</div>}
           {waOk && <div className="ok-sm">✓ {waE164Preview}{custHint ? ` · ↩ ${custHint}` : ''}{custVehicles.length > 1 ? ' — pilih mobil:' : ''}</div>}
           {waIsLandline && <div className="req-note" style={{ color: '#b45309' }}>ℹ nomor kantor — hasil Cek n Go tidak bisa dikirim lewat WhatsApp ke nomor ini</div>}
@@ -790,7 +790,7 @@ export default function CheckGoIntake() {
                   && it.readings.every((r) => !(reading[`${it.code}.${r.code}`] ?? '').trim());
                 return (
                 <div key={it.code} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
-                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}</span>
+                  <span className="chk-label" style={{ flex: '1 1 140px', fontSize: 12.5, ...(it.verdicts && !it.optional && !itemVerdict[it.code] ? { color: '#dc2626' } : {}) }}>{it.label}{it.optional ? ' (opsional)' : ''}</span>
                   {it.readings?.map((r) => {
                     const key = `${it.code}.${r.code}`;
                     return (

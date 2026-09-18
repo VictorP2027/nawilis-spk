@@ -11,6 +11,7 @@
  * Run: npx tsx tests/checkgo-rows.mts
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   CheckReportInput,
   normalizeReport,
@@ -180,6 +181,34 @@ t('unknown codes from a stale tablet are dropped, not stored', () => {
   assert.equal(report.tires.length, 0, 'a numeric tekanan and unknown flags leave nothing to store for the wheel');
   assert.equal(report.tireRekomendasi.picks.length, 0, 'unknown picks are dropped');
   assert.equal(rowsFromReport(report).length, 1, 'only the genuine answer becomes a row');
+});
+
+t('an EPS car can be saved: Oli Power Steering is optional, and the only optional row', () => {
+  const optional = CHECKGO_SECTIONS.flatMap((s) => s.items.filter((it) => it.optional).map((it) => it.code));
+  assert.deepEqual(optional, ['PS_OLI'], 'nothing else may quietly stop being mandatory');
+  // The page's own gate, lifted from its source so the test follows the page.
+  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8');
+  const slotsSrc = src.match(/const sectionSlots = \(s: Sec\) => ([^;]+);/)?.[1];
+  const doneSrc = src.match(/const sectionDone = \(s: Sec\) =>\s*([^;]+);/)?.[1];
+  assert.ok(slotsSrc && doneSrc, 'sectionSlots / sectionDone not found in checkgo/page.tsx');
+  const slots = new Function('s', `return ${slotsSrc};`) as (s: unknown) => number;
+  const done = new Function('s', 'secVerdict', 'itemVerdict', `return ${doneSrc};`) as (s: unknown, a: object, b: object) => number;
+  const ps = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
+  assert.equal(slots(ps), 1, 'Power Steering asks for one answer (EPS lamp)');
+  assert.equal(done(ps, {}, { PS_EPS: 'MATI' }), 1, 'EPS lamp alone completes the section');
+  assert.equal(done(ps, {}, { PS_OLI: 'JERNIH' }), 0, 'oil alone does not — the EPS lamp is still mandatory');
+  assert.equal(done(ps, {}, { PS_EPS: 'MATI', PS_OLI: 'KERUH' }), 1, 'a filled oil answer is still accepted');
+  // Every other section still counts every verdicted row, exactly as before.
+  for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
+    assert.equal(slots(s), (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length, `${s.title} unchanged`);
+  }
+  // The blank oil row simply produces no inspection row; the EPS answer does.
+  const p = payload('blank') as { sections: Array<{ code: string; items: Array<{ code: string; verdict: string }> }> };
+  p.sections.find((s) => s.code === 'PS')!.items.find((it) => it.code === 'PS_EPS')!.verdict = 'MATI';
+  const parsed = CheckReportInput.safeParse(p);
+  assert.ok(parsed.success);
+  const rows = rowsFromReport(normalizeReport(parsed.data)!);
+  assert.equal(rows.length, 1, `expected the EPS row only, got ${rows.map((r) => r.item).join(' | ')}`);
 });
 
 console.log(`\ncheckgo-rows: ${passed} passed, ${failed} failed`);
