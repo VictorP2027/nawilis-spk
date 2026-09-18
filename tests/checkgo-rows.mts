@@ -183,26 +183,40 @@ t('unknown codes from a stale tablet are dropped, not stored', () => {
   assert.equal(rowsFromReport(report).length, 1, 'only the genuine answer becomes a row');
 });
 
-t('an EPS car can be saved: Oli Power Steering is optional, and the only optional row', () => {
+t('Power Steering: oil and EPS lamp both optional — an EPS car and a hydraulic car can both be saved', () => {
   const optional = CHECKGO_SECTIONS.flatMap((s) => s.items.filter((it) => it.optional).map((it) => it.code));
-  assert.deepEqual(optional, ['PS_OLI'], 'nothing else may quietly stop being mandatory');
+  assert.deepEqual(optional, ['PS_OLI', 'PS_EPS'], 'nothing else may quietly stop being mandatory');
   // The page's own gate, lifted from its source so the test follows the page.
-  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8').replace(/!\./g, '.');
   const slotsSrc = src.match(/const sectionSlots = \(s: Sec\) => ([^;]+);/)?.[1];
   const doneSrc = src.match(/const sectionDone = \(s: Sec\) =>\s*([^;]+);/)?.[1];
-  assert.ok(slotsSrc && doneSrc, 'sectionSlots / sectionDone not found in checkgo/page.tsx');
-  const slots = new Function('s', `return ${slotsSrc};`) as (s: unknown) => number;
+  const okSrc = src.match(/const reportOk =\s*([^;]+);/)?.[1];
+  assert.ok(slotsSrc && doneSrc && okSrc, 'sectionSlots / sectionDone / reportOk not found in checkgo/page.tsx');
+  const slots = new Function('s', `return ${slotsSrc};`) as (s: { code: string }) => number;
   const done = new Function('s', 'secVerdict', 'itemVerdict', `return ${doneSrc};`) as (s: unknown, a: object, b: object) => number;
   const ps = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
-  assert.equal(slots(ps), 1, 'Power Steering asks for one answer (EPS lamp)');
-  assert.equal(done(ps, {}, { PS_EPS: 'MATI' }), 1, 'EPS lamp alone completes the section');
-  assert.equal(done(ps, {}, { PS_OLI: 'JERNIH' }), 0, 'oil alone does not — the EPS lamp is still mandatory');
-  assert.equal(done(ps, {}, { PS_EPS: 'MATI', PS_OLI: 'KERUH' }), 1, 'a filled oil answer is still accepted');
+  assert.equal(slots(ps), 0, 'Power Steering demands no answer');
+  // A sheet complete everywhere else, Power Steering left blank, passes the page's reportOk.
+  const secVerdict: Record<string, string> = {};
+  const itemVerdict: Record<string, string> = {};
+  for (const s of CHECKGO_SECTIONS) {
+    if (s.verdicts) secVerdict[s.code] = s.verdicts[0]!.code;
+    for (const it of s.items) if (it.verdicts && !it.optional) itemVerdict[it.code] = it.verdicts[0]!.code;
+  }
+  const tire: Record<string, { tekanan: string }> = {};
+  for (const p of CHECKGO_TIRE.positions) tire[p.code] = { tekanan: CHECKGO_TIRE.tekanan[0]!.code };
+  const reportOk = new Function('activeSections', 'sectionSlots', 'sectionDone', 'CHECKGO_TIRE', 'tire', `return ${okSrc};`) as (...a: unknown[]) => boolean;
+  const ok = (iv: Record<string, string>) => reportOk(CHECKGO_SECTIONS, slots, (s: unknown) => done(s, secVerdict, iv), CHECKGO_TIRE, tire);
+  assert.ok(ok(itemVerdict), 'Power Steering blank: the sheet can be saved');
+  assert.ok(ok({ ...itemVerdict, PS_EPS: 'MATI' }), 'EPS car (lamp only): saved');
+  assert.ok(ok({ ...itemVerdict, PS_OLI: 'JERNIH' }), 'hydraulic car (oil only): saved');
+  const { REM_MINYAK: _dropped, ...missing } = itemVerdict;
+  assert.ok(!ok(missing), 'a blank REQUIRED row elsewhere still blocks the save');
   // Every other section still counts every verdicted row, exactly as before.
   for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
     assert.equal(slots(s), (s.verdicts ? 1 : 0) + s.items.filter((it) => it.verdicts).length, `${s.title} unchanged`);
   }
-  // The blank oil row simply produces no inspection row; the EPS answer does.
+  // Blank rows produce no inspection row; an answered one does.
   const p = payload('blank') as { sections: Array<{ code: string; items: Array<{ code: string; verdict: string }> }> };
   p.sections.find((s) => s.code === 'PS')!.items.find((it) => it.code === 'PS_EPS')!.verdict = 'MATI';
   const parsed = CheckReportInput.safeParse(p);
@@ -211,25 +225,13 @@ t('an EPS car can be saved: Oli Power Steering is optional, and the only optiona
   assert.equal(rows.length, 1, `expected the EPS row only, got ${rows.map((r) => r.item).join(' | ')}`);
 });
 
-t('"Semua baik" never writes an oil verdict on an EPS car, and still toggles honestly', () => {
-  const src = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8').replace(/!\./g, '.');
-  const healthySrc = src.match(/const sectionAllHealthy = \(s: Sec\) =>\s*([^;]+);/)?.[1];
+t('"Semua baik" is hidden on Power Steering and fills every other section exactly as before', () => {
+  const raw = readFileSync(new URL('../apps/web/app/checkgo/page.tsx', import.meta.url), 'utf8');
+  assert.match(raw, /\{sectionSlots\(s\) > 0 && \(\s*<button[\s\S]{0,200}markAllHealthy\(s\)/, 'the chip renders only when the section requires something');
+  const src = raw.replace(/!\./g, '.');
   const fillSrc = src.match(/for \(const it of s\.items\) (if \(it\.verdicts[^\n]+;)/)?.[1];
-  assert.ok(healthySrc && fillSrc, 'sectionAllHealthy / markAllHealthy fill line not found in checkgo/page.tsx');
-  const healthy = new Function('s', 'secVerdict', 'itemVerdict', `return ${healthySrc};`) as (s: unknown, a: object, b: Record<string, string>) => boolean;
+  assert.ok(fillSrc, 'markAllHealthy fill line not found');
   const fill = new Function('s', 'clear', 'n', `for (const it of s.items) ${fillSrc} return n;`) as (s: unknown, clear: boolean, n: Record<string, string>) => Record<string, string>;
-  const ps = CHECKGO_SECTIONS.find((s) => s.code === 'PS')!;
-  const tap = (v: Record<string, string>) => fill(ps, healthy(ps, {}, v), { ...v });
-  let v = tap({});
-  assert.deepEqual(v, { PS_EPS: 'MATI' }, 'one tap: EPS lamp healthy, oil left blank');
-  assert.ok(healthy(ps, {}, v), 'the chip shows ✓ with only the EPS lamp answered');
-  v = tap(v);
-  assert.deepEqual(v, { PS_OLI: '', PS_EPS: '' }, 'second tap clears the section');
-  v = tap({ PS_OLI: 'JERNIH' });
-  assert.equal(v.PS_OLI, 'JERNIH', 'a hydraulic car keeps the oil answer the checker gave');
-  v = tap(v);
-  assert.deepEqual(v, { PS_OLI: '', PS_EPS: '' }, 'clearing the section also clears the optional row');
-  // Every other section: one tap still fills every verdicted row, exactly as before.
   for (const s of CHECKGO_SECTIONS.filter((x) => x.code !== 'PS')) {
     const n = fill(s, false, {});
     assert.equal(Object.keys(n).length, s.items.filter((it) => it.verdicts).length, `${s.title} one-tap unchanged`);

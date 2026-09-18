@@ -732,7 +732,7 @@ export default function CheckGoIntake() {
               >
                 <span className="label" style={{ marginBottom: 0 }}>Check and Go Report — WAJIB</span>
                 <span style={{ fontSize: 12.5, color: reportOk ? '#15803d' : 'var(--block, #dc2626)', fontWeight: 700 }}>
-                  {reportOk ? '✓ lengkap' : `${full}/${activeSections.length + 1} — belum lengkap`} {reportOpen ? '▲' : '▼'}
+                  {reportOk ? '✓ lengkap' : `${full}/${activeSections.filter((s2) => sectionSlots(s2) > 0).length + 1} — belum lengkap`} {reportOpen ? '▲' : '▼'}
                 </span>
               </button>
             );
@@ -771,6 +771,10 @@ export default function CheckGoIntake() {
                   verdictButtons(s.verdicts, secVerdict[s.code] ?? '', (code) =>
                     setSecVerdict((p) => ({ ...p, [s.code]: code })),
                   )}
+                {/* A section with nothing required (Power Steering: oil OR an EPS
+                    lamp, never both) has no one-tap answer — the checker taps
+                    the row the car actually has. */}
+                {sectionSlots(s) > 0 && (
                 <button
                   type="button"
                   className={`chk-chip${sectionAllHealthy(s) ? ' ok' : ''}`}
@@ -779,6 +783,7 @@ export default function CheckGoIntake() {
                 >
                   {sectionAllHealthy(s) ? '✓ ' : ''}Semua baik
                 </button>
+                )}
               </div>
               {/* ONE row per item: label · readings · verdict. The reading's
                   label lives in its placeholder — a separate caption per input

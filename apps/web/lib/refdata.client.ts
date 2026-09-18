@@ -291,11 +291,12 @@ export const CHECKGO_SECTIONS: ReadonlyArray<CheckgoSection> = [
     code: 'PS',
     title: 'Power Steering',
     items: [
-      // Electric power steering (EPS) has no oil — optional so those cars can
-      // still be saved (Fahrian, 18 Sep 2026).
+      // Both rows optional (Fahrian, 18 Sep 2026): electric power steering (EPS)
+      // has no oil, and a hydraulic car has no EPS lamp — a car has one or the
+      // other, so neither can be demanded.
       { code: 'PS_OLI', label: 'Oli Power Steering', verdicts: [{ code: 'JERNIH', label: 'Jernih' }, { code: 'KERUH', label: 'Keruh' }], optional: true },
       // Mati (off) is the healthy state for a warning lamp.
-      { code: 'PS_EPS', label: 'Indikator lampu EPS', verdicts: [{ code: 'MATI', label: 'Mati' }, { code: 'NYALA', label: 'Nyala' }] },
+      { code: 'PS_EPS', label: 'Indikator lampu EPS', verdicts: [{ code: 'MATI', label: 'Mati' }, { code: 'NYALA', label: 'Nyala' }], optional: true },
     ],
     rekomendasi: [
       { code: 'KURAS_PSF', label: 'Kuras oli power steering (PSF)' },
